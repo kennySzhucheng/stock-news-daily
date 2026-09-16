@@ -1,0 +1,30 @@
+# ===== 密钥（绝对不能提交）=====
+docs/keys.md
+
+# ===== 运行时产物（每次运行重新生成，不入库）=====
+data/
+reports/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ===== 本地/编辑器配置 =====
+.claude/
+.vscode/
+.idea/
+
+# ===== 系统 =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== 临时文件 =====
+*.log
+*.tmp
+*.bak

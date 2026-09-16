@@ -1,0 +1,113 @@
+name: 股市情报日报
+
+# 定时：每天北京时间 08:10（盘前）与 15:40（盘后）
+# GitHub Actions cron 使用 UTC，北京时间 = UTC+8
+on:
+  schedule:
+    - cron: '10 0 * * *'   # 08:10 北京
+    - cron: '40 7 * * *'   # 15:40 北京
+  workflow_dispatch:        # 支持手动触发（M8 联调用）
+
+# gh-pages 部署需要写权限
+permissions:
+  contents: write
+
+# 避免两次运行重叠互相覆盖
+concurrency:
+  group: daily-report
+  cancel-in-progress: false
+
+jobs:
+  daily:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # gh-pages 上的历史日报要恢复到 reports/，否则索引页只剩当天一份
+      - name: 恢复历史日报
+        run: |
+          if git fetch origin gh-pages --depth=1 2>/dev/null; then
+            mkdir -p reports
+            git archive FETCH_HEAD | tar -x -C reports
+            echo "已恢复历史日报: $(ls reports/*.html 2>/dev/null | wc -l) 份"
+          else
+            echo "首次运行，暂无 gh-pages 分支"
+          fi
+
+      - name: M1 新闻收集
+        run: python modules/m1_collector/collector.py
+
+      # 海外服务器抓国内源可能被地域限制，这一步结果用于 M7 验收第 5 条
+      - name: M1 数据源可用性检查
+        if: always()
+        run: |
+          python -c "
+          import json, pathlib
+          p = pathlib.Path('data/raw_news.json')
+          if not p.exists():
+              print('raw_news.json 不存在，M1 未产出')
+              raise SystemExit(0)
+          d = json.loads(p.read_text(encoding='utf-8'))
+          ok = fail = 0
+          for s in d.get('sources_status', []):
+              if 'source' not in s:
+                  continue
+              if s.get('ok'):
+                  ok += 1
+                  print(f\"  [OK]   {s['source']}: {s.get('count', 0)} 条\")
+              else:
+                  fail += 1
+                  print(f\"  [FAIL] {s['source']}: {s.get('error', 'unknown')}\")
+          print(f'源可用性: {ok} 成功 / {fail} 失败')
+          "
+
+      - name: M2 新闻筛选（GLM-4-Flash）
+        env:
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+        run: python modules/m2_filter/filter.py
+
+      - name: M3 深度分析（DeepSeek）
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: python modules/m3_analyzer/analyzer.py
+
+      - name: M4 行情数据
+        run: python modules/m4_quotes/quotes.py
+
+      - name: M5 生成日报
+        run: python modules/m5_report/report.py
+
+      # M6 失败不影响日报本身（脚本内部已处理，这里再加 always 兜底）
+      - name: M6 微信推送
+        if: always()
+        env:
+          SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
+          REPORT_BASE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+        run: python modules/m6_push/push.py
+
+      - name: 部署到 GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./reports
+          publish_branch: gh-pages
+          commit_message: "日报更新 ${{ github.run_number }} [${{ github.event.schedule || 'manual' }}]"
+
+      - name: 上传产物（便于排查）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-data-${{ github.run_number }}
+          path: |
+            data/
+            reports/
+          retention-days: 7
+          if-no-files-found: warn
