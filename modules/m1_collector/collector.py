@@ -30,15 +30,28 @@ GOV_API = ("https://sousuo.www.gov.cn/search-gov/data?t=zhengcelibrary_gw"
            "&searchfield=title&p={page}&n=20")
 
 
+def _urlopen(req, timeout=20):
+    """优先直连，失败回退系统代理。
+
+    Windows 上 urllib 会自动读取系统代理设置；若梯子开着但节点不通，
+    所有请求都会失败。本项目数据源以国内站点为主，直连通常更快更稳。
+    """
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        return opener.open(req, timeout=timeout)
+    except Exception:
+        return urllib.request.urlopen(req, timeout=timeout)
+
+
 def _get_json(url, timeout=20):
     req = urllib.request.Request(url, headers=UA)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with _urlopen(req, timeout) as r:
         return json.loads(r.read().decode("utf-8"))
 
 
 def _get_xml(url, timeout=20):
     req = urllib.request.Request(url, headers=UA)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with _urlopen(req, timeout) as r:
         return r.read().decode("utf-8", errors="replace")
 
 

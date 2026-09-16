@@ -28,9 +28,22 @@ QUOTE_API = "https://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fields=f
 A_SEC_BINARY = {"17", "30"}  # 搜索返回的 MktNum 17=上A 33=深A(不同版本接口 nginx 会有差异，用 validate 判断)
 
 
+def _urlopen(req, timeout=15):
+    """优先直连，失败回退系统代理。
+
+    Windows 上 urllib 会自动读取系统代理设置；若梯子开着但节点不通，
+    所有请求都会失败。
+    """
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        return opener.open(req, timeout=timeout)
+    except Exception:
+        return urllib.request.urlopen(req, timeout=timeout)
+
+
 def _get_json(url, timeout=15):
     req = urllib.request.Request(url, headers=UA)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with _urlopen(req, timeout) as r:
         return json.loads(r.read().decode("utf-8"))
 
 
@@ -67,12 +80,15 @@ def resolve_stock(name, seen_cache=None):
     return result
 
 
-def fetch_quote(secid, retries=3):
+def fetch_quote(secid, retries=2, timeout=5):
     """拉单只股票行情。f43=现价(×100) f170=今日涨跌幅(×100) f60=昨收
-    push2 对高频请求有限流（短期断连），失败指数退避重试。"""
+
+    push2 对高频请求有限流（表现为 RemoteDisconnected），但限流期间重试
+    基本无效且会拖垮整条流水线，故重试次数少、等待短，失败即跳过该个股。
+    """
     for attempt in range(retries):
         try:
-            d = _get_json(QUOTE_API.format(secid=secid))
+            d = _get_json(QUOTE_API.format(secid=secid), timeout=timeout)
             data = d.get("data") or {}
             if not data.get("f58"):
                 return None
@@ -87,11 +103,58 @@ def fetch_quote(secid, retries=3):
             }
         except Exception as e:
             if attempt < retries - 1:
-                time.sleep(5 * (attempt + 1))  # 5s, 10s, 15s
+                time.sleep(1.5 * (attempt + 1))   # 1.5s, 3s
             else:
-                print(f"[warn] quote {secid} failed after {retries} tries: {e}")
+                print(f"[warn] quote {secid} failed: {str(e)[:50]}")
                 return None
     return None
+
+
+TENCENT_API = "https://qt.gtimg.cn/q={code}"
+
+
+def _to_tencent_code(secid):
+    """东财 secid (1.600519/0.000001/116.00700) → 腾讯代码 (sh600519/sz000001/hk00700)"""
+    prefix, code = secid.split(".", 1)
+    mkt = {"1": "sh", "0": "sz", "116": "hk", "106": "sh", "107": "sz"}
+    p = mkt.get(prefix)
+    return f"{p}{code}" if p else None
+
+
+def fetch_quote_tencent(secid, timeout=8):
+    """备选源：腾讯行情。返回结构与 fetch_quote 一致，失败返回 None。
+
+    东财 push2 存在按 IP 的临时限流（表现为 RemoteDisconnected），
+    限流期间切到腾讯源可保证行情板块不至于整块缺失。
+    """
+    tcode = _to_tencent_code(secid)
+    if not tcode:
+        return None
+    try:
+        req = urllib.request.Request(TENCENT_API.format(code=tcode), headers=UA)
+        with _urlopen(req, timeout) as r:
+            raw = r.read().decode("gbk", errors="replace")
+        # 形如 v_sh600519="1~贵州茅台~600519~1258.00~1272.75~1273.93~..."
+        m = re.search(r'="([^"]*)"', raw)
+        if not m:
+            return None
+        parts = m.group(1).split("~")
+        if len(parts) < 6:
+            return None
+        code, name = parts[2], parts[1]
+        price, prev_close = float(parts[3]), float(parts[4])
+        if prev_close == 0:
+            return None
+        return {
+            "code": code,
+            "name": name,
+            "price": price,
+            "prev_close": prev_close,
+            "change_pct": round((price - prev_close) / prev_close * 100, 2),
+        }
+    except Exception as e:
+        print(f"[warn] tencent {tcode}: {str(e)[:50]}")
+        return None
 
 
 def extract_names_from_news(news, min_occurrence=1):
@@ -119,18 +182,47 @@ def main():
 
     cache = {}
     quotes, failed = [], []
-    for name in names:
+    consecutive_fail = 0
+    em_fail = 0
+    eastmoney_down = False     # 东财连续失败后停用，后续直接走备选源
+    MAX_CONSECUTIVE_FAIL = 5   # 两源都失败才计一次，连续失败被放弃
+
+    for idx, name in enumerate(names):
         info = resolve_stock(name, cache)
         if not info:
             failed.append({"name": name, "reason": "not_found"})
             continue
-        q = fetch_quote(info["secid"])
+
+        q, src = None, "eastmoney"
+        if not eastmoney_down:
+            q = fetch_quote(info["secid"])
+            if q:
+                em_fail = 0
+            else:
+                em_fail += 1
+                if em_fail >= 3:
+                    eastmoney_down = True
+                    print("[warn] 东财行情连续失败，后续改用腾讯源")
+        if not q:
+            # 东财限流时切备选源，避免行情板块整块缺失
+            q = fetch_quote_tencent(info["secid"])
+            src = "tencent"
+
         if not q:
             failed.append({"name": name, "reason": "quote_fail", "secid": info["secid"]})
+            consecutive_fail += 1
+            if consecutive_fail >= MAX_CONSECUTIVE_FAIL:
+                rest = names[idx + 1:]
+                print(f"[warn] 两个行情源连续 {consecutive_fail} 次失败，"
+                      f"跳过剩余 {len(rest)} 只")
+                failed.extend({"name": n, "reason": "skipped_rate_limited"} for n in rest)
+                break
             continue
-        q.update({"market": info["market"], "matched_by": name})
+
+        consecutive_fail = 0
+        q.update({"market": info["market"], "matched_by": name, "source": src})
         quotes.append(q)
-        time.sleep(1.0)  # push2 限流敏感，间隔加大到 1s
+        time.sleep(1.0)  # push2 限流敏感，间隔 1s
 
     out = {"generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
            "count": len(quotes), "failed": failed, "quotes": quotes}

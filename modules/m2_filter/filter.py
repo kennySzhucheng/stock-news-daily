@@ -36,6 +36,19 @@ VALID_SENTIMENT = ["bullish", "bearish", "neutral"]
 VALID_VERIFY = ["confirmed", "unverified"]
 
 
+def _urlopen(req, timeout=60):
+    """优先直连，失败回退系统代理。
+
+    Windows 上 urllib 会自动读取系统代理设置；若梯子开着但节点不通，
+    所有请求都会失败。
+    """
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        return opener.open(req, timeout=timeout)
+    except Exception:
+        return urllib.request.urlopen(req, timeout=timeout)
+
+
 def glm_chat(messages, temperature=0.1, max_tokens=2000, retries=2):
     """调用 GLM-4-Flash，返回文本。失败返回 None"""
     key = os.environ.get("ZAI_API_KEY")
@@ -53,7 +66,7 @@ def glm_chat(messages, temperature=0.1, max_tokens=2000, retries=2):
     })
     for attempt in range(retries + 1):
         try:
-            with urllib.request.urlopen(req, timeout=60) as r:
+            with _urlopen(req, 60) as r:
                 d = json.loads(r.read().decode("utf-8"))
             return d["choices"][0]["message"]["content"]
         except Exception as e:

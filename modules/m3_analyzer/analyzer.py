@@ -26,6 +26,19 @@ DS_API = "https://api.deepseek.com/chat/completions"
 DS_MODEL = "deepseek-chat"
 
 
+def _urlopen(req, timeout=120):
+    """优先直连，失败回退系统代理。
+
+    Windows 上 urllib 会自动读取系统代理设置；若梯子开着但节点不通，
+    所有请求都会失败。
+    """
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        return opener.open(req, timeout=timeout)
+    except Exception:
+        return urllib.request.urlopen(req, timeout=timeout)
+
+
 def ds_chat(messages, max_tokens=4000, retries=2):
     key = os.environ.get("DEEPSEEK_API_KEY")
     if not key:
@@ -42,7 +55,7 @@ def ds_chat(messages, max_tokens=4000, retries=2):
     })
     for attempt in range(retries + 1):
         try:
-            with urllib.request.urlopen(req, timeout=120) as r:
+            with _urlopen(req, 120) as r:
                 d = json.loads(r.read().decode("utf-8"))
             return d["choices"][0]["message"]["content"]
         except Exception as e:

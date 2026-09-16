@@ -79,13 +79,26 @@ def select_top_news(news, k=3):
     return picked
 
 
+def _urlopen(req, timeout=20):
+    """优先直连，失败回退系统代理。
+
+    Windows 上 urllib 会自动读取系统代理设置；若梯子开着但节点不通，
+    所有请求都会失败。
+    """
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        return opener.open(req, timeout=timeout)
+    except Exception:
+        return urllib.request.urlopen(req, timeout=timeout)
+
+
 def send(title, desp, sendkey):
     """调用 Server酱 推送。返回 (ok, message)。失败不抛异常。"""
     url = SC_API.format(sendkey=sendkey)
     payload = urllib.parse.urlencode({"title": title, "desp": desp}).encode("utf-8")
     try:
         req = urllib.request.Request(url, data=payload, method="POST")
-        with urllib.request.urlopen(req, timeout=20) as r:
+        with _urlopen(req, 20) as r:
             resp = json.loads(r.read().decode("utf-8"))
         code = resp.get("code")
         if code == 0:
