@@ -159,6 +159,19 @@ python modules/m8_e2e/observe.py
 `server.py --source auto`（默认）在有本地流水线产出时用本地的，否则自动回落到
 `sync.py` 同步下来的云端数据。
 
+### 推送代码：github.com 不通时走 API
+
+国内 `github.com` 的 443 时常不通（`git push` 报 Connection was reset），
+但 `api.github.com` 可直连、`gh` 命令可用。此时用：
+
+```bash
+python tools/push_via_api.py --dry-run   # 先看会推哪些文件
+python tools/push_via_api.py             # 经 Git Data API 完成一次等效 push
+```
+
+远程会多出一个内容相同但 SHA 不同的提交；梯子恢复后执行
+`git fetch && git reset --hard origin/main` 对齐即可。
+
 ## 八、部署与访问
 
 - **代码仓库**：https://github.com/kennySzhucheng/stock-news-daily（公开）
