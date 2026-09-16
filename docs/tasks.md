@@ -107,18 +107,18 @@
 
 ---
 
-## M7 GitHub Actions 工作流 + Pages 部署
+## M7 GitHub Actions 工作流 + Pages 部署 ✅
 
-**职责：** 云端定时运行并发布。
+- [x] 工作流每天 08:10 与 15:40（北京时间）各跑一次，可手动触发
+- [x] 密钥全部走 GitHub Secrets（ZAI_API_KEY / DEEPSEEK_API_KEY / SERVERCHAN_SENDKEY）
+- [x] 日报部署到 gh-pages 分支 → GitHub Pages 开启 → 线上可访问
+- [x] `.gitignore`：docs/keys.md、data/、reports/、本地临时文件
+- [x] 海外环境源可用性实测并记录（**6/6 全部可用，0 失败**，见 sources.md 第二节）
 
-**要求：**
-1. 工作流：每天 08:10 与 15:40（UTC 前换算）各跑一次，可手动触发
-2. 密钥全部走 GitHub Secrets（DEEPSEEK_API_KEY / ZAI_API_KEY / SERVERCHAN_KEY）
-3. 日报提交到 gh-pages 分支 → GitHub Pages 开启
-4. `.gitignore`：docs/keys.md、data/、本地临时文件
-5. 首次运行时 Sources 中各源在国内 IP 环境可用性需重测（Actions 服务器在海外，财经源可能有地域差异，需实测并记录）
-
-**验收：** 云端定时跑出第一份线上日报并可手机访问
+**验收：** ✅ 云端跑出第一份线上日报，直连可访问（无需梯子）
+- 仓库：https://github.com/kennySzhucheng/stock-news-daily
+- 线上：https://kennyszhucheng.github.io/stock-news-daily/
+- 首次运行 run 35092383171：全部步骤成功，耗时约 12 分钟
 
 ---
 

@@ -94,6 +94,57 @@
 
 ---
 
+## 2026-09-16 · M7 GitHub Actions 工作流 + Pages 部署 ✅ 完成
+
+**线上地址：**
+- 代码仓库：https://github.com/kennySzhucheng/stock-news-daily （公开）
+- 线上日报：https://kennyszhucheng.github.io/stock-news-daily/
+
+**首次云端运行成功（run 35092383171）：** M1→M6 + Pages 部署全部步骤 ✅，全程约 12 分钟。
+
+**工作流（`.github/workflows/daily.yml`）：**
+- 定时：每天北京时间 08:10（盘前）/ 15:40（盘后），cron 为 `10 0 * * *` 与 `40 7 * * *`（UTC）
+- 支持 `workflow_dispatch` 手动触发（M8 联调用）
+- 并发组锁：避免两次运行重叠互相覆盖
+- 恢复历史日报：从 gh-pages 拉回往期报告，保证索引页不只剩当天一份
+- 源可用性检查步骤（`if: always()`）：产出 M7 验收第 5 条所需的实测数据
+- 部署：peaceiris/actions-gh-pages → gh-pages 分支 → Pages
+
+**密钥配置（GitHub Secrets，3 个）：** `ZAI_API_KEY` / `DEEPSEEK_API_KEY` / `SERVERCHAN_SENDKEY`。代码只从环境变量读取，不硬编码。
+
+**⚠️ M7 验收第 5 条实测结果：海外服务器抓国内源 6/6 全部可用，0 失败。**
+
+| 源 | 本地 | 云端 |
+|---|---|---|
+| 新浪财经 7×24 | 399 条 | 300 条 |
+| 东方财富 7×24 | 300 条 | 300 条 |
+| 36氪 | 30 条 | 30 条 |
+| 新华网 | 300 条 | 300 条 |
+| 人民网 | 100 条 | 100 条 |
+| 中国政府网 | 40 条 | 40 条 |
+
+结论：**无需国内中转**。唯一差异是新浪返回条数略少（疑为 IP 相关策略），不影响使用。详细记录见 `docs/sources.md` 第二节。
+
+**首次云端产出：** 结构化新闻 127 条（本地同日 145 条，差异来自新浪返回量）、行情 21 只、日报 72555 字节、微信推送 pushid=56631447。
+
+**踩过的坑（重要，供维护参考）：**
+1. **`github.com` 在国内被墙，但 `api.github.com` 可直连** → `gh` 命令能用、`git push` 失败。实测 `api.github.com` 200 / `github.com` 超时 / `ssh.github.com` 不通 / `codeload.github.com` 可达。
+   解决：配置 git 走本地代理（`git config http.proxy http://127.0.0.1:7897`，仅本仓库生效）。
+2. **GitHub Pages 在国内可直连访问**（`*.github.io` 解析到 185.199.108.153 等 IP，未被墙）→ 手机看日报**不需要梯子**。注意：若梯子开着但规则未覆盖 github.io，反而会导致访问失败，直连更快。
+3. GitHub Actions 提示 Node.js 20 弃用警告（actions/checkout@v4 等），暂不影响运行，后续可升级 action 版本。
+4. Windows 控制台 GBK 编码无法打印 emoji，脚本内 print 一律用纯 ASCII 标记。
+
+**验收对照（tasks.md）：**
+- [x] 每天 08:10 / 15:40 各跑一次，可手动触发
+- [x] 三个密钥全部走 GitHub Secrets
+- [x] 日报部署到 gh-pages → Pages 开启 → 线上可访问
+- [x] `.gitignore` 覆盖 docs/keys.md、data/、reports/、本地临时文件
+- [x] 海外环境源可用性实测并记录（6/6 成功）
+
+**下一步：** M8 集成测试与端到端验证（连续观察 3 天云端产出 + 用户试用反馈）
+
+---
+
 ## 2026-09-16 · M6 微信推送模块 ✅ 完成
 
 **功能：** 通过 Server酱（Turbo版 `sctapi.ftqq.com`）把日报摘要推送到微信。

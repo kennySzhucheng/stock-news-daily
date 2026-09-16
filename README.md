@@ -38,7 +38,7 @@
 | M4 | 行情数据模块 | M0（独立于新闻链） | ✅ 2026-09-16 · 东财搜索+行情，29/32只成功 |
 | M5 | 网页日报生成模块 | M2, M3, M4 | ✅ 2026-09-16 · 自包含HTML+暗色主题+移动端 |
 | M6 | 微信推送模块 | M3 | ✅ 2026-09-16 · Server酱推送成功(pushid=56628027) |
-| M7 | GitHub Actions 工作流 + Pages 部署 | M5, M6 | ⬜ |
+| M7 | GitHub Actions 工作流 + Pages 部署 | M5, M6 | ✅ 2026-09-16 · 云端跑通，Pages 已上线 |
 | M8 | 集成测试与端到端验证 | M1–M7 | ⬜ |
 
 每个模块独立目录：`modules/mX_模块名/`，内含代码 + 自测脚本 + 该模块的 README。
@@ -80,16 +80,35 @@
 
 ```
 stock-news-daily/
+├── .github/workflows/
+│   └── daily.yml      ← GitHub Actions 定时工作流（每天 08:10 / 15:40）
+├── .gitignore         ← 排除密钥与运行时产物
 ├── README.md          ← 本文件
 ├── CHANGELOG.md       ← 开发日志（每完成一个模块更新一次）
 ├── docs/
 │   ├── tasks.md       ← 模块任务详细说明（每个模块的验收标准）
 │   ├── sources.md     ← 数据源清单与测活状态
 │   └── keys.md        ← 密钥使用说明（不入库，明文）
-└── modules/           ← 各模块代码（M1 起逐步填充）
+├── modules/           ← 各模块代码 M1~M6
+│   ├── m1_collector/  ← 新闻收集
+│   ├── m2_filter/     ← 筛选与结构化（GLM-4-Flash）
+│   ├── m3_analyzer/   ← 深度分析（DeepSeek）
+│   ├── m4_quotes/     ← 行情数据
+│   ├── m5_report/     ← 网页日报生成
+│   └── m6_push/       ← 微信推送（Server酱）
+├── data/              ← 运行时数据（不入库）
+└── reports/           ← 生成的日报（不入库，部署到 gh-pages 分支）
 ```
 
-## 八、密钥安全约定
+## 八、部署与访问
 
-- 密钥只写入 GitHub Secrets（云端）或本项目 `docs/keys.md`（本地、不提交）
-- `docs/keys.md` 必须出现在 `.gitignore` 中（M7 时创建）——**当前未初始化 git，此文件为纯本地文档**
+- **代码仓库**：https://github.com/kennySzhucheng/stock-news-daily（公开）
+- **线上日报**：https://kennySzhucheng.github.io/stock-news-daily/（gh-pages 分支）
+- **定时任务**：GitHub Actions 每天北京时间 08:10（盘前）与 15:40（盘后）各跑一次，也可在 Actions 页面手动触发
+- **微信推送**：每次运行后经 Server酱推送摘要到微信
+
+## 九、密钥安全约定
+
+- 云端密钥存于 GitHub Secrets（`ZAI_API_KEY` / `DEEPSEEK_API_KEY` / `SERVERCHAN_SENDKEY`），代码只从环境变量读取，不硬编码
+- 本地明文存于 `docs/keys.md`，已被 `.gitignore` 排除，**不会提交**
+- `data/` 与 `reports/` 同样不入库（前者含原始数据，后者由 gh-pages 分支承载）
