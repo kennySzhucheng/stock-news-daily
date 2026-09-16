@@ -118,17 +118,65 @@ footer.risk h3{font-size:14px; color:var(--unverified); margin-bottom:6px;}
   border-radius:8px; padding:14px 16px; margin-bottom:10px; color:var(--text);
 }
 .index-item .d{font-weight:600;} .index-item .s{color:var(--muted); font-size:13px;}
+.latest-item{border-left:3px solid var(--accent); margin-bottom:18px;}
+
+/* 时段徽章：盘前 / 盘后 */
+.slot-badge{
+  display:inline-block; font-size:12px; padding:1px 8px; border-radius:4px;
+  margin-right:6px; vertical-align:1px; white-space:nowrap;
+}
+.slot-badge.am{background:rgba(245,166,35,.15); color:var(--unverified); border:1px solid var(--unverified);}
+.slot-badge.pm{background:rgba(76,141,255,.15); color:var(--accent); border:1px solid var(--accent);}
+
+/* 顶部版块跳转 */
+nav.toc{
+  display:flex; gap:8px; padding:10px 16px; background:var(--bg2);
+  border-bottom:1px solid var(--border); overflow-x:auto;
+  -webkit-overflow-scrolling:touch;
+}
+nav.toc a{
+  font-size:13px; padding:4px 12px; border-radius:14px; white-space:nowrap;
+  background:var(--card); border:1px solid var(--border); color:var(--text);
+}
+section.block{scroll-margin-top:8px;}
+section.block > h2{display:flex; align-items:center; gap:8px;}
+.h2-count{
+  font-size:12px; font-weight:400; color:var(--muted);
+  background:var(--bg2); border:1px solid var(--border);
+  padding:1px 8px; border-radius:10px;
+}
+
+/* 索引页：按日期分组 */
+.day-group{
+  background:var(--card); border:1px solid var(--border); border-radius:8px;
+  padding:12px 14px; margin-bottom:10px;
+}
+.day-date{font-weight:600; font-size:15px; margin-bottom:8px;}
+.day-links{display:flex; flex-wrap:wrap; gap:8px;}
+.slot-link{
+  display:flex; align-items:center; gap:8px; flex:1 1 120px;
+  padding:8px 12px; border-radius:6px; background:var(--bg2);
+  border:1px solid var(--border); color:var(--text); font-size:14px;
+}
+.slot-link.am{border-left:3px solid var(--unverified);}
+.slot-link.pm{border-left:3px solid var(--accent);}
+.slot-link .slot-go{margin-left:auto; color:var(--muted); font-size:12px;}
+.day-latest{margin-top:8px; font-size:13px; text-align:right;}
 </style>
 </head>
 <body>
 <header class="hero">
   <h1>📊 股市情报日报</h1>
-  <div class="date">全部日报（按日期倒序）</div>
+  <div class="date">全部日报 · 按日期倒序 · 每天盘前/盘后各一份</div>
 </header>
 <main>
   <section class="block">
-    <a class="index-item" href="2026-09-16.html"><div class="d">2026-09-16</div><div class="s">点击查看当日日报</div></a>
+    <a class="index-item latest-item" href="latest.html"><div class="d">⚡ 最新一期</div><div class="s">直接打开最近一次运行生成的日报</div></a>
+    <div class="day-group"><div class="day-date">2026-09-16</div><div class="day-links"><a class="slot-link na" href="2026-09-16.html"><span class="slot-name">日报</span><span class="slot-go">查看 →</span></a><a class="slot-link pm" href="2026-09-16-pm.html"><span class="slot-name">盘后</span><span class="slot-go">查看 →</span></a></div><div class="day-latest"><a href="2026-09-16-pm.html">当日最新</a></div></div>
   </section>
 </main>
+<footer class="risk">
+  <p>本页由 AI 自动生成，仅供参考，不构成任何投资建议。市场有风险，投资需谨慎。</p>
+</footer>
 </body>
 </html>

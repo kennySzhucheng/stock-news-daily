@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>股市情报 · 网页版</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">📊</span>
+    <div>
+      <h1>股市情报</h1>
+      <div class="sub" id="brandSub">加载中…</div>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <button class="btn ghost" id="btnRefresh" title="重新拉取数据">↻ 刷新</button>
+  </div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button class="tab active" data-tab="overview">总览</button>
+  <button class="tab" data-tab="news">新闻</button>
+  <button class="tab" data-tab="quotes">行情</button>
+  <button class="tab" data-tab="boards">板块</button>
+  <button class="tab" data-tab="analysis">深度分析</button>
+  <button class="tab" data-tab="history">历史</button>
+</nav>
+
+<main id="main">
+
+  <!-- ── 总览 ───────────────────────────────────────────── -->
+  <section class="panel" id="panel-overview">
+    <div class="conclusion-card" id="conclusionCard">
+      <div class="cc-label">今日市场结论</div>
+      <div class="cc-text" id="conclusionText">—</div>
+      <div class="cc-gauge" id="sentiGauge"></div>
+    </div>
+
+    <div class="stat-grid" id="statGrid"></div>
+
+    <div class="card">
+      <h2>多空分布</h2>
+      <div id="sentiDist"></div>
+    </div>
+
+    <div class="card">
+      <h2>新闻分类</h2>
+      <div id="catDist"></div>
+    </div>
+
+    <div class="card">
+      <h2>数据源</h2>
+      <div id="sourceList"></div>
+    </div>
+
+    <div class="two-col">
+      <div class="card">
+        <h2>涨幅居前</h2>
+        <div id="gainers"></div>
+      </div>
+      <div class="card">
+        <h2>跌幅居前</h2>
+        <div id="losers"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>热门板块</h2>
+      <div class="chips" id="topBoards"></div>
+    </div>
+  </section>
+
+  <!-- ── 新闻 ───────────────────────────────────────────── -->
+  <section class="panel hidden" id="panel-news">
+    <div class="filters">
+      <div class="search-row">
+        <input type="search" id="fq" placeholder="搜索关键词，空格分隔多个词（与）" autocomplete="off">
+        <select id="fsort">
+          <option value="time">按时间</option>
+          <option value="source">按来源</option>
+          <option value="sentiment">按情绪</option>
+        </select>
+      </div>
+      <div class="filter-row">
+        <select id="fcat"><option value="">全部分类</option></select>
+        <select id="fsenti">
+          <option value="">全部情绪</option>
+          <option value="bullish">利好</option>
+          <option value="bearish">利空</option>
+          <option value="neutral">中性</option>
+        </select>
+        <select id="fverified">
+          <option value="">全部来源数</option>
+          <option value="confirmed">已确认（多源）</option>
+          <option value="unverified">待核实（单源）</option>
+        </select>
+        <select id="fsource"><option value="">全部来源</option></select>
+        <select id="fboard"><option value="">全部板块</option></select>
+        <select id="fstock"><option value="">全部个股</option></select>
+        <button class="btn ghost" id="fclear">清空</button>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="fraw">
+        <span>包含被过滤的原始新闻（M2 未选中）</span>
+      </label>
+    </div>
+
+    <div class="result-bar">
+      <span id="newsCount">—</span>
+      <span class="pager" id="newsPager"></span>
+    </div>
+
+    <div id="newsList" class="news-list"></div>
+    <div class="load-more-wrap"><button class="btn" id="btnMore">加载更多</button></div>
+  </section>
+
+  <!-- ── 行情 ───────────────────────────────────────────── -->
+  <section class="panel hidden" id="panel-quotes">
+    <div class="card">
+      <h2>个股行情<span class="h-count" id="quoteCount"></span></h2>
+      <div class="table-wrap">
+        <table class="tbl" id="quoteTable">
+          <thead><tr>
+            <th data-k="name">个股</th>
+            <th data-k="market">市场</th>
+            <th data-k="price">现价</th>
+            <th data-k="change_pct">涨跌幅</th>
+            <th data-k="source">数据源</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="muted small" id="quoteFailed"></div>
+    </div>
+  </section>
+
+  <!-- ── 板块 ───────────────────────────────────────────── -->
+  <section class="panel hidden" id="panel-boards">
+    <div class="result-bar"><span id="boardCount">—</span></div>
+    <div class="board-grid" id="boardGrid"></div>
+  </section>
+
+  <!-- ── 深度分析 ────────────────────────────────────────── -->
+  <section class="panel hidden" id="panel-analysis">
+    <div class="card ask-card">
+      <h2>🤖 追问 · 基于今日新闻</h2>
+      <p class="muted small" id="askHint">
+        就今日新闻提问，答案只依据已收集的新闻，并标注出处编号与置信度。
+      </p>
+      <textarea id="askInput" rows="2"
+        placeholder="例如：今天有哪些和半导体设备相关的消息？对相关个股能推到什么程度？"></textarea>
+      <div class="ask-actions">
+        <button class="btn primary" id="btnAsk">提问</button>
+        <span class="muted small" id="askStatus"></span>
+      </div>
+      <div class="ask-examples" id="askExamples"></div>
+      <div class="ask-answer hidden" id="askAnswer"></div>
+    </div>
+
+    <div class="card">
+      <h2>市场分析全文</h2>
+      <div class="markdown" id="analysisBody">加载中…</div>
+    </div>
+  </section>
+
+  <!-- ── 历史 ───────────────────────────────────────────── -->
+  <section class="panel hidden" id="panel-history">
+    <div class="card">
+      <h2>往期日报</h2>
+      <p class="muted small">每天盘前（08:10）与盘后（15:40）各一份，互不覆盖。</p>
+      <div id="historyList"></div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <p>本页由 AI 自动生成，仅供参考，<strong>不构成任何投资建议</strong>。
+  新闻解读可能存在偏差，市场有风险，投资需谨慎，决策权归您本人。</p>
+</footer>
+
+<!-- 新闻详情弹层 -->
+<div class="modal-mask hidden" id="modalMask">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-head">
+      <span id="modalTitle">新闻详情</span>
+      <button class="btn ghost" id="modalClose">✕</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<div class="toast hidden" id="toast"></div>
+
+<script>window.__STATIC__ = true;</script>
+<script src="app.js"></script>
+</body>
+</html>

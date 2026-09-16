@@ -1,0 +1,1 @@
+window.__DATA__=window.__DATA__||{};window.__DATA__["history"]={"reports":[{"date":"2026-09-16","entries":[{"slot":"","file":"2026-09-16.html","size":114258,"label":"日报"},{"slot":"pm","file":"2026-09-16-pm.html","size":107238,"label":"盘后"}],"latest":"2026-09-16-pm.html"}]};
