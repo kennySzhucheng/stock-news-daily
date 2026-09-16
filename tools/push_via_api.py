@@ -154,7 +154,12 @@ def main():
     entries = []
     for path in changed:
         mode = local_files[path][0]
-        content = (BASE / path).read_bytes()
+        # 必须取 git 对象里的内容，不能读工作区文件：
+        # core.autocrlf=true 时工作区是 CRLF、git 里存的是 LF，
+        # 读工作区会把 CRLF 提上去，blob 与本地 HEAD 对不上，
+        # 之后 git 再做 diff/reset 全会错乱。
+        content = subprocess.run(["git", "cat-file", "blob", f"HEAD:{path}"],
+                                 cwd=str(BASE), capture_output=True).stdout
         blob = api("POST", f"/repos/{repo}/git/blobs",
                    {"content": base64.b64encode(content).decode(), "encoding": "base64"},
                    token=token)
@@ -177,7 +182,17 @@ def main():
     api("PATCH", f"/repos/{repo}/git/refs/heads/{args.branch}",
         {"sha": commit["sha"], "force": False}, token=token)
 
-    print(f"\n[OK] 已推送 -> {commit['sha'][:8]}")
+    # 推完自检：远程文件树必须与本地 HEAD 完全一致，否则说明中间环节出了偏差
+    # （例如读了工作区文件而非 git 对象，autocrlf 下会把 CRLF 提上去）
+    check = api("GET", f"/repos/{repo}/git/commits/{commit['sha']}", token=token)
+    ok = check["tree"]["sha"] == local_tree
+    print(f"\n[{'OK' if ok else 'FAIL'}] 已推送 -> {commit['sha'][:8]}")
+    print(f"     校验文件树：本地 {local_tree[:12]} / 远程 {check['tree']['sha'][:12]}"
+          f" {'一致' if ok else '不一致！'}")
+    if not ok:
+        print("     [warn] 远程内容与本地 HEAD 不符，后续 diff/reset 会出问题。"
+              "请检查是否有换行符转换。")
+        return 1
     print(f"     本地 {local_sha[:8]} 与远程 {commit['sha'][:8]} SHA 不同但内容一致")
     print(f"     梯子恢复后执行：git fetch && git reset --hard origin/{args.branch}")
     return 0
