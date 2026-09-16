@@ -35,6 +35,13 @@ def normalize_cat(c):
 VALID_SENTIMENT = ["bullish", "bearish", "neutral"]
 VALID_VERIFY = ["confirmed", "unverified"]
 
+# board 里的非法值：事件类型、泛指词，以及模型照抄 prompt 示例的占位符
+BLOCKED_BOARDS = {
+    "行业或概念名", "板块名", "行业", "概念", "主题", "其他", "无",
+    "减持", "增持", "定增", "回购", "重组", "解禁", "停牌", "复牌", "上市", "退市",
+    "公告", "新闻", "股市", "国际", "宏观", "政策",
+}
+
 
 def _urlopen(req, timeout=60):
     """优先直连，失败回退系统代理。
@@ -91,6 +98,43 @@ def _extract_json(text):
         return None
 
 
+def normalize_boards(board, stocks, global_stocks):
+    """board 字段的确定性清洗。
+
+    实测 GLM 在 board 上有两类稳定错误：
+    ① 把公司名当板块填（"雷柏科技""宁德时代""招商蛇口"…），
+       一天数据里 31 个 board 有 20 个是公司名，板块聚合视图直接失效；
+    ② 把事件类型/泛指词当板块（"减持""定增""股市""国际"…），
+       以及照抄 prompt 示例里的占位符（"行业或概念名"）。
+    仅靠 prompt 约束不稳定，故在代码层再拦一道。
+
+    公司名判定只做**全等**比较：用包含关系会误伤"创投"（因"浦东创投集团"）。
+    """
+    out = []
+    stock_set = {s.strip() for s in (stocks or []) if s}
+    for b in (board or []):
+        if not isinstance(b, str):
+            continue
+        b = b.strip()
+        if not b or b in BLOCKED_BOARDS:
+            continue
+        if b in stock_set or b in global_stocks:   # 与个股名完全相同 → 是公司，不是板块
+            continue
+        if b not in out:
+            out.append(b)
+    return out
+
+
+def collect_stock_names(structured_rows):
+    """汇总所有批次提取到的个股名，供 normalize_boards 做全局比对"""
+    names = set()
+    for s in structured_rows:
+        for x in (s.get("stocks") or []):
+            if isinstance(x, str) and x.strip():
+                names.add(x.strip())
+    return names
+
+
 def batch_filter(news_items, batch_size=20):
     """
     对一批新闻做结构化。prompt 硬约束：
@@ -117,13 +161,28 @@ def batch_filter(news_items, batch_size=20):
 - international: 国际市场/地缘/外围行情
 - other: 与股市无关的（可直接丢弃候选）
 
+## board 与 stocks 的区别（最容易出错，务必区分）
+- board 填**行业 / 概念 / 主题**，代表一个群体，例如：半导体、光伏、房地产、
+  医药、军工、储能、文旅、券商。板块名不得是某一家公司的名字。
+- stocks 填**具体公司**，例如：宁德时代、盛美上海、雷柏科技。
+- ⚠️ 公司名、机构名、政府部门名一律不得出现在 board 里。
+- ⚠️ 事件类型不得作为板块名：减持、增持、定增、回购、重组、解禁、停牌、
+  上市等描述的是"发生了什么"，不是"属于哪个行业"。
+- ⚠️ 泛指词不得作为板块名：股市、国际、宏观、政策、其他。
+- ⚠️ 原文若只讲某家公司的公告、未提及所属行业或概念，board 必须是 []，
+  不能把这家公司的名字填进 board。
+- ⚠️ 同一条里 board 与 stocks 不得有重复项。
+- 正例：原文提到"晶圆制造设备需求稳健" → board: ["半导体设备"]
+- 反例：原文只讲"某某公司拟减持1.78%股份" → board: []，不能填 ["某某公司"]，也不能填 ["减持"]
+
 输入新闻列表:
 {batch_str}
 
 输出要求：仅输出 JSON 数组，每条与输入一一对应（不要输出 verified 字段，它由系统另行计算）：
 [{{"i":0,"category":"policy|industry|stock|international|other",
-"board":["板块名"],"stocks":["股票名或6位代码"],"sentiment":"bullish|bearish|neutral",
+"board":["半导体设备"],"stocks":["盛美上海"],"sentiment":"bullish|bearish|neutral",
 "keep":true/false}}]
+上面的"半导体设备""盛美上海"只是字段格式示意，不是固定答案，更不要原样照抄到结果里。
 keep=false 表示纯社会新闻与股市无关应丢弃。"""
     content = glm_chat([{"role": "user", "content": prompt}], max_tokens=4000)
     if content is None:
@@ -193,6 +252,13 @@ def main():
         time.sleep(1)
         print(f"  batch {bs//20}: done ({bs+len(batch)}/{len(keep)})")
 
+    # board 清洗：先汇总全局个股名，再逐条剔除被误当成板块的公司名
+    all_stocks = collect_stock_names(structured)
+    before = sum(len(s.get("board") or []) for s in structured)
+    for s in structured:
+        s["board"] = normalize_boards(s.get("board"), s.get("stocks"), all_stocks)
+    after = sum(len(s.get("board") or []) for s in structured)
+
     # 合并原始内容与结构化结果，丢弃 keep=false 的
     out = []
     for n, s in zip(keep, structured):
@@ -230,6 +296,7 @@ def main():
     print(f"分类分布: {cats}")
     print(f"可信度: {ver}")
     print(f"含个股: {stock_cnt} 条, 含板块: {board_cnt} 条")
+    print(f"板块清洗: {before} -> {after} 个标签（剔除 {before - after} 个误填的公司名）")
     print(f"输出 → {out_path}")
 
 

@@ -15,17 +15,35 @@
 
 ```
 ┌─ GitHub Actions（云端定时）
-│    每天两次：08:10 盘前任务 / 15:40 盘后任务
+│    每天两次：08:10 盘前任务 / 15:40 盘后任务（产出文件名不同，两份都保留）
 │
 │   [M1 新闻收集] → 多源抓取原始新闻
 │   [M2 新闻筛选] → 免费模型（GLM-4-Flash）：分类、去重、提取关联板块/个股
 │   [M3 深度分析] → DeepSeek：市场情绪、板块逻辑、关注视角、风险提示
 │   [M4 行情佐证] → 东方财富公开接口，抓取被提及个股的当前行情
 │   [M5 日报生成] → HTML 网页日报 → GitHub Pages 可访问
+│   [M9 网页版导出] → 交互式网页（可检索/聚合/追问）→ Pages 可访问
 │   [M6 手机推送] → Server酱 → 微信收到当日摘要
 │
-└─ 手机端：浏览器看 GitHub Pages 日报 / 微信收推送摘要
+└─ 手机端：浏览器看 Pages 日报 / 微信收推送摘要
+   电脑端：本地跑 M9 服务，得到比推送版功能更多的交互界面
 ```
+
+## 二·五、两个网页，用途不同
+
+| | M5 日报 | M9 网页版 |
+|---|---|---|
+| 形态 | 单篇长文，从头读到尾 | 多标签交互界面 |
+| 版块顺序 | 摘要 → **市场分析** → 个股行情 → 分板块新闻 | 总览 / 新闻 / 行情 / 板块 / 深度分析 / 历史 |
+| 检索 | 无（靠浏览器 Ctrl+F） | 全文搜索 + 分类/情绪/来源/板块/个股多条件筛选 |
+| 引用跳转 | 正文里的 [12] 只是文本 | [12] 可点击，直接跳到出处新闻 |
+| 原始新闻 | 不展示 | 可切换查看被 M2 过滤掉的 1000+ 条 |
+| 个股/板块聚合 | 表格与标签 | 板块热度、多空分布、涨跌榜 |
+| AI 追问 | 无 | 可就今日新闻提问，答案带出处与置信度 |
+| 本地运行 | 直接开 HTML 文件 | `python modules/m9_web/server.py` |
+| 线上地址 | `/` 和 `/YYYY-MM-DD-am|pm.html` | `/web/` |
+
+M9 的线上版是静态导出（无后端），除 AI 追问外功能齐全；AI 追问需本地运行服务（要有 `DEEPSEEK_API_KEY`）。
 
 ## 三、任务拆分（独立实现，逐一完成，每完成一个更新 CHANGELOG.md）
 
@@ -40,6 +58,7 @@
 | M6 | 微信推送模块 | M3 | ✅ 2026-09-16 · Server酱推送成功(pushid=56628027) |
 | M7 | GitHub Actions 工作流 + Pages 部署 | M5, M6 | ✅ 2026-09-16 · 云端跑通，Pages 已上线 |
 | M8 | 集成测试与端到端验证 | M1–M7 | 🔄 进行中 · 本地端到端已跑通，待 3 天云端观察 + 用户反馈 |
+| M9 | 交互式网页版（本地服务 + 静态导出） | M1–M4 | ✅ 2026-09-16 · 检索/聚合/引用跳转/AI 追问 |
 
 每个模块独立目录：`modules/mX_模块名/`，内含代码 + 自测脚本 + 该模块的 README。
 
@@ -89,23 +108,65 @@ stock-news-daily/
 │   ├── tasks.md       ← 模块任务详细说明（每个模块的验收标准）
 │   ├── sources.md     ← 数据源清单与测活状态
 │   └── keys.md        ← 密钥使用说明（不入库，明文）
-├── modules/           ← 各模块代码 M1~M6
+├── modules/           ← 各模块代码 M1~M9
 │   ├── m1_collector/  ← 新闻收集
 │   ├── m2_filter/     ← 筛选与结构化（GLM-4-Flash）
 │   ├── m3_analyzer/   ← 深度分析（DeepSeek）
 │   ├── m4_quotes/     ← 行情数据
 │   ├── m5_report/     ← 网页日报生成
-│   └── m6_push/       ← 微信推送（Server酱）
+│   ├── m6_push/       ← 微信推送（Server酱）
+│   ├── m8_e2e/        ← 端到端运行器与云端观察工具
+│   └── m9_web/        ← 交互式网页版（server.py 本地服务 / export.py 静态导出
+│                        / sync.py 拉取云端产出 / aggregate.py 数据聚合
+│                        / ask.py AI 追问 / check.py 自检 / web/ 前端）
 ├── data/              ← 运行时数据（不入库）
 └── reports/           ← 生成的日报（不入库，部署到 gh-pages 分支）
+    ├── YYYY-MM-DD-am.html   ← 盘前版
+    ├── YYYY-MM-DD-pm.html   ← 盘后版
+    ├── latest.html          ← 最近一次运行的那份
+    ├── index.html           ← 索引页（按日期分组，列出盘前/盘后）
+    └── web/                 ← M9 静态导出的网页版
 ```
+
+## 七·五、本地怎么用
+
+```bash
+# ① 最省事：把云端每天的最新产出拉到本地（不重跑流水线、不花 API 费用）
+python modules/m9_web/sync.py
+#   然后二选一：
+#     双击 reports/web/index.html            —— 静态版（无 AI 追问）
+#     python modules/m9_web/server.py --source export   —— 完整版（含 AI 追问）
+#   之后每天再跑一次 sync.py 即可跟上云端
+
+# ② 交互式网页版（功能最全，含 AI 追问）
+python modules/m9_web/server.py            # 自动开浏览器，默认 http://127.0.0.1:8848
+python modules/m9_web/server.py --port 9000 --no-browser
+python modules/m9_web/server.py --source local   # 只用本地 data/，不碰云端同步下来的数据
+
+# ③ 跑一次完整流水线（含日报 + 网页版导出）
+python modules/m8_e2e/e2e_run.py --no-push           # 时段按北京时间自动判定
+python modules/m8_e2e/e2e_run.py --no-push --slot am # 强制盘前
+
+# ④ 单独重出某一份
+python modules/m5_report/report.py --slot pm
+python modules/m9_web/export.py
+
+# ⑤ 云端产出观察（连续几天核对用）
+python modules/m8_e2e/observe.py
+```
+
+数据更新后，网页版**刷新页面即可**，服务会按数据文件的修改时间自动重载，不用重启。
+`server.py --source auto`（默认）在有本地流水线产出时用本地的，否则自动回落到
+`sync.py` 同步下来的云端数据。
 
 ## 八、部署与访问
 
 - **代码仓库**：https://github.com/kennySzhucheng/stock-news-daily（公开）
 - **线上日报**：https://kennySzhucheng.github.io/stock-news-daily/（gh-pages 分支）
 - **定时任务**：GitHub Actions 每天北京时间 08:10（盘前）与 15:40（盘后）各跑一次，也可在 Actions 页面手动触发
-- **微信推送**：每次运行后经 Server酱推送摘要到微信
+- **微信推送**：每次运行后经 Server酱推送摘要到微信，**市场分析在前、重点新闻在后**
+- **线上网页版**：https://kennyszhucheng.github.io/stock-news-daily/web/
+- **同日两份**：盘前与盘后产出不同文件名（`YYYY-MM-DD-am.html` / `-pm.html`），互不覆盖
 
 ## 九、密钥安全约定
 

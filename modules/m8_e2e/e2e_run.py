@@ -9,11 +9,13 @@ M8 端到端集成测试运行器
     python modules/m8_e2e/e2e_run.py              # 完整链路（含微信推送）
     python modules/m8_e2e/e2e_run.py --no-push    # 跳过 M6 推送
     python modules/m8_e2e/e2e_run.py --from M3    # 从指定模块开始跑
+    python modules/m8_e2e/e2e_run.py --slot am    # 强制盘前时段（默认按北京时间判定）
 
 环境变量要求：
     ZAI_API_KEY          M2 新闻筛选（缺失则跳过 M2 及其后）
     DEEPSEEK_API_KEY     M3 深度分析
     SERVERCHAN_SENDKEY   M6 微信推送（缺失则 M6 自动跳过）
+    REPORT_SLOT          可选，覆盖盘前/盘后时段判定（am/pm）
 """
 import os
 import re
@@ -23,11 +25,12 @@ import time
 import argparse
 import subprocess
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 BASE = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = BASE / "data"
 REPORTS_DIR = BASE / "reports"
+CST = timezone(timedelta(hours=8))
 
 # Windows 控制台默认 GBK，强制 UTF-8 才能正确输出中文
 if hasattr(sys.stdout, "reconfigure"):
@@ -44,6 +47,8 @@ STEPS = [
      "env": [],                     "timeout": 600},
     {"id": "M5", "name": "日报生成",            "script": "modules/m5_report/report.py",
      "env": [],                     "timeout": 120},
+    {"id": "M9", "name": "网页版导出",          "script": "modules/m9_web/export.py",
+     "env": [],                     "timeout": 180},
     {"id": "M6", "name": "微信推送",            "script": "modules/m6_push/push.py",
      "env": ["SERVERCHAN_SENDKEY"], "timeout": 120},
 ]
@@ -95,16 +100,49 @@ def check_output(step_id, output=""):
         checks.append(("行情条数", d.get("count", 0) > 0, f"{d.get('count', 0)} 只"))
 
     elif step_id == "M5":
-        date_str = datetime.now().strftime("%Y-%m-%d")
-        p = REPORTS_DIR / f"{date_str}.html"
-        if not p.exists():
-            return [(f"{date_str}.html", False, "文件不存在")]
+        date_str = datetime.now(CST).strftime("%Y-%m-%d")
+        # 盘前/盘后各一份，取当天已有的时段文件；没有则退回到当天任意一份
+        cands = sorted(REPORTS_DIR.glob(f"{date_str}-*.html"))
+        if not cands:
+            return [(f"{date_str}-am/pm.html", False, "文件不存在")]
+        p = cands[-1]
         size = p.stat().st_size
+        checks.append(("日报文件名含时段后缀",
+                       re.fullmatch(r"\d{4}-\d{2}-\d{2}-(am|pm)\.html", p.name) is not None,
+                       p.name))
         checks.append(("日报文件大小", size > 5000, f"{size} 字节"))
         html = p.read_text(encoding="utf-8")
-        for sec in ["市场情绪概览", "个股行情一览", "分板块新闻", "风险声明"]:
+        # 版块顺序即用户要求：市场分析必须在新闻列表之前
+        for sec in ["市场分析", "个股行情一览", "分板块新闻", "风险声明"]:
             checks.append((f"含「{sec}」版块", sec in html, ""))
+        i_mkt, i_news = html.find("市场分析"), html.find("分板块新闻")
+        checks.append(("市场分析在新闻列表之前", 0 <= i_mkt < i_news, ""))
+        checks.append(("latest.html 存在", (REPORTS_DIR / "latest.html").exists(), ""))
         checks.append(("索引页存在", (REPORTS_DIR / "index.html").exists(), ""))
+        # 时段保留：当天两个时段都跑过时，必须两份都在
+        both = (REPORTS_DIR / f"{date_str}-am.html").exists() and \
+               (REPORTS_DIR / f"{date_str}-pm.html").exists()
+        checks.append(("盘前盘后是否两份并存", True,
+                       "两份都在" if both else "目前只有一份（另一时段尚未运行）"))
+
+    elif step_id == "M9":
+        web = REPORTS_DIR / "web" / "index.html"
+        api = REPORTS_DIR / "web" / "api"
+        if not web.exists():
+            return [("reports/web/index.html", False, "文件不存在")]
+        checks.append(("网页版 index.html", True, f"{web.stat().st_size} 字节"))
+        for f in ("news", "overview", "boards", "analysis", "history"):
+            p2 = api / f"{f}.js"
+            checks.append((f"静态数据 {f}.js", p2.exists(),
+                           f"{p2.stat().st_size} 字节" if p2.exists() else "缺失"))
+        txt = web.read_text(encoding="utf-8")
+        checks.append(("已切换为静态模式", "window.__STATIC__ = true" in txt, ""))
+        # 数据走 <script> 注入，file:// 直接双击也能打开（fetch 会被 CORS 拦）
+        news_js = (api / "news.js")
+        if news_js.exists():
+            head = news_js.read_text(encoding="utf-8")[:60]
+            checks.append(("数据以 window.__DATA__ 注入",
+                           head.startswith("window.__DATA__"), head[:40]))
 
     elif step_id == "M6":
         m = re.search(r"pushid=(\d+)", output)
@@ -154,10 +192,14 @@ def main():
     ap = argparse.ArgumentParser(description="M8 端到端集成测试")
     ap.add_argument("--no-push", action="store_true", help="跳过 M6 微信推送")
     ap.add_argument("--from", dest="start", default="M1", help="从指定模块开始（如 M3）")
+    ap.add_argument("--slot", choices=["am", "pm"], default="",
+                    help="强制时段；不指定则各模块按北京时间自行判定")
     args = ap.parse_args()
 
     env = dict(os.environ)
     env["PYTHONIOENCODING"] = "utf-8"   # 保证子进程输出可用 UTF-8 解码
+    if args.slot:
+        env["REPORT_SLOT"] = args.slot
 
     ids = [s["id"] for s in STEPS]
     start_idx = ids.index(args.start) if args.start in ids else 0

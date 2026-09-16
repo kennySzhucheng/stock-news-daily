@@ -12,9 +12,9 @@ M8 云端产出观察工具
 
 说明：
 1. 公开仓库的 Actions 记录可匿名读取；设置 GITHUB_TOKEN 环境变量可提高速率限制
-2. 日报文件名由 workflow runner 的本地时间（UTC）决定，本工具同时显示北京时间
-3. 同一天有两次定时运行（08:10 / 15:40 北京），若生成同名文件则早间版本会被覆盖，
-   本工具会对此给出提示
+2. 日报文件名按**北京时间**取日期，并带盘前/盘后后缀
+   （YYYY-MM-DD-am.html / YYYY-MM-DD-pm.html），同日两份互不覆盖
+3. 本工具按每次运行的触发时间推断它应产出的时段，逐个核对是否已上线
 """
 import os
 import re
@@ -27,11 +27,17 @@ from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent.parent
 CST = timezone(timedelta(hours=8))
+SLOT_CN = {"am": "盘前", "pm": "盘后"}
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 UA = {"User-Agent": "Mozilla/5.0", "Accept": "application/vnd.github+json"}
+
+
+def slot_of(dt_cst):
+    """与 M5/M6 相同的时段判定：北京时间 12:00 前为盘前"""
+    return "am" if dt_cst.hour < 12 else "pm"
 
 
 def detect_repo():
@@ -113,7 +119,7 @@ def main():
         return 0
 
     print(f"\n最近 {len(runs)} 次运行：\n")
-    print(f"{'#':<6}{'北京时间':<14}{'触发':<18}{'状态':<12}{'耗时':<9}{'日报文件'}")
+    print(f"{'#':<6}{'北京时间':<14}{'触发':<18}{'状态':<12}{'耗时':<9}{'产出文件'}")
     print("-" * 74)
 
     by_date = {}
@@ -123,33 +129,42 @@ def main():
         dur = (updated - created).total_seconds()
         concl = r.get("conclusion") or r.get("status") or "?"
         event = r.get("event", "?")
-        # 日报文件名取自 runner 本地时间（UTC）
-        utc_date = r["created_at"][:10]
-        by_date.setdefault(utc_date, []).append({"run": r, "cst": created, "concl": concl})
+        # 文件名用北京时间：两次定时（08:10 / 15:40 北京）分属同日不同时段
+        date_str = created.strftime("%Y-%m-%d")
+        slot = slot_of(created)
+        fname = f"{date_str}-{slot}.html"
+        by_date.setdefault(date_str, {})[slot] = created
 
         mark = {"success": "成功", "failure": "失败", "cancelled": "取消",
                 "in_progress": "进行中", "queued": "排队中"}.get(concl, concl)
         print(f"{r['run_number']:<6}{created.strftime('%m-%d %H:%M'):<14}"
-              f"{event:<18}{mark:<12}{dur:>6.0f}s   {utc_date}.html")
+              f"{event:<18}{mark:<12}{dur:>6.0f}s   {fname}")
 
     print(f"\n线上日报检查（{pages_base}）：")
     for date_str in sorted(by_date, reverse=True):
-        entries = by_date[date_str]
-        url = f"{pages_base}/{date_str}.html"
-        status, info = check_url(url)
-        if status == 200:
-            line = f"  {date_str}  OK   {info} 字节"
-        else:
-            line = f"  {date_str}  不可访问  ({info})"
-        print(line)
-        if len(entries) > 1:
-            times = "、".join(e["cst"].strftime("%H:%M") for e in sorted(entries, key=lambda x: x["cst"]))
-            print(f"            ⚠ 当天有 {len(entries)} 次运行（{times}），同名文件会互相覆盖，"
-                  f"线上仅保留最后一次")
+        for slot in ("am", "pm"):
+            fname = f"{date_str}-{slot}.html"
+            url = f"{pages_base}/{fname}"
+            status, info = check_url(url)
+            ran = slot in by_date[date_str]
+            if status == 200:
+                print(f"  {fname}  OK   {info} 字节")
+            elif ran:
+                print(f"  {fname}  运行成功但线上不可访问  ({info})")
+            else:
+                print(f"  {fname}  —    今日无该时段的运行记录")
+        # 同日两次都跑过、但只上线了一份，才是真问题
+        both_ran = {"am", "pm"} <= set(by_date[date_str])
+        if both_ran:
+            ok = all(check_url(f"{pages_base}/{date_str}-{s}.html")[0] == 200
+                     for s in ("am", "pm"))
+            print(f"            {'✓ 盘前/盘后两份均已保留' if ok else '⚠ 两份运行齐全但线上缺一份'}")
 
-    # 索引页
+    # 索引页与网页版
     status, info = check_url(f"{pages_base}/index.html")
     print(f"  index.html  {'OK   ' + str(info) + ' 字节' if status == 200 else '不可访问  (' + str(info) + ')'}")
+    status, info = check_url(f"{pages_base}/web/")
+    print(f"  web/（增强版网页）  {'OK   ' + str(info) + ' 字节' if status == 200 else '不可访问  (' + str(info) + ')'}")
 
     # 稳定性小结
     succ = sum(1 for r in runs if r.get("conclusion") == "success")

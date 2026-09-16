@@ -9,23 +9,36 @@ M5 网页日报生成模块 — 把 M1~M4 产物整合成一份自包含 HTML �
   data/quotes.json            （M4 个股行情）
 
 输出:
-  reports/YYYY-MM-DD.html     （当日自包含日报，移动端优先、暗色主题）
-  reports/index.html          （索引页，按日期倒序）
+  reports/YYYY-MM-DD-am.html  （盘前版，当日自包含，移动端优先、暗色主题）
+  reports/YYYY-MM-DD-pm.html  （盘后版，与盘前版并存互不覆盖）
+  reports/latest.html         （最近一次运行的那份，固定入口）
+  reports/index.html          （索引页，按日期倒序、每天列出盘前/盘后）
 
 要点：
 1. 纯单文件 HTML，CSS/JS 全部内联，无任何外部依赖
 2. 移动端优先：单栏、大字号、夜间友好，无横向滚动
 3. 所有动态文本先 HTML 转义再拼接，防注入
+4. 时段由北京时间判定：12:00 前为盘前(am)，之后为盘后(pm)；
+   同日两次运行产出不同文件名，两份都保留
+
+用法:
+    python modules/m5_report/report.py              # 按时段自动命名
+    python modules/m5_report/report.py --slot am    # 手动指定时段
 """
 import json
+import os
 import re
+import sys
 import html
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 BASE = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = BASE / "data"
 REPORTS_DIR = BASE / "reports"
+
+CST = timezone(timedelta(hours=8))          # 北京时间
+SLOT_CN = {"am": "盘前", "pm": "盘后"}
 
 # 分类中文名
 CAT_CN = {
@@ -37,6 +50,12 @@ CAT_CN = {
 }
 SENTI_CN = {"bullish": "利好", "bearish": "利空", "neutral": "中性"}
 SENTI_CLS = {"bullish": "up", "bearish": "down", "neutral": "flat"}
+
+
+def detect_slot(now=None):
+    """按北京时间判定运行时段：12:00 前为盘前(am)，之后为盘后(pm)"""
+    now = now or datetime.now(CST)
+    return "am" if now.hour < 12 else "pm"
 
 
 def esc(s):
@@ -63,37 +82,33 @@ def load_data():
 # ---------------------------------------------------------------------------
 def extract_summary(analysis_md):
     """从 M3 分析里取市场情绪结论句，压缩到 ≤200 字"""
-    core = ""
-    for line in analysis_md.splitlines():
-        m = re.match(r"^\s*结论[：:]\s*(.+)$", line)
-        if m:
-            core = m.group(1).strip()
-            break
+    core = extract_conclusion(analysis_md)
     if not core:
-        # 兜底：取第一段正文
-        lines = [l.strip() for l in analysis_md.splitlines() if l.strip()]
-        core = lines[1] if len(lines) > 1 else (lines[0] if lines else "")
-    # 去掉 markdown 加粗标记
-    core = re.sub(r"\*\*(.+?)\*\*", r"\1", core)
+        # 兜底：取第一段正文。必须跳过标题行，否则会抓到 "## 一、市场情绪概览"
+        for line in analysis_md.splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                core = re.sub(r"\*\*(.+?)\*\*", r"\1", line)
+                break
     summary = f"今日市场：{core}"
     if len(summary) > 200:
         summary = summary[:199] + "…"
     return summary
 
 
-def extract_overview(analysis_md):
-    """取分析的第一节（市场情绪概览），作为独立版块，避免与完整分析重复"""
-    lines = analysis_md.splitlines()
-    out = []
-    for line in lines:
-        # 跳过顶层 "# 今日市场分析" 标题（版块自身已有标题）
-        if re.match(r"^#\s+今日市场分析\s*$", line.strip()):
-            continue
-        # 遇到第二节标题就停
-        if re.match(r"^#{1,3}\s*二、", line.strip()):
-            break
-        out.append(line)
-    return "\n".join(out)
+def extract_conclusion(analysis_md):
+    """取 M3 的"结论：…"一行，供摘要框与索引页使用。
+
+    M3 会不定期把整行写成 `**结论：中性偏谨慎**——…`，加粗标记落在行首。
+    若直接按"行首必须是结论"匹配就会漏掉，摘要框会退化成抓正文第一行
+    （实际会抓到 "## 一、市场情绪概览" 这种标题）。故先剥掉加粗再匹配。
+    """
+    for line in analysis_md.splitlines():
+        s = re.sub(r"\*\*(.+?)\*\*", r"\1", line).strip()
+        m = re.match(r"^结论[：:]\s*(.+)$", s)
+        if m:
+            return m.group(1).strip()
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -430,51 +445,104 @@ footer.risk h3{font-size:14px; color:var(--unverified); margin-bottom:6px;}
   border-radius:8px; padding:14px 16px; margin-bottom:10px; color:var(--text);
 }
 .index-item .d{font-weight:600;} .index-item .s{color:var(--muted); font-size:13px;}
+.latest-item{border-left:3px solid var(--accent); margin-bottom:18px;}
+
+/* 时段徽章：盘前 / 盘后 */
+.slot-badge{
+  display:inline-block; font-size:12px; padding:1px 8px; border-radius:4px;
+  margin-right:6px; vertical-align:1px; white-space:nowrap;
+}
+.slot-badge.am{background:rgba(245,166,35,.15); color:var(--unverified); border:1px solid var(--unverified);}
+.slot-badge.pm{background:rgba(76,141,255,.15); color:var(--accent); border:1px solid var(--accent);}
+
+/* 顶部版块跳转 */
+nav.toc{
+  display:flex; gap:8px; padding:10px 16px; background:var(--bg2);
+  border-bottom:1px solid var(--border); overflow-x:auto;
+  -webkit-overflow-scrolling:touch;
+}
+nav.toc a{
+  font-size:13px; padding:4px 12px; border-radius:14px; white-space:nowrap;
+  background:var(--card); border:1px solid var(--border); color:var(--text);
+}
+section.block{scroll-margin-top:8px;}
+section.block > h2{display:flex; align-items:center; gap:8px;}
+.h2-count{
+  font-size:12px; font-weight:400; color:var(--muted);
+  background:var(--bg2); border:1px solid var(--border);
+  padding:1px 8px; border-radius:10px;
+}
+
+/* 索引页：按日期分组 */
+.day-group{
+  background:var(--card); border:1px solid var(--border); border-radius:8px;
+  padding:12px 14px; margin-bottom:10px;
+}
+.day-date{font-weight:600; font-size:15px; margin-bottom:8px;}
+.day-links{display:flex; flex-wrap:wrap; gap:8px;}
+.slot-link{
+  display:flex; align-items:center; gap:8px; flex:1 1 120px;
+  padding:8px 12px; border-radius:6px; background:var(--bg2);
+  border:1px solid var(--border); color:var(--text); font-size:14px;
+}
+.slot-link.am{border-left:3px solid var(--unverified);}
+.slot-link.pm{border-left:3px solid var(--accent);}
+.slot-link .slot-go{margin-left:auto; color:var(--muted); font-size:12px;}
+.day-latest{margin-top:8px; font-size:13px; text-align:right;}
 """
 
 
-def build_page(data, date_str):
+def build_page(data, date_str, slot):
+    """版块顺序：摘要 → 市场分析 → 个股行情 → 分板块新闻。
+    市场分析（M3 全文）置于新闻列表之前，先给判断再给素材。
+    """
     summary = extract_summary(data["analysis_md"])
-    overview_html = md_to_html(extract_overview(data["analysis_md"]))
     analysis_html = md_to_html(data["analysis_md"])
     quotes_html = render_quotes(data["quotes"])
     news_html = render_news(data["structured"])
+    slot_cn = SLOT_CN.get(slot, "")
+    news_count = len(data["structured"].get("news", []))
+    quote_count = data["quotes"].get("count", 0)
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>股市情报日报 · {esc(date_str)}</title>
+<title>股市情报日报 · {esc(date_str)} {esc(slot_cn)}</title>
 <style>{CSS}</style>
 </head>
 <body>
 <header class="hero">
   <h1>📊 股市情报日报</h1>
-  <div class="date">{esc(date_str)} · AI 自动生成 · 仅供参考</div>
+  <div class="date">
+    <span class="slot-badge {esc(slot)}">{esc(slot_cn)}</span>
+    {esc(date_str)} · AI 自动生成 · 仅供参考
+  </div>
 </header>
+
+<nav class="toc">
+  <a href="#market">市场分析</a>
+  <a href="#quotes">个股行情</a>
+  <a href="#news">分板块新闻</a>
+</nav>
 
 <div class="summary-box">{esc(summary)}</div>
 
 <main>
-  <section class="block">
-    <h2>市场情绪概览</h2>
-    <div class="analysis">{overview_html}</div>
+  <section class="block" id="market">
+    <h2>市场分析</h2>
+    <div class="analysis">{analysis_html}</div>
   </section>
 
-  <section class="block">
-    <h2>个股行情一览</h2>
+  <section class="block" id="quotes">
+    <h2>个股行情一览<span class="h2-count">{quote_count} 只</span></h2>
     {quotes_html}
   </section>
 
-  <section class="block">
-    <h2>分板块新闻</h2>
+  <section class="block" id="news">
+    <h2>分板块新闻<span class="h2-count">{news_count} 条</span></h2>
     {news_html}
-  </section>
-
-  <section class="block">
-    <h2>完整分析</h2>
-    <div class="analysis">{analysis_html}</div>
   </section>
 </main>
 
@@ -488,16 +556,54 @@ def build_page(data, date_str):
 </html>"""
 
 
+def _parse_report_name(stem):
+    """从文件名解析 (日期, 时段)。非日报文件（如 latest / index）返回 None"""
+    m = re.match(r"^(\d{4}-\d{2}-\d{2})(?:-(am|pm))?$", stem)
+    if not m:
+        return None
+    return m.group(1), (m.group(2) or "")
+
+
 def build_index(report_files):
-    items = ""
+    """索引页：按日期倒序分组，每天列出盘前/盘后各一份"""
+    by_date = {}
     for f in report_files:
-        date_str = f.stem
-        items += (
-            f'<a class="index-item" href="{esc(f.name)}">'
-            f'<div class="d">{esc(date_str)}</div>'
-            f'<div class="s">点击查看当日日报</div>'
-            f"</a>"
+        parsed = _parse_report_name(f.stem)
+        if not parsed:
+            continue
+        date_str, slot = parsed
+        by_date.setdefault(date_str, []).append((slot, f))
+
+    blocks = []
+    for date_str in sorted(by_date, reverse=True):
+        entries = sorted(by_date[date_str], key=lambda x: x[0])
+        links = []
+        for slot, f in entries:
+            label = SLOT_CN.get(slot, "日报")
+            cls = slot or "na"
+            links.append(
+                f'<a class="slot-link {esc(cls)}" href="{esc(f.name)}">'
+                f'<span class="slot-name">{esc(label)}</span>'
+                f'<span class="slot-go">查看 →</span></a>'
+            )
+        # 同日两份时，右侧再给一个"最新"直达
+        latest = entries[-1][1]
+        blocks.append(
+            f'<div class="day-group">'
+            f'<div class="day-date">{esc(date_str)}</div>'
+            f'<div class="day-links">{"".join(links)}</div>'
+            f'<div class="day-latest"><a href="{esc(latest.name)}">当日最新</a></div>'
+            f"</div>"
         )
+
+    body = "".join(blocks) if blocks else '<p class="empty">暂无日报</p>'
+    has_latest = (REPORTS_DIR / "latest.html").exists()
+    latest_link = (
+        '<a class="index-item latest-item" href="latest.html">'
+        '<div class="d">⚡ 最新一期</div>'
+        '<div class="s">直接打开最近一次运行生成的日报</div></a>'
+        if has_latest else ""
+    )
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -509,31 +615,53 @@ def build_index(report_files):
 <body>
 <header class="hero">
   <h1>📊 股市情报日报</h1>
-  <div class="date">全部日报（按日期倒序）</div>
+  <div class="date">全部日报 · 按日期倒序 · 每天盘前/盘后各一份</div>
 </header>
 <main>
   <section class="block">
-    {items if items else '<p class="empty">暂无日报</p>'}
+    {latest_link}
+    {body}
   </section>
 </main>
+<footer class="risk">
+  <p>本页由 AI 自动生成，仅供参考，不构成任何投资建议。市场有风险，投资需谨慎。</p>
+</footer>
 </body>
 </html>"""
 
 
 def main():
-    date_str = datetime.now().strftime("%Y-%m-%d")
+    # 时段优先级：命令行 --slot > 环境变量 REPORT_SLOT > 按北京时间自动判定
+    slot = ""
+    if "--slot" in sys.argv:
+        i = sys.argv.index("--slot")
+        if i + 1 < len(sys.argv):
+            slot = sys.argv[i + 1].strip().lower()
+    if slot not in ("am", "pm"):
+        slot = (os.environ.get("REPORT_SLOT") or "").strip().lower()
+    if slot not in ("am", "pm"):
+        slot = detect_slot()
+
+    now = datetime.now(CST)
+    date_str = now.strftime("%Y-%m-%d")
     data = load_data()
 
     REPORTS_DIR.mkdir(exist_ok=True)
 
-    page = build_page(data, date_str)
-    page_path = REPORTS_DIR / f"{date_str}.html"
+    page = build_page(data, date_str, slot)
+    page_path = REPORTS_DIR / f"{date_str}-{slot}.html"
     page_path.write_text(page, encoding="utf-8")
-    print(f"[OK] report -> {page_path} ({len(page)} bytes)")
+    print(f"[OK] report -> {page_path} ({len(page)} bytes, {SLOT_CN[slot]})")
 
-    # 更新索引
+    # latest.html：固定入口，内容 = 最近一次运行产出（同日盘后版会覆盖盘前版）
+    latest_path = REPORTS_DIR / "latest.html"
+    latest_path.write_text(page, encoding="utf-8")
+    print(f"[OK] latest -> {latest_path}")
+
+    # 更新索引（latest.html 与 index.html 自身不计入日报列表）
     report_files = sorted(
-        [p for p in REPORTS_DIR.glob("*.html") if p.name != "index.html"],
+        [p for p in REPORTS_DIR.glob("*.html")
+         if p.name not in ("index.html", "latest.html")],
         key=lambda p: p.stem, reverse=True,
     )
     idx = build_index(report_files)
@@ -542,7 +670,8 @@ def main():
     print(f"[OK] index  -> {idx_path} ({len(report_files)} reports)")
 
     # 摘要统计
-    print(f"    news={len(data['structured']['news'])} quotes={data['quotes']['count']} summary_len={len(extract_summary(data['analysis_md']))}")
+    print(f"    news={len(data['structured']['news'])} quotes={data['quotes']['count']} "
+          f"summary_len={len(extract_summary(data['analysis_md']))}")
 
 
 if __name__ == "__main__":

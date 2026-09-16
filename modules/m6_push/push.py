@@ -4,16 +4,19 @@ M6 微信推送模块 — 通过 Server酱 把日报摘要推送到微信
 
 输入:
   data/structured_news.json   （M2 结构化新闻，选 3 条重点）
-  data/analysis.md            （M3 分析，取情绪一句话）
+  data/analysis.md            （M3 分析，取情绪结论与关注板块）
+  reports/                    （M5 产出，用于定位当天日报链接）
 
 配置（环境变量）:
   SERVERCHAN_SENDKEY    Server酱 SendKey（SCT 开头 → Turbo版 API）
   REPORT_BASE_URL       日报根 URL，用于拼接当天日报链接（M7 起为 GitHub Pages）
+  REPORT_SLOT           手动指定时段 am/pm，不设则按北京时间判定
 
 要点：
 1. 推送失败只记录日志，不影响日报已生成的事实（不抛异常退出）
-2. 免费版限制 5 次/天，故只推情绪 + 3 条重点新闻标题，正文放链接
-3. 重点新闻排序：confirmed 优先 > 政策/个股权重 > 利好/利空优先
+2. 免费版限制 5 次/天，故只推市场分析 + 3 条重点新闻标题，正文放链接
+3. **市场分析置于最前**：情绪结论 + 关注板块逻辑链，新闻标题排在其后
+4. 重点新闻排序：confirmed 优先 > 政策/个股权重 > 利好/利空优先
 """
 import os
 import re
@@ -21,10 +24,14 @@ import json
 import urllib.request
 import urllib.parse
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 BASE = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = BASE / "data"
+REPORTS_DIR = BASE / "reports"
+
+CST = timezone(timedelta(hours=8))
+SLOT_CN = {"am": "盘前", "pm": "盘后"}
 
 SC_API = "https://sctapi.ftqq.com/{sendkey}.send"
 
@@ -34,14 +41,67 @@ SENTI_CN = {"bullish": "利好", "bearish": "利空", "neutral": "中性"}
 CAT_CN = {"policy": "政策", "stock": "个股", "industry": "行业", "international": "国际", "other": "其他"}
 
 
+def detect_slot(now=None):
+    """与 M5 保持一致：北京时间 12:00 前为盘前(am)，之后为盘后(pm)"""
+    now = now or datetime.now(CST)
+    return "am" if now.hour < 12 else "pm"
+
+
 def extract_sentiment(analysis_md):
-    """从 M3 分析取"结论：…"情绪一句话"""
+    """从 M3 分析取"结论：…"情绪一句话。
+
+    M3 会不定期把整行写成 `**结论：中性偏谨慎**——…`，加粗标记落在行首，
+    直接匹配行首会漏掉，推送就变成"暂无市场情绪判断"。故先剥掉加粗。
+    """
     for line in analysis_md.splitlines():
-        m = re.match(r"^\s*结论[：:]\s*(.+)$", line)
+        s = re.sub(r"\*\*(.+?)\*\*", r"\1", line).strip()
+        m = re.match(r"^结论[：:]\s*(.+)$", s)
         if m:
-            core = m.group(1).strip()
-            return re.sub(r"\*\*(.+?)\*\*", r"\1", core)
+            return m.group(1).strip()
     return "暂无市场情绪判断"
+
+
+def extract_market_view(analysis_md, max_sections=3, max_len=80):
+    """从 M3 分析的「值得关注的板块」抽取 (板块名, 逻辑链摘要, 置信度)。
+
+    推送里这块放在最前面，让用户先看到市场判断再看新闻素材。
+    """
+    sections = []
+    cur = None
+    for line in analysis_md.splitlines():
+        s = line.strip()
+        m = re.match(r"^###\s+(.+?)\s*$", s)
+        if m:
+            cur = {"name": m.group(1).strip(), "logic": "", "conf": ""}
+            sections.append(cur)
+            continue
+        if cur is None:
+            continue
+        # 遇到二级（或更高级）标题说明本节已结束
+        if re.match(r"^#{1,2}\s", s):
+            cur = None
+            continue
+        m = re.match(r"^[-*]\s*逻辑链[：:]\s*(.*)$", s)
+        if m and not cur["logic"]:
+            cur["logic"] = re.sub(r"\*\*(.+?)\*\*", r"\1", m.group(1)).strip()
+            continue
+        m = re.match(r"^[-*]\s*[（(]置信度[：:]\s*([^）)]+)[）)]\s*$", s)
+        if m and not cur["conf"]:
+            cur["conf"] = m.group(1).strip()
+
+    out = []
+    for sec in sections[:max_sections]:
+        if not sec["logic"]:
+            continue
+        # 推送里没有新闻编号表，去掉 [12] 这类引用，避免读者无从对照
+        logic = re.sub(r"\[\d+\]", "", sec["logic"])
+        logic = re.sub(r"[（(]\s*[）)]", "", logic)
+        logic = re.sub(r"\s+", " ", logic).strip(" ；;，,、")
+        if len(logic) > max_len:
+            logic = logic[:max_len - 1] + "…"
+        if logic:
+            out.append((sec["name"], logic, sec["conf"]))
+    return out
 
 
 def extract_title(text, max_len=40):
@@ -109,6 +169,44 @@ def send(title, desp, sendkey):
         return False, str(e)
 
 
+def resolve_report_name(date_str, slot):
+    """定位 M5 产出的当天日报文件名。
+
+    优先按实际文件判断（同日盘前/盘后各一份，取较晚的那份），
+    文件不存在时回退到「日期-时段」的约定命名。
+    """
+    cands = sorted(REPORTS_DIR.glob(f"{date_str}-*.html"))
+    if cands:
+        return cands[-1].name
+    return f"{date_str}-{slot}.html"
+
+
+def build_digest(date_str, slot, sentiment, market_view, top_news):
+    """拼推送正文。顺序：市场分析（情绪 + 关注板块）→ 重点新闻 → 日报链接。
+
+    市场判断放最前，让用户不点开链接也能先拿到结论；新闻标题退居其次。
+    """
+    parts = [f"### 📈 市场分析（{SLOT_CN.get(slot, '')}）", sentiment]
+
+    if market_view:
+        parts.append("")
+        parts.append("**关注板块**")
+        for i, (name, logic, conf) in enumerate(market_view, 1):
+            tail = f"（{conf}）" if conf else ""
+            parts.append(f"{i}. **{name}**：{logic}{tail}")
+
+    parts.append("")
+    parts.append("### 📌 重点新闻")
+    for i, n in enumerate(top_news, 1):
+        title = extract_title(n.get("text", ""))
+        cat = CAT_CN.get(n.get("category"), n.get("category"))
+        senti = SENTI_CN.get(n.get("sentiment"), "")
+        verified = "已确认" if n.get("verified") == "confirmed" else "待核实"
+        parts.append(f"{i}. [{cat}] {title}（{senti}·{verified}）")
+
+    return "\n".join(parts)
+
+
 def main():
     sendkey = os.environ.get("SERVERCHAN_SENDKEY", "").strip()
     if not sendkey:
@@ -118,43 +216,36 @@ def main():
     structured = json.loads((DATA_DIR / "structured_news.json").read_text(encoding="utf-8"))
     analysis_md = (DATA_DIR / "analysis.md").read_text(encoding="utf-8")
 
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    sentiment = extract_sentiment(analysis_md)
+    now = datetime.now(CST)
+    date_str = now.strftime("%Y-%m-%d")
+    slot = os.environ.get("REPORT_SLOT", "").strip().lower()
+    if slot not in ("am", "pm"):
+        slot = detect_slot(now)
 
-    # 3 条重点新闻
+    sentiment = extract_sentiment(analysis_md)
+    market_view = extract_market_view(analysis_md)
     top = select_top_news(structured.get("news", []), k=3)
-    lines = []
-    for i, n in enumerate(top, 1):
-        title = extract_title(n.get("text", ""))
-        cat = CAT_CN.get(n.get("category"), n.get("category"))
-        senti = SENTI_CN.get(n.get("sentiment"), "")
-        verified = "已确认" if n.get("verified") == "confirmed" else "待核实"
-        lines.append(f"{i}. [{cat}] {title}（{senti}·{verified}）")
 
     # 日报链接（gh-pages 根目录即 reports 内容，故无需 /reports/ 前缀）
     base_url = os.environ.get("REPORT_BASE_URL", "").strip().rstrip("/")
     if base_url:
-        report_url = f"{base_url}/{date_str}.html"
-        link_line = f"\n[查看完整日报 →]({report_url})"
+        report_name = resolve_report_name(date_str, slot)
+        link_line = f"\n\n[查看完整日报 →]({base_url}/{report_name})"
     else:
-        link_line = "\n（REPORT_BASE_URL 未设置，暂不附链接）"
+        link_line = "\n\n（REPORT_BASE_URL 未设置，暂不附链接）"
 
-    title = f"📊 股市情报日报 {date_str}"
-    desp = (
-        f"### 今日市场\n{sentiment}\n\n"
-        f"### 重点新闻\n" + "\n".join(lines) + link_line
-    )
+    title = f"📊 股市情报日报 {date_str} · {SLOT_CN.get(slot, '')}"
+    desp = build_digest(date_str, slot, sentiment, market_view, top) + link_line
 
     ok, msg = send(title, desp, sendkey)
     if ok:
         print(f"[OK] 已推送到微信（{msg}）")
-        print(f"     标题: {title}")
-        print(f"     正文:\n{desp}")
     else:
         print(f"[warn] 推送失败（{msg}），日报已生成不受影响")
-        # 失败时仍打印内容，便于核对
-        print(f"     标题: {title}")
-        print(f"     正文:\n{desp}")
+    # 成功与否都打印内容，便于核对
+    print(f"     时段: {slot} / 关注板块 {len(market_view)} 个")
+    print(f"     标题: {title}")
+    print(f"     正文:\n{desp}")
 
 
 if __name__ == "__main__":

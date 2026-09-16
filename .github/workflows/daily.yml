@@ -4,9 +4,15 @@ name: 股市情报日报
 # GitHub Actions cron 使用 UTC，北京时间 = UTC+8
 on:
   schedule:
-    - cron: '10 0 * * *'   # 08:10 北京
-    - cron: '40 7 * * *'   # 15:40 北京
+    - cron: '10 0 * * *'   # 08:10 北京 → 盘前
+    - cron: '40 7 * * *'   # 15:40 北京 → 盘后
   workflow_dispatch:        # 支持手动触发（M8 联调用）
+    inputs:
+      slot:
+        description: '时段：填 am 或 pm，留空则按触发时间自动判定'
+        required: false
+        default: ''
+        type: string
 
 # gh-pages 部署需要写权限
 permissions:
@@ -41,6 +47,24 @@ jobs:
           else
             echo "首次运行，暂无 gh-pages 分支"
           fi
+
+      # 盘前/盘后产出不同文件名（YYYY-MM-DD-am/pm.html），两份都保留、互不覆盖。
+      # 用 cron 字符串判断最可靠；手动触发时才按北京时间现算。
+      - name: 判定运行时段
+        id: slot
+        run: |
+          SLOT="${{ github.event.inputs.slot }}"
+          case "$SLOT" in am|pm) ;; *) SLOT="" ;; esac   # 手动输入非法值则转为自动判定
+          if [ -z "$SLOT" ]; then
+            case "${{ github.event.schedule }}" in
+              "10 0 * * *") SLOT=am ;;
+              "40 7 * * *") SLOT=pm ;;
+              *) H=$(TZ=Asia/Shanghai date +%H)
+                 if [ "$H" -lt 12 ]; then SLOT=am; else SLOT=pm; fi ;;
+            esac
+          fi
+          echo "slot=$SLOT" >> "$GITHUB_OUTPUT"
+          echo "本次运行时段: $SLOT（$([ "$SLOT" = am ] && echo 盘前 || echo 盘后)）"
 
       - name: M1 新闻收集
         run: python modules/m1_collector/collector.py
@@ -83,7 +107,14 @@ jobs:
         run: python modules/m4_quotes/quotes.py
 
       - name: M5 生成日报
+        env:
+          REPORT_SLOT: ${{ steps.slot.outputs.slot }}
         run: python modules/m5_report/report.py
+
+      # 网页版（增强版）：导出成静态站点，随日报一起部署到 Pages，
+      # 线上地址 https://<owner>.github.io/<repo>/web/
+      - name: M9 导出网页版
+        run: python modules/m9_web/export.py
 
       # M6 失败不影响日报本身（脚本内部已处理，这里再加 always 兜底）
       - name: M6 微信推送
@@ -91,6 +122,7 @@ jobs:
         env:
           SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
           REPORT_BASE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+          REPORT_SLOT: ${{ steps.slot.outputs.slot }}
         run: python modules/m6_push/push.py
 
       - name: 部署到 GitHub Pages
