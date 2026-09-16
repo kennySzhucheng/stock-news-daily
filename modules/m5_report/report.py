@@ -487,6 +487,8 @@ section.block > h2{display:flex; align-items:center; gap:8px;}
 }
 .slot-link.am{border-left:3px solid var(--unverified);}
 .slot-link.pm{border-left:3px solid var(--accent);}
+.slot-link.na{border-left:3px solid var(--border);}
+.slot-link.na .slot-name{color:var(--muted);}
 .slot-link .slot-go{margin-left:auto; color:var(--muted); font-size:12px;}
 .day-latest{margin-top:8px; font-size:13px; text-align:right;}
 """
@@ -579,10 +581,13 @@ def build_index(report_files):
         entries = sorted(by_date[date_str], key=lambda x: x[0])
         links = []
         for slot, f in entries:
-            label = SLOT_CN.get(slot, "日报")
+            # 没有时段后缀的是"加时段命名"之前那次运行留下的文件（只会出现在
+            # 2026-09-16 当天），标成"早期"以免与"盘前/盘后"并列时让人困惑
+            label = SLOT_CN.get(slot, "早期")
             cls = slot or "na"
             links.append(
-                f'<a class="slot-link {esc(cls)}" href="{esc(f.name)}">'
+                f'<a class="slot-link {esc(cls)}" href="{esc(f.name)}"'
+                f' title="{esc(f.name)}">'
                 f'<span class="slot-name">{esc(label)}</span>'
                 f'<span class="slot-go">查看 →</span></a>'
             )
