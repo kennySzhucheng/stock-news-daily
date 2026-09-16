@@ -111,11 +111,6 @@ jobs:
           REPORT_SLOT: ${{ steps.slot.outputs.slot }}
         run: python modules/m5_report/report.py
 
-      # 网页版（增强版）：导出成静态站点，随日报一起部署到 Pages，
-      # 线上地址 https://<owner>.github.io/<repo>/web/
-      - name: M9 导出网页版
-        run: python modules/m9_web/export.py
-
       # M6 失败不影响日报本身（脚本内部已处理，这里再加 always 兜底）
       - name: M6 微信推送
         if: always()
@@ -124,6 +119,13 @@ jobs:
           REPORT_BASE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
           REPORT_SLOT: ${{ steps.slot.outputs.slot }}
         run: python modules/m6_push/push.py
+
+      # 网页版是附加产出，放在推送之后并允许失败：
+      # 它出问题不该掐断主链路（微信推送、Pages 部署）。
+      # 线上地址 https://<owner>.github.io/<repo>/web/
+      - name: M9 导出网页版
+        continue-on-error: true
+        run: python modules/m9_web/export.py
 
       - name: 部署到 GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
