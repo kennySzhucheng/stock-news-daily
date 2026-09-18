@@ -153,6 +153,10 @@ python modules/m9_web/export.py
 
 # ⑤ 云端产出观察（连续几天核对用）
 python modules/m8_e2e/observe.py
+
+# ⑥ 按点手动触发云端工作流（GitHub 的 cron 会延迟 4~5 小时，见 CHANGELOG 9-18）
+python tools/trigger_workflow.py --slot am          # 需先 setx GITHUB_TOKEN <PAT>
+python tools/trigger_workflow.py --print-task-cmd   # 看怎么挂到 Windows 计划任务
 ```
 
 数据更新后，网页版**刷新页面即可**，服务会按数据文件的修改时间自动重载，不用重启。
@@ -177,6 +181,13 @@ python tools/push_via_api.py             # 经 Git Data API 完成一次等效 p
 - **代码仓库**：https://github.com/kennySzhucheng/stock-news-daily（公开）
 - **线上日报**：https://kennySzhucheng.github.io/stock-news-daily/（gh-pages 分支）
 - **定时任务**：GitHub Actions 每天北京时间 08:10（盘前）与 15:40（盘后）各跑一次，也可在 Actions 页面手动触发
+  - ⚠️ GitHub 的 schedule 事件会被延迟投递（2026-09-17 实测延迟 4~5 小时）。被延迟时
+    日报与推送会自动标出「计划时点 / 实际运行时点」，提醒内容并非严格的盘前/盘后快照；
+    要准点可用 `tools/trigger_workflow.py` 从外部触发（见第七·五节 ⑥）。推荐挂在
+    **cron-job.org** 这类云端调度器上按点触发 —— 本机计划任务要求电脑在
+    08:10/15:40 恰好开机，关机时就形同虚设
+  - 外部触发与云端 cron 会撞车跑两遍，workflow 内按「今天的这个时段是否已出报」
+    去重（查 gh-pages 产出文件，精确到时段），因此两者可同时保留、互为兜底
 - **微信推送**：每次运行后经 Server酱推送摘要到微信，**市场分析在前、重点新闻在后**
 - **线上网页版**：https://kennyszhucheng.github.io/stock-news-daily/web/
 - **同日两份**：盘前与盘后产出不同文件名（`YYYY-MM-DD-am.html` / `-pm.html`），互不覆盖

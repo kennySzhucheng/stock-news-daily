@@ -37,41 +37,90 @@ jobs:
         with:
           python-version: '3.12'
 
-      # gh-pages 上的历史日报要恢复到 reports/，否则索引页只剩当天一份
+      # gh-pages 上的历史日报要恢复到 reports/，否则索引页只剩当天一份。
+      # 恢复是否成功供下面的去重步骤判断（失败时无从判断有无重复，放行）。
       - name: 恢复历史日报
+        id: restore
         run: |
           if git fetch origin gh-pages --depth=1 2>/dev/null; then
             mkdir -p reports
             git archive FETCH_HEAD | tar -x -C reports
             echo "已恢复历史日报: $(ls reports/*.html 2>/dev/null | wc -l) 份"
+            echo "ok=true" >> "$GITHUB_OUTPUT"
           else
             echo "首次运行，暂无 gh-pages 分支"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
           fi
 
       # 盘前/盘后产出不同文件名（YYYY-MM-DD-am/pm.html），两份都保留、互不覆盖。
       # 用 cron 字符串判断最可靠；手动触发时才按北京时间现算。
+      #
+      # 同时计算「实际开始 vs 计划时点」的延迟分钟数：GitHub 的 schedule 事件会被
+      # 延迟投递（2026-09-17 实测延迟 4~5 小时），此时"盘前"标签与内容严重不符
+      # （12:46 才跑的任务抓的是当天上午的盘中新闻）。M5/M6 据此在日报与推送里标注。
       - name: 判定运行时段
         id: slot
         run: |
           SLOT="${{ github.event.inputs.slot }}"
           case "$SLOT" in am|pm) ;; *) SLOT="" ;; esac   # 手动输入非法值则转为自动判定
+          PLAN=""
           if [ -z "$SLOT" ]; then
             case "${{ github.event.schedule }}" in
-              "10 0 * * *") SLOT=am ;;
-              "40 7 * * *") SLOT=pm ;;
+              "10 0 * * *") SLOT=am; PLAN="08:10" ;;   # 08:10 北京 = 00:10 UTC
+              "40 7 * * *") SLOT=pm; PLAN="15:40" ;;   # 15:40 北京 = 07:40 UTC
               *) H=$(TZ=Asia/Shanghai date +%H)
                  if [ "$H" -lt 12 ]; then SLOT=am; else SLOT=pm; fi ;;
             esac
           fi
+          # 只有 schedule 触发且已知计划时点时才存在"延迟"；手动触发无从谈起
+          DELAY=""
+          if [ "${{ github.event_name }}" = "schedule" ] && [ -n "$PLAN" ]; then
+            NOW_E=$(TZ=Asia/Shanghai date +%s)
+            PLAN_E=$(TZ=Asia/Shanghai date -d "$(TZ=Asia/Shanghai date +%F) $PLAN" +%s)
+            DELAY=$(( (NOW_E - PLAN_E) / 60 ))
+          fi
           echo "slot=$SLOT" >> "$GITHUB_OUTPUT"
+          echo "plan=$PLAN" >> "$GITHUB_OUTPUT"
+          echo "delay=$DELAY" >> "$GITHUB_OUTPUT"
           echo "本次运行时段: $SLOT（$([ "$SLOT" = am ] && echo 盘前 || echo 盘后)）"
+          echo "计划时点: ${PLAN:-无（手动触发）}　延迟: ${DELAY:-不适用} 分钟"
+
+      # 外部调度（tools/trigger_workflow.py 挂本机计划任务，或 cron-job.org 这类
+      # 云端调度器）会按点触发 workflow_dispatch；云端 cron 又可能延迟数小时后
+      # 在同日再触发一次。两者撞车会把同一时段跑两遍：日报被覆盖、微信重复推送、
+      # API 白跑一遍。故 schedule 触发时先看「今天的这个时段」是否已经出过报告。
+      #
+      # 判定用 gh-pages 上的产出文件（上一步已解到 reports/），而不是「最近 N 小时
+      # 是否跑过」——后者不分时段：9-17 盘前 cron 延迟到 12:46 才跑，15:40 的外部
+      # 触发一查「近 6 小时跑过」就把盘后那次 skip 掉了，盘后只能退回等延迟的 cron，
+      # 结果 20:53 才推。文件判定精确到「日期 + 时段」，且不依赖 API 与 jq。
+      - name: 检查本时段是否已出报
+        id: dup
+        if: github.event_name == 'schedule'
+        run: |
+          SLOT="${{ steps.slot.outputs.slot }}"
+          TODAY=$(TZ=Asia/Shanghai date +%F)
+          TARGET="reports/${TODAY}-${SLOT}.html"
+          # 历史日报没恢复成功（首次运行，或 fetch 瞬断）时无从判断，放行——
+          # 宁可重复一次，也不能让去重检查挡住出报
+          if [ "${{ steps.restore.outputs.ok }}" != "true" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "历史日报未恢复，无从判断是否重复，照常执行"
+          elif [ -f "$TARGET" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "今日 ${SLOT} 报告已存在（$TARGET），跳过本次以避免重复推送"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "今日 ${SLOT} 报告尚未生成，执行本次"
+          fi
 
       - name: M1 新闻收集
+        if: steps.dup.outputs.skip != 'true'
         run: python modules/m1_collector/collector.py
 
       # 海外服务器抓国内源可能被地域限制，这一步结果用于 M7 验收第 5 条
       - name: M1 数据源可用性检查
-        if: always()
+        if: always() && steps.dup.outputs.skip != 'true'
         run: |
           python -c "
           import json, pathlib
@@ -94,40 +143,50 @@ jobs:
           "
 
       - name: M2 新闻筛选（GLM-4-Flash）
+        if: steps.dup.outputs.skip != 'true'
         env:
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
         run: python modules/m2_filter/filter.py
 
       - name: M3 深度分析（DeepSeek）
+        if: steps.dup.outputs.skip != 'true'
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: python modules/m3_analyzer/analyzer.py
 
       - name: M4 行情数据
+        if: steps.dup.outputs.skip != 'true'
         run: python modules/m4_quotes/quotes.py
 
       - name: M5 生成日报
+        if: steps.dup.outputs.skip != 'true'
         env:
           REPORT_SLOT: ${{ steps.slot.outputs.slot }}
+          REPORT_PLAN_TIME: ${{ steps.slot.outputs.plan }}
+          REPORT_DELAY_MIN: ${{ steps.slot.outputs.delay }}
         run: python modules/m5_report/report.py
 
       # M6 失败不影响日报本身（脚本内部已处理，这里再加 always 兜底）
       - name: M6 微信推送
-        if: always()
+        if: always() && steps.dup.outputs.skip != 'true'
         env:
           SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
           REPORT_BASE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
           REPORT_SLOT: ${{ steps.slot.outputs.slot }}
+          REPORT_PLAN_TIME: ${{ steps.slot.outputs.plan }}
+          REPORT_DELAY_MIN: ${{ steps.slot.outputs.delay }}
         run: python modules/m6_push/push.py
 
       # 网页版是附加产出，放在推送之后并允许失败：
       # 它出问题不该掐断主链路（微信推送、Pages 部署）。
       # 线上地址 https://<owner>.github.io/<repo>/web/
       - name: M9 导出网页版
+        if: steps.dup.outputs.skip != 'true'
         continue-on-error: true
         run: python modules/m9_web/export.py
 
       - name: 部署到 GitHub Pages
+        if: steps.dup.outputs.skip != 'true'
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -136,7 +195,7 @@ jobs:
           commit_message: "日报更新 ${{ github.run_number }} [${{ github.event.schedule || 'manual' }}]"
 
       - name: 上传产物（便于排查）
-        if: always()
+        if: always() && steps.dup.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: daily-data-${{ github.run_number }}

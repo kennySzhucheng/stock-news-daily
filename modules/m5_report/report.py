@@ -20,10 +20,19 @@ M5 网页日报生成模块 — 把 M1~M4 产物整合成一份自包含 HTML �
 3. 所有动态文本先 HTML 转义再拼接，防注入
 4. 时段由北京时间判定：12:00 前为盘前(am)，之后为盘后(pm)；
    同日两次运行产出不同文件名，两份都保留
+5. **定时延迟标注**：GitHub Actions 的 schedule 事件会被延迟投递（实测 2026-09-17
+   延迟 4~5 小时），此时"盘前"标签与实际内容严重不符——12:46 才跑的任务抓的是
+   当天上午的盘中新闻。故由 workflow 注入计划时点与延迟分钟数，本报在标题与
+   页顶标出，避免读者把延迟版误读成真正的盘前快照。
 
 用法:
     python modules/m5_report/report.py              # 按时段自动命名
     python modules/m5_report/report.py --slot am    # 手动指定时段
+
+环境变量（可选，由 workflow 注入；本地运行不设即不标注）:
+    REPORT_SLOT        时段 am/pm，优先级低于命令行 --slot
+    REPORT_PLAN_TIME   定时任务计划时点，如 "08:10"（手动触发时为空）
+    REPORT_DELAY_MIN   实际开始相对计划时点的延迟分钟数
 """
 import json
 import os
@@ -51,11 +60,63 @@ CAT_CN = {
 SENTI_CN = {"bullish": "利好", "bearish": "利空", "neutral": "中性"}
 SENTI_CLS = {"bullish": "up", "bearish": "down", "neutral": "flat"}
 
+# 延迟低于此分钟数不值得标注（GitHub cron 偶有数分钟抖动，属正常）
+DELAY_THRESHOLD_MIN = 15
+
 
 def detect_slot(now=None):
     """按北京时间判定运行时段：12:00 前为盘前(am)，之后为盘后(pm)"""
     now = now or datetime.now(CST)
     return "am" if now.hour < 12 else "pm"
+
+
+def _fmt_delay(minutes, short=False):
+    """把延迟分钟数写成中文（"4小时36分"）或短式（"4h36m"）"""
+    h, m = divmod(int(minutes), 60)
+    if short:
+        return f"{h}h{m:02d}m" if h else f"{m}m"
+    if h and m:
+        return f"{h}小时{m:02d}分"
+    if h:
+        return f"{h}小时"
+    return f"{m}分钟"
+
+
+def delay_context(now=None):
+    """读取 workflow 注入的延迟信息，判断是否需要在日报里标注。
+
+    定时任务被延迟投递时，"盘前/盘后"标签会与实际内容脱节：12:46 才开跑的
+    任务抓的是当天上午的盘中新闻，却仍顶着"盘前"标题。标注后读者至少知道
+    自己看的是哪个时点的快照。
+
+    本地运行或手动触发时两个环境变量缺失，返回未标注状态。
+    （本函数与 m6_push/push.py 中的同名函数保持一致。）
+    """
+    plan = (os.environ.get("REPORT_PLAN_TIME") or "").strip()
+    raw = (os.environ.get("REPORT_DELAY_MIN") or "").strip()
+    if not plan or not raw:
+        return {"late": False}
+    try:
+        delay_min = int(float(raw))
+    except ValueError:
+        return {"late": False}
+    if delay_min < DELAY_THRESHOLD_MIN:
+        return {"late": False}
+
+    now = now or datetime.now(CST)
+    env_slot = (os.environ.get("REPORT_SLOT") or "").strip().lower()
+    slot_cn = SLOT_CN.get(env_slot if env_slot in ("am", "pm") else detect_slot(now), "")
+    return {
+        "late": True,
+        "plan": plan,
+        "actual": now.strftime("%H:%M"),
+        "short": f"延迟{_fmt_delay(delay_min, short=True)}",
+        "text": (
+            f"计划 {plan} 生成，实际 {now.strftime('%H:%M')} 才开始运行"
+            f"（延迟{_fmt_delay(delay_min)}）。因此本报告采集的是实际运行时刻前 24 小时的"
+            f"新闻，并非严格意义的{slot_cn}快照，阅读时请注意每条新闻自身的发布时间。"
+        ),
+    }
 
 
 def esc(s):
@@ -455,6 +516,14 @@ footer.risk h3{font-size:14px; color:var(--unverified); margin-bottom:6px;}
 .slot-badge.am{background:rgba(245,166,35,.15); color:var(--unverified); border:1px solid var(--unverified);}
 .slot-badge.pm{background:rgba(76,141,255,.15); color:var(--accent); border:1px solid var(--accent);}
 
+/* 定时延迟提示条 */
+.delay-banner{
+  margin:12px 16px 0; padding:10px 14px; border-radius:8px;
+  background:rgba(245,166,35,.12); border:1px solid var(--unverified);
+  font-size:13px; line-height:1.6; color:var(--text);
+}
+.delay-banner b{color:var(--unverified);}
+
 /* 顶部版块跳转 */
 nav.toc{
   display:flex; gap:8px; padding:10px 16px; background:var(--bg2);
@@ -494,9 +563,12 @@ section.block > h2{display:flex; align-items:center; gap:8px;}
 """
 
 
-def build_page(data, date_str, slot):
+def build_page(data, date_str, slot, delay=None):
     """版块顺序：摘要 → 市场分析 → 个股行情 → 分板块新闻。
     市场分析（M3 全文）置于新闻列表之前，先给判断再给素材。
+
+    delay 为 delay_context() 的结果；late=True 时在标题与页顶标出延迟，
+    避免读者把被延迟的定时任务误当成真正的盘前/盘后快照。
     """
     summary = extract_summary(data["analysis_md"])
     analysis_html = md_to_html(data["analysis_md"])
@@ -506,12 +578,19 @@ def build_page(data, date_str, slot):
     news_count = len(data["structured"].get("news", []))
     quote_count = data["quotes"].get("count", 0)
 
+    delay = delay or {"late": False}
+    title_suffix = f"（{delay['short']}）" if delay.get("late") else ""
+    delay_banner = (
+        f'<div class="delay-banner">⚠️ <b>定时任务延迟</b><br>{esc(delay["text"])}</div>'
+        if delay.get("late") else ""
+    )
+
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>股市情报日报 · {esc(date_str)} {esc(slot_cn)}</title>
+<title>股市情报日报 · {esc(date_str)} {esc(slot_cn)}{esc(title_suffix)}</title>
 <style>{CSS}</style>
 </head>
 <body>
@@ -528,6 +607,8 @@ def build_page(data, date_str, slot):
   <a href="#quotes">个股行情</a>
   <a href="#news">分板块新闻</a>
 </nav>
+
+{delay_banner}
 
 <div class="summary-box">{esc(summary)}</div>
 
@@ -646,17 +727,23 @@ def main():
         slot = (os.environ.get("REPORT_SLOT") or "").strip().lower()
     if slot not in ("am", "pm"):
         slot = detect_slot()
+    # 让 delay_context 拿到最终时段（命令行 --slot 可能覆盖了环境变量）
+    os.environ["REPORT_SLOT"] = slot
 
     now = datetime.now(CST)
     date_str = now.strftime("%Y-%m-%d")
     data = load_data()
+    delay = delay_context(now)
 
     REPORTS_DIR.mkdir(exist_ok=True)
 
-    page = build_page(data, date_str, slot)
+    page = build_page(data, date_str, slot, delay)
     page_path = REPORTS_DIR / f"{date_str}-{slot}.html"
     page_path.write_text(page, encoding="utf-8")
     print(f"[OK] report -> {page_path} ({len(page)} bytes, {SLOT_CN[slot]})")
+    if delay.get("late"):
+        print(f"[warn] 定时任务延迟 {delay['short']}：计划 {delay['plan']}，"
+              f"实际 {delay['actual']} 开始，已在日报中标注")
 
     # latest.html：固定入口，内容 = 最近一次运行产出（同日盘后版会覆盖盘前版）
     latest_path = REPORTS_DIR / "latest.html"

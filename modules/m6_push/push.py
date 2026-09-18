@@ -11,12 +11,16 @@ M6 微信推送模块 — 通过 Server酱 把日报摘要推送到微信
   SERVERCHAN_SENDKEY    Server酱 SendKey（SCT 开头 → Turbo版 API）
   REPORT_BASE_URL       日报根 URL，用于拼接当天日报链接（M7 起为 GitHub Pages）
   REPORT_SLOT           手动指定时段 am/pm，不设则按北京时间判定
+  REPORT_PLAN_TIME      定时任务计划时点，如 "08:10"（手动触发时为空）
+  REPORT_DELAY_MIN      实际开始相对计划时点的延迟分钟数
 
 要点：
 1. 推送失败只记录日志，不影响日报已生成的事实（不抛异常退出）
 2. 免费版限制 5 次/天，故只推市场分析 + 3 条重点新闻标题，正文放链接
 3. **市场分析置于最前**：情绪结论 + 关注板块逻辑链，新闻标题排在其后
 4. 重点新闻排序：confirmed 优先 > 政策/个股权重 > 利好/利空优先
+5. **定时延迟标注**：cron 被延迟投递时在标题与正文首行标出实际生成时点，
+   避免用户把延迟版"盘前"推送当成真正的盘前快照（与 M5 日报一致）
 """
 import os
 import re
@@ -33,6 +37,9 @@ REPORTS_DIR = BASE / "reports"
 CST = timezone(timedelta(hours=8))
 SLOT_CN = {"am": "盘前", "pm": "盘后"}
 
+# 延迟低于此分钟数不值得标注（与 M5 保持一致）
+DELAY_THRESHOLD_MIN = 15
+
 SC_API = "https://sctapi.ftqq.com/{sendkey}.send"
 
 CAT_WEIGHT = {"policy": 5, "stock": 4, "industry": 3, "international": 2, "other": 1}
@@ -45,6 +52,51 @@ def detect_slot(now=None):
     """与 M5 保持一致：北京时间 12:00 前为盘前(am)，之后为盘后(pm)"""
     now = now or datetime.now(CST)
     return "am" if now.hour < 12 else "pm"
+
+
+def _fmt_delay(minutes, short=False):
+    """把延迟分钟数写成中文（"4小时36分"）或短式（"4h36m"）"""
+    h, m = divmod(int(minutes), 60)
+    if short:
+        return f"{h}h{m:02d}m" if h else f"{m}m"
+    if h and m:
+        return f"{h}小时{m:02d}分"
+    if h:
+        return f"{h}小时"
+    return f"{m}分钟"
+
+
+def delay_context(now=None):
+    """读取 workflow 注入的延迟信息（与 m5_report/report.py 中的同名函数一致）。
+
+    定时任务被延迟投递时，用户收到的"盘前"推送里装的其实是当天上午的盘中新闻。
+    微信推送只有标题和摘要两处可用于提示，故两者都标。
+    """
+    plan = (os.environ.get("REPORT_PLAN_TIME") or "").strip()
+    raw = (os.environ.get("REPORT_DELAY_MIN") or "").strip()
+    if not plan or not raw:
+        return {"late": False}
+    try:
+        delay_min = int(float(raw))
+    except ValueError:
+        return {"late": False}
+    if delay_min < DELAY_THRESHOLD_MIN:
+        return {"late": False}
+
+    now = now or datetime.now(CST)
+    env_slot = (os.environ.get("REPORT_SLOT") or "").strip().lower()
+    slot_cn = SLOT_CN.get(env_slot if env_slot in ("am", "pm") else detect_slot(now), "")
+    return {
+        "late": True,
+        "plan": plan,
+        "actual": now.strftime("%H:%M"),
+        "short": f"延迟{_fmt_delay(delay_min, short=True)}",
+        "text": (
+            f"定时任务延迟：计划 {plan} 生成，实际 {now.strftime('%H:%M')} 才运行"
+            f"（{_fmt_delay(delay_min)}）。内容采集自实际运行时刻前 24 小时，"
+            f"并非严格意义的{slot_cn}快照。"
+        ),
+    }
 
 
 def extract_sentiment(analysis_md):
@@ -181,12 +233,19 @@ def resolve_report_name(date_str, slot):
     return f"{date_str}-{slot}.html"
 
 
-def build_digest(date_str, slot, sentiment, market_view, top_news):
-    """拼推送正文。顺序：市场分析（情绪 + 关注板块）→ 重点新闻 → 日报链接。
+def build_digest(date_str, slot, sentiment, market_view, top_news, delay=None):
+    """拼推送正文。顺序：延迟提示（若有）→ 市场分析（情绪 + 关注板块）→ 重点新闻 → 日报链接。
 
     市场判断放最前，让用户不点开链接也能先拿到结论；新闻标题退居其次。
     """
-    parts = [f"### 📈 市场分析（{SLOT_CN.get(slot, '')}）", sentiment]
+    delay = delay or {"late": False}
+    parts = []
+    if delay.get("late"):
+        parts.append(f"> ⚠️ {delay['text']}")
+        parts.append("")
+
+    parts.append(f"### 📈 市场分析（{SLOT_CN.get(slot, '')}）")
+    parts.append(sentiment)
 
     if market_view:
         parts.append("")
@@ -221,6 +280,8 @@ def main():
     slot = os.environ.get("REPORT_SLOT", "").strip().lower()
     if slot not in ("am", "pm"):
         slot = detect_slot(now)
+    os.environ["REPORT_SLOT"] = slot          # 让 delay_context 拿到最终时段
+    delay = delay_context(now)
 
     sentiment = extract_sentiment(analysis_md)
     market_view = extract_market_view(analysis_md)
@@ -234,8 +295,13 @@ def main():
     else:
         link_line = "\n\n（REPORT_BASE_URL 未设置，暂不附链接）"
 
-    title = f"📊 股市情报日报 {date_str} · {SLOT_CN.get(slot, '')}"
-    desp = build_digest(date_str, slot, sentiment, market_view, top) + link_line
+    # Server酱 Turbo 标题上限 32 字符，有延迟时改用短日期腾出空间
+    if delay.get("late"):
+        title = (f"📊 股市情报日报 {now.strftime('%m-%d')} "
+                 f"{SLOT_CN.get(slot, '')}·{delay['short']}")
+    else:
+        title = f"📊 股市情报日报 {date_str} · {SLOT_CN.get(slot, '')}"
+    desp = build_digest(date_str, slot, sentiment, market_view, top, delay) + link_line
 
     ok, msg = send(title, desp, sendkey)
     if ok:
