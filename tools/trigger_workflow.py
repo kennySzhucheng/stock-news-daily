@@ -169,29 +169,42 @@ def gh_token():
 
 
 def print_task_cmd(script_path):
-    """打印 Windows 计划任务的注册命令"""
+    """打印 Windows 计划任务的注册命令（PowerShell）
+
+    用 `Register-ScheduledTask` 而非 `schtasks /Create`：后者没有关掉
+    「用电池时不执行」的开关（DisallowStartIfOnBatteries 默认 True），
+    笔记本拔电或合盖时会静默漏触发，且不报错。
+    """
     py = sys.executable
     log_dir = Path.home() / ".stock-news-daily"
     print("令牌：默认自动用本机 `gh auth token`，不必设置任何环境变量；")
     print("      若要改用别的令牌，设 GITHUB_TOKEN 环境变量或用 --token 传入。")
     print()
-    print("注册两个计划任务（复制执行，/F 表示覆盖同名任务）：")
-    for slot, hhmm, cn in (("am", "08:10", "盘前"), ("pm", "15:40", "盘后")):
-        tr = (f'\\"{py}\\" \\"{script_path}\\" --slot {slot} '
-              f'--log-file \\"{log_dir / ("trigger-%s.log" % slot)}\\"')
-        print(f'    schtasks /Create /TN "股市情报-{cn}" /TR "{tr}" '
-              f'/SC DAILY /ST {hhmm} /F')
+    print(f'在 PowerShell 里执行（先建目录 New-Item -ItemType Directory -Force "{log_dir}"）：')
     print()
+    for slot, hhmm, cn in (("am", "08:10", "盘前"), ("pm", "15:40", "盘后")):
+        log = log_dir / f"trigger-{slot}.log"
+        print(f'    # {cn} {hhmm}')
+        print(f'    $a = New-ScheduledTaskAction -Execute "{py}" -Argument '
+              f'\'"{script_path}" --slot {slot} --log-file "{log}"\'')
+        print(f'    $t = New-ScheduledTaskTrigger -Daily -At {hhmm}')
+        print('    $s = New-ScheduledTaskSettingsSet -StartWhenAvailable '
+              '-AllowStartIfOnBatteries -DontStopIfGoingOnBatteries '
+              '-ExecutionTimeLimit (New-TimeSpan -Minutes 15)')
+        print(f'    Register-ScheduledTask -TaskName "股市情报-{cn}" '
+              f'-Action $a -Trigger $t -Settings $s -Force')
+        print()
     print("查看/删除：")
-    print('    schtasks /Query /TN "股市情报-盘前" /V /FO LIST')
-    print('    schtasks /Delete /TN "股市情报-盘前" /F')
-    print(f"    type \"{log_dir / 'trigger-am.log'}\"      # 看历次触发日志")
-    print("    schtasks /Run /TN \"股市情报-盘前\"          # 手动跑一次验证")
+    print('    Get-ScheduledTask -TaskName "股市情报-*" | ft TaskName, State')
+    print('    Get-ScheduledTaskInfo -TaskName "股市情报-盘前"      # 看下次运行时间与上次结果')
+    print(f'    Get-Content "{log_dir / "trigger-am.log"}" -Encoding UTF8')
+    print('    Unregister-ScheduledTask -TaskName "股市情报-盘前" -Confirm:$false')
     print()
     print("说明：上面命令里的 python 取自当前执行本脚本的解释器；"
           "若你平时用别的 python，替换成对应路径或命令即可。")
-    print("注意：计划任务只在电脑开机且未休眠时执行；"
-          "若 08:10 机器没开，该次不会补跑（云端 cron 仍会兜底，只是会延迟）。")
+    print("限制：任务以「交互式登录」身份运行，故要求电脑开着**且已登录**；"
+          "08:10 机器关着或处于注销状态时该次不跑（云端 cron 仍会兜底，只是会延迟）。"
+          "若机器只是休眠/关机错过时点，StartWhenAvailable 会在恢复后尽快补跑一次。")
 
 
 def main():
