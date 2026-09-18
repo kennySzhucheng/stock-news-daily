@@ -5,10 +5,13 @@
 盘前（计划 08:10）实际 12:46 才开始，盘后（计划 15:40）实际 20:45 才开始，
 延迟 4~5 小时。本工具从外部按点调用 workflow_dispatch，绕开这个队列。
 
-需要一枚 Personal Access Token（fine-grained）：
-  - Repository: 选本仓库
-  - Permissions: Actions = Read and write, Contents = Read
-  - 生成后执行 `setx GITHUB_TOKEN <token>`（用户级环境变量，计划任务可继承）
+令牌（按优先级取第一个可用的）：
+  1. `--token` 参数
+  2. `GITHUB_TOKEN` / `GH_PAT` 环境变量
+  3. **本机 `gh auth token`** —— 默认路径，什么都不用配（本机计划任务走这条）
+
+  只有想用一枚独立的 fine-grained PAT 时才需要 1/2：
+  Repository 选本仓库，Permissions 用 Actions = Read and write。
 
 用法:
     python tools/trigger_workflow.py                    # 按当前时间自动判定时段
@@ -147,21 +150,43 @@ def wait_for_run(repo, token, before_ids, timeout=900):
     print("[warn] 等待超时，运行仍在进行中")
 
 
+def gh_token():
+    """从 `gh auth token` 取令牌。
+
+    本机计划任务靠这个：令牌只在本机、由 gh 自己保管，既不必 setx 到环境变量，
+    也不必新建 PAT。Windows 上 Python 的 PATH 与 Git Bash 不同，故先试完整路径。
+    """
+    for exe in (r"C:\Program Files\GitHub CLI\gh.exe",
+                r"C:\Program Files (x86)\GitHub CLI\gh.exe", "gh"):
+        try:
+            r = subprocess.run([exe, "auth", "token"], capture_output=True,
+                               text=True, timeout=20)
+        except Exception:
+            continue
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    return ""
+
+
 def print_task_cmd(script_path):
-    """打印 Windows 计划任务的注册命令（需先 setx GITHUB_TOKEN）"""
+    """打印 Windows 计划任务的注册命令"""
     py = sys.executable
-    print("先设置令牌（只需一次，重启终端或注销后对新进程生效）：")
-    print("    setx GITHUB_TOKEN <你的 PAT>")
+    log_dir = Path.home() / ".stock-news-daily"
+    print("令牌：默认自动用本机 `gh auth token`，不必设置任何环境变量；")
+    print("      若要改用别的令牌，设 GITHUB_TOKEN 环境变量或用 --token 传入。")
     print()
-    print("再注册两个计划任务（复制执行，/F 表示覆盖同名任务）：")
+    print("注册两个计划任务（复制执行，/F 表示覆盖同名任务）：")
     for slot, hhmm, cn in (("am", "08:10", "盘前"), ("pm", "15:40", "盘后")):
-        print(f'    schtasks /Create /TN "股市情报-{cn}" /TR '
-              f'"\\"{py}\\" \\"{script_path}\\" --slot {slot}" '
+        tr = (f'\\"{py}\\" \\"{script_path}\\" --slot {slot} '
+              f'--log-file \\"{log_dir / ("trigger-%s.log" % slot)}\\"')
+        print(f'    schtasks /Create /TN "股市情报-{cn}" /TR "{tr}" '
               f'/SC DAILY /ST {hhmm} /F')
     print()
     print("查看/删除：")
-    print('    schtasks /Query /TN "股市情报-盘前"')
+    print('    schtasks /Query /TN "股市情报-盘前" /V /FO LIST')
     print('    schtasks /Delete /TN "股市情报-盘前" /F')
+    print(f"    type \"{log_dir / 'trigger-am.log'}\"      # 看历次触发日志")
+    print("    schtasks /Run /TN \"股市情报-盘前\"          # 手动跑一次验证")
     print()
     print("说明：上面命令里的 python 取自当前执行本脚本的解释器；"
           "若你平时用别的 python，替换成对应路径或命令即可。")
@@ -174,24 +199,34 @@ def main():
     ap.add_argument("--slot", choices=["am", "pm"], default="",
                     help="时段，留空则按北京时间 12:00 前/后自动判定")
     ap.add_argument("--ref", default="main", help="分支，默认 main")
-    ap.add_argument("--token", default="", help="PAT；不传则读环境变量 GITHUB_TOKEN / GH_PAT")
+    ap.add_argument("--token", default="",
+                    help="令牌；不传则依次读 GITHUB_TOKEN / GH_PAT 环境变量、本机 gh auth token")
     ap.add_argument("--dry-run", action="store_true", help="只打印将要执行的动作")
     ap.add_argument("--force", action="store_true", help="跳过「本时段已出报」的检查")
     ap.add_argument("--wait", action="store_true", help="触发后等待运行结束")
+    ap.add_argument("--log-file", default="",
+                    help="把输出追加写入该文件（计划任务用；无控制台可看）")
     ap.add_argument("--print-task-cmd", action="store_true",
                     help="打印 Windows 计划任务注册命令后退出")
     args = ap.parse_args()
+
+    if args.log_file:
+        log = Path(args.log_file)
+        log.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(log, "a", encoding="utf-8")
+        print(f"\n===== {datetime.now(CST):%Y-%m-%d %H:%M:%S} =====", file=fh)
+        sys.stdout = sys.stderr = fh
 
     if args.print_task_cmd:
         print_task_cmd(str(Path(__file__).resolve()))
         return
 
     slot = args.slot or ("am" if datetime.now(CST).hour < 12 else "pm")
-    token = args.token or os.environ.get("GITHUB_TOKEN", "").strip() \
-        or os.environ.get("GH_PAT", "").strip()
+    token = (args.token or os.environ.get("GITHUB_TOKEN", "").strip()
+             or os.environ.get("GH_PAT", "").strip() or gh_token())
     if not token:
-        raise SystemExit("[FAIL] 未找到令牌：请先 setx GITHUB_TOKEN <PAT>，"
-                         "或用 --token 传入")
+        raise SystemExit("[FAIL] 未找到令牌：设 GITHUB_TOKEN / GH_PAT 环境变量、"
+                         "用 --token 传入，或先 gh auth login")
 
     repo = detect_repo()
     now_cst = datetime.now(CST)
