@@ -36,7 +36,12 @@ gh-pages 上已有产出，故不会误判为「未出报」。
 
 - [x] YAML 解析通过，`workflow_dispatch` 两个输入 `slot` / `force` 就位，15 个步骤完整
 - [x] 去重条件真值表：schedule → 执行；dispatch+force 空/false → 执行；dispatch+force=true → 跳过
-- [ ] 等一次真实的「任务与 cron 撞车」场景，确认不再重复推送
+- [x] **真机实测（9-19 21:18，run 35445377628）**：用 fine-grained PAT 发
+      `workflow_dispatch`（slot=pm）→ **HTTP 204**；该运行在「检查本时段是否已出报」
+      判定 `今日 pm 报告已存在（reports/2026-09-19-pm.html），跳过本次以避免重复推送`，
+      M1→部署全部 skipped，**无推送、无覆盖** —— 证明本次修复对 dispatch 生效
+      （修复前这次运行会整条重跑并发第二条微信，即当天早上发生的事）
+- [ ] 云端调度器配好后，观察一次真实按点触发
 
 ### 仍未解决
 

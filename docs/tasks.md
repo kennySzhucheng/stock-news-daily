@@ -169,11 +169,14 @@
       15 分钟/10 分钟，唤醒定时器电池档禁用，当天两次补跑都是机器碰巧被唤醒），
       而 cron-job.org 与机器状态无关。已查官方 FAQ 确认免费版支持自定义请求头与
       POST body，且 `console.cron-job.org` 国内可直连。完整步骤见 README 第八·五节
-- [ ] 建 fine-grained PAT：只授权 `stock-news-daily` 的 **Actions: Read and write**。
-      ⚠️ **需要梯子**——本机 `github.com:443` 实测超时 12 秒（`api.github.com` 反而通），
-      可开梯子或用手机建。**不要用 `gh auth token`**（其 `repo` scope 覆盖全部仓库）
+- [x] 建 fine-grained PAT（9-19 完成）：只授权 `stock-news-daily` 的
+      **Actions: Read and write**。⚠️ 第一次勾错了 —— 勾成 `Repository advisories`
+      而不是 `Actions`，dispatch 返回 403；记住**只读接口返回 200 不代表令牌能用**，
+      判据必须是 dispatch 返回 **HTTP 204**（已实测通过，令牌存 `docs/keys.md`）
+- [x] 用该 PAT 实测 dispatch（9-19 21:18，run 35445377628）：HTTP 204，且运行被
+      「检查本时段是否已出报」正确跳过（无推送、无覆盖）—— 同时验证了令牌与去重
 - [ ] 在 cron-job.org 建两个 job（08:10 `slot=am` / 15:40 `slot=pm`，Asia/Shanghai，
-      成功判据 HTTP 204），点 "Run now" 验证
+      自定义请求头带 PAT），点 "Run now" 验证返回 204
 - [ ] 观察云端调度器按点触发一次，确认准点且延迟的 cron 被去重挡住
 
 **过程中修复的缺陷（详见 CHANGELOG M8 条目）：**
