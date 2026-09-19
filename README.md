@@ -185,18 +185,77 @@ python tools/push_via_api.py             # 经 Git Data API 完成一次等效 p
     **改代码无法解决**。被延迟时日报与推送会自动标出「计划时点 / 实际运行时点」，
     提醒内容并非严格的盘前/盘后快照。
   - **准点靠外部按点触发**（`tools/trigger_workflow.py`，见第七·五节 ⑥）。
-    当前已注册本机 Windows 计划任务 `股市情报-盘前` 08:10 / `股市情报-盘后` 15:40，
+    本机 Windows 计划任务 `股市情报-盘前` 08:10 / `股市情报-盘后` 15:40 已注册，
     令牌自动复用本机 `gh auth token`，不需要 PAT 或第三方账号。
-    限制：要求电脑开着且已登录；那种情况下退回延迟的 cron 兜底。
-    若想连电脑关机也能触发，可另配 cron-job.org（需 fine-grained PAT）
+    ⚠️ **但本机任务在笔记本睡眠时不会执行** —— 实测睡眠超时仅 15 分钟（交流）/
+    10 分钟（电池），2026-09-19 盘前就因此晚了近 4 小时。故改用云端调度器，
+    见第八·五节。
   - 外部触发与云端 cron 会撞车跑两遍，workflow 内按「今天的这个时段是否已出报」
-    去重（查 gh-pages 产出文件，精确到时段），因此两者可同时保留、互为兜底
+    去重（查 gh-pages 产出文件，精确到时段）。**两种触发源都拦**（含
+    `workflow_dispatch`）；确需覆盖重出时传 `inputs.force=true`（脚本 `--force`）
 - **微信推送**：每次运行后经 Server酱推送摘要到微信，**市场分析在前、重点新闻在后**
 - **线上网页版**：https://kennyszhucheng.github.io/stock-news-daily/web/
 - **同日两份**：盘前与盘后产出不同文件名（`YYYY-MM-DD-am.html` / `-pm.html`），互不覆盖
+
+## 八·五、让日报准点：cron-job.org 云端调度器
+
+**为什么需要它：** GitHub 的 `schedule` 会被延迟 4~5 小时（平台行为，改代码无效）；
+本机计划任务又只在电脑醒着时执行，而这台笔记本睡眠超时仅 15 分钟。
+云端调度器与机器状态无关，是唯一可靠的方案。
+
+**免费版够用**（2026-09-19 查官方 FAQ 确认）：明确支持「arbitrary custom headers」
+与「POST + 可指定 request body」，且「entirely free of charge」。
+`console.cron-job.org` 国内可直连，配置无需梯子。
+
+### 第一步：建 fine-grained PAT（**这一步需要梯子**）
+
+建 PAT 必须走 github.com 网页，而本机 `github.com:443` 不通（实测超时 12 秒，
+`api.github.com` 反而通）。开梯子，或用手机等其他设备完成：
+
+1. 打开 https://github.com/settings/personal-access-tokens/new
+2. Token name 随意，如 `stock-news-daily-dispatch`
+3. Expiration 设一年，**到期前记得换**——过期会静默失效，报告又开始晚到
+4. Repository access → Only select repositories → 只选 `stock-news-daily`
+5. Permissions → Repository permissions → **Actions: Read and write**（只需这一项）
+6. 生成后复制 `github_pat_...`
+
+**不要用 `gh auth token`**——它的 scope 含 `repo`，能读写该账号下**全部**仓库（含私有），
+交给第三方风险过大。fine-grained PAT 只授权这一个公开仓库的 Actions 写权限。
+
+### 第二步：建两个 cronjob（不需要梯子）
+
+在 https://console.cron-job.org 注册后建两个 job：
+
+| 字段 | 盘前 | 盘后 |
+|---|---|---|
+| Title | 股市情报-盘前 | 股市情报-盘后 |
+| URL | `https://api.github.com/repos/kennySzhucheng/stock-news-daily/actions/workflows/daily.yml/dispatches` | 同左 |
+| Schedule | 每天 **08:10** | 每天 **15:40** |
+| Timezone | `Asia/Shanghai` | `Asia/Shanghai` |
+| Request method | `POST` | `POST` |
+| Request body | `{"ref":"main","inputs":{"slot":"am"}}` | `{"ref":"main","inputs":{"slot":"pm"}}` |
+
+**Headers**（两个 job 都要，在请求头里逐条添加）：
+
+| Name | Value |
+|---|---|
+| `Authorization` | `Bearer github_pat_...` |
+| `Accept` | `application/vnd.github+json` |
+| `Content-Type` | `application/json` |
+
+**成功判据：HTTP 204。** 建好后点一次 "Run now" 验证；每个 job 可查看最近 50 次
+执行详情，建议开启失败邮件通知。
+
+### 与本机任务的关系
+
+两者可同时保留、互为兜底：哪个先跑通，当天该时段就由它产出，另一条由 workflow 内的
+「本时段是否已出报」去重挡住，不会重复推送。不再需要本机任务时用
+`Unregister-ScheduledTask -TaskName "股市情报-盘前" -Confirm:$false` 撤掉即可。
 
 ## 九、密钥安全约定
 
 - 云端密钥存于 GitHub Secrets（`ZAI_API_KEY` / `DEEPSEEK_API_KEY` / `SERVERCHAN_SENDKEY`），代码只从环境变量读取，不硬编码
 - 本地明文存于 `docs/keys.md`，已被 `.gitignore` 排除，**不会提交**
+- 云端调度器用的 fine-grained PAT（见第八·五节）同样记到 `docs/keys.md`；
+  它只授权 `stock-news-daily` 一个公开仓库的 Actions 写权限，权限面越小越好
 - `data/` 与 `reports/` 同样不入库（前者含原始数据，后者由 gh-pages 分支承载）

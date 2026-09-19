@@ -165,12 +165,16 @@
       而延迟的 cron 12:31 先跑完并推了带标注的盘前，12:33 的任务又重跑一遍，
       导致当天收到两条盘前推送
 - [x] 去重覆盖 `workflow_dispatch`（9-19 修复，新增 `force` 输入作强制重跑逃生口）
-- [ ] **笔记本睡眠导致本机任务无法准点（未解决）**：实测睡眠超时 15 分钟（交流）/
-      10 分钟（电池），唤醒定时器 电池=禁用。当天两次补跑都是机器**碰巧**被唤醒，
-      不是任务把自己唤醒的。待定方案：给任务加 `-WakeToRun`（唤醒计算机执行），
-      或改用与机器无关的云端调度器（cron-job.org，需 fine-grained PAT）
-- [ ] 可选加固：cron-job.org 作云端兜底。需 fine-grained PAT，
-      **不要用 `gh auth token`**——其 `repo` scope 覆盖全部仓库，交给第三方风险过大
+- [x] **决定改用云端调度器（9-19）**：笔记本睡眠导致本机任务靠不住（实测睡眠超时
+      15 分钟/10 分钟，唤醒定时器电池档禁用，当天两次补跑都是机器碰巧被唤醒），
+      而 cron-job.org 与机器状态无关。已查官方 FAQ 确认免费版支持自定义请求头与
+      POST body，且 `console.cron-job.org` 国内可直连。完整步骤见 README 第八·五节
+- [ ] 建 fine-grained PAT：只授权 `stock-news-daily` 的 **Actions: Read and write**。
+      ⚠️ **需要梯子**——本机 `github.com:443` 实测超时 12 秒（`api.github.com` 反而通），
+      可开梯子或用手机建。**不要用 `gh auth token`**（其 `repo` scope 覆盖全部仓库）
+- [ ] 在 cron-job.org 建两个 job（08:10 `slot=am` / 15:40 `slot=pm`，Asia/Shanghai，
+      成功判据 HTTP 204），点 "Run now" 验证
+- [ ] 观察云端调度器按点触发一次，确认准点且延迟的 cron 被去重挡住
 
 **过程中修复的缺陷（详见 CHANGELOG M8 条目）：**
 - Windows 系统代理导致全链路网络请求失效（各模块已加 `_urlopen` 优先直连）
