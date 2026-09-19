@@ -215,7 +215,8 @@ def main():
     ap.add_argument("--token", default="",
                     help="令牌；不传则依次读 GITHUB_TOKEN / GH_PAT 环境变量、本机 gh auth token")
     ap.add_argument("--dry-run", action="store_true", help="只打印将要执行的动作")
-    ap.add_argument("--force", action="store_true", help="跳过「本时段已出报」的检查")
+    ap.add_argument("--force", action="store_true",
+                    help="跳过本机侧与本时段的查重并强制重跑（会覆盖当天该时段的日报）")
     ap.add_argument("--wait", action="store_true", help="触发后等待运行结束")
     ap.add_argument("--log-file", default="",
                     help="把输出追加写入该文件（计划任务用；无控制台可看）")
@@ -264,7 +265,9 @@ def main():
               api("GET", f"/repos/{repo}/actions/workflows/{WORKFLOW}/runs?per_page=5",
                   token=token).get("workflow_runs", [])}
     api("POST", f"/repos/{repo}/actions/workflows/{WORKFLOW}/dispatches",
-        body={"ref": args.ref, "inputs": {"slot": slot}}, token=token)
+        body={"ref": args.ref,
+              "inputs": {"slot": slot, "force": "true" if args.force else "false"}},
+        token=token)
     print(f"[OK] 已触发 {SLOT_CN[slot]}日报工作流（HTTP 204）")
 
     if args.wait:

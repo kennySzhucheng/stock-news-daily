@@ -13,6 +13,11 @@ on:
         required: false
         default: ''
         type: string
+      force:
+        description: '强制重跑：填 true 则跳过「本时段是否已出报」的去重'
+        required: false
+        default: ''
+        type: string
 
 # gh-pages 部署需要写权限
 permissions:
@@ -85,18 +90,25 @@ jobs:
           echo "本次运行时段: $SLOT（$([ "$SLOT" = am ] && echo 盘前 || echo 盘后)）"
           echo "计划时点: ${PLAN:-无（手动触发）}　延迟: ${DELAY:-不适用} 分钟"
 
-      # 外部调度（tools/trigger_workflow.py 挂本机计划任务，或 cron-job.org 这类
-      # 云端调度器）会按点触发 workflow_dispatch；云端 cron 又可能延迟数小时后
-      # 在同日再触发一次。两者撞车会把同一时段跑两遍：日报被覆盖、微信重复推送、
-      # API 白跑一遍。故 schedule 触发时先看「今天的这个时段」是否已经出过报告。
+      # 两个触发源都可能产出同一时段的报告：外部调度（本机计划任务 / cron-job.org）
+      # 按点触发 workflow_dispatch，云端 cron 又可能延迟数小时后在同日再触发一次。
+      # 撞车会把同一时段跑两遍：日报被覆盖、微信重复推送、API 白跑一遍。
+      #
+      # **两种触发都要拦。** 9-19 就是反例：早上 08:10 笔记本在睡眠，本机任务被
+      # StartWhenAvailable 顺延到 12:33，而延迟的 cron 12:31 先跑完了并推了带延迟
+      # 标注的日报；12:33 的任务因为当时只拦 schedule，又整条重跑一遍 ——
+      # 用户收到两条盘前推送，后一条还把带标注的那份覆盖了。
       #
       # 判定用 gh-pages 上的产出文件（上一步已解到 reports/），而不是「最近 N 小时
       # 是否跑过」——后者不分时段：9-17 盘前 cron 延迟到 12:46 才跑，15:40 的外部
-      # 触发一查「近 6 小时跑过」就把盘后那次 skip 掉了，盘后只能退回等延迟的 cron，
-      # 结果 20:53 才推。文件判定精确到「日期 + 时段」，且不依赖 API 与 jq。
+      # 触发一查「近 6 小时跑过」就把盘后那次 skip 掉了。文件判定精确到「日期 + 时段」。
+      #
+      # 触发源因故障补跑时，前一次运行可能仍在进行（并发组会把它排到队列里），
+      # 等它真正开始跑时 gh-pages 上已有产出，故不会误判。
+      # 确实想覆盖重出时，用 inputs.force=true（本机脚本的 --force）。
       - name: 检查本时段是否已出报
         id: dup
-        if: github.event_name == 'schedule'
+        if: github.event_name != 'workflow_dispatch' || github.event.inputs.force != 'true'
         run: |
           SLOT="${{ steps.slot.outputs.slot }}"
           TODAY=$(TZ=Asia/Shanghai date +%F)
