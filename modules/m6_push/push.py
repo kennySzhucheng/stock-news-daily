@@ -266,10 +266,47 @@ def build_digest(date_str, slot, sentiment, market_view, top_news, delay=None):
     return "\n".join(parts)
 
 
+def write_push_status(date_str, slot, ok, detail):
+    """把推送结果落成 reports/status-<date>-<slot>.json，随日报一起上线。
+
+    为什么需要：**推送失败是静默的** —— 日报照常生成、网页照常上线，只有微信
+    收不到。Server酱免费额度只有 5 条/天，额度耗尽正是这种表现（长期笔记里记过）。
+    M8 的送达体检（modules/m8_e2e/healthcheck.py）读这个文件，判断「该到的推送
+    到底到了没有」—— 否则这种失败只能靠人碰巧发现。
+
+    文件名以 status- 开头，不会被 M5 的索引页（glob *.html）或 M6 自己的
+    resolve_report_name（glob <日期>-*.html）误取。写失败不影响推送与日报。
+    """
+    try:
+        REPORTS_DIR.mkdir(exist_ok=True)
+        payload = {
+            "date": date_str,
+            "slot": slot,
+            "push_ok": bool(ok),
+            "push_detail": detail,
+            "run_number": os.environ.get("GITHUB_RUN_NUMBER", ""),
+            "event": os.environ.get("GITHUB_EVENT_NAME", ""),
+            "generated_at": datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        (REPORTS_DIR / f"status-{date_str}-{slot}.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8")
+        print(f"[OK] 推送状态已记录: status-{date_str}-{slot}.json")
+    except Exception as e:
+        print(f"[warn] 推送状态写入失败（{e}），不影响推送与日报")
+
+
 def main():
     sendkey = os.environ.get("SERVERCHAN_SENDKEY", "").strip()
     if not sendkey:
         print("[warn] SERVERCHAN_SENDKEY 未设置，跳过推送（不影响日报）")
+        # 也要落状态：密钥缺失同样是「该到的推送没到」，体检得看得见
+        _now = datetime.now(CST)
+        _slot = os.environ.get("REPORT_SLOT", "").strip().lower()
+        if _slot not in ("am", "pm"):
+            _slot = detect_slot(_now)
+        write_push_status(_now.strftime("%Y-%m-%d"), _slot, False,
+                          "SERVERCHAN_SENDKEY 未设置")
         return
 
     structured = json.loads((DATA_DIR / "structured_news.json").read_text(encoding="utf-8"))
@@ -308,6 +345,7 @@ def main():
         print(f"[OK] 已推送到微信（{msg}）")
     else:
         print(f"[warn] 推送失败（{msg}），日报已生成不受影响")
+    write_push_status(date_str, slot, ok, msg)
     # 成功与否都打印内容，便于核对
     print(f"     时段: {slot} / 关注板块 {len(market_view)} 个")
     print(f"     标题: {title}")

@@ -1,0 +1,62 @@
+name: 送达体检
+
+# 把「静默失败」主动查出来：日报没送达、送达迟了、外部触发器断了、推送没发出去。
+#
+# 为什么要单独一个 workflow：**daily.yml 自己没法报告「我今天没跑」**，
+# 也没法报告「我跑了但微信没收到」。这条链路上的失败几乎全是静默的，而且
+# 表象与「只是延迟」一模一样 —— 2026-09-19 建好的 cron-job.org job 因令牌
+# 失效每次被拒，潜伏到 09-24 才被发现，那 5 天里日报每天晚到 4~5 小时。
+#
+# 自己这个 schedule 同样会被延迟数小时，但**无所谓**：体检的目标日按
+# 「最近的、盘后时段已经过去的那一天」来定（见 healthcheck.py 的
+# PM_SETTLED_HOUR），延迟到凌晨还是准点跑，选中的都是同一天。
+#
+# 告警走「让 workflow 失败」而不是只发微信：GitHub 会给仓库所有者发失败邮件，
+# 这条通道不经过 Server酱 —— 所以「Server酱 额度耗尽导致推送失败」这种情况
+# 也报得出来。另附一条微信推送（--notify），非微信故障时更好读。
+on:
+  schedule:
+    - cron: '0 14 * * *'   # 22:00 北京 —— 此时当天的盘后（含延迟兜底那次）都已落定
+  workflow_dispatch:
+    inputs:
+      date:
+        description: '要体检的日期 YYYY-MM-DD，留空 = 最近已结束的一天'
+        required: false
+        default: ''
+        type: string
+      days:
+        description: '往前连看几天，默认 1'
+        required: false
+        default: '1'
+        type: string
+
+permissions:
+  actions: read     # 读运行记录与产物（判断「真正出报」还是被去重跳过）
+  contents: read    # 检出代码
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 送达体检
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
+        run: |
+          ARGS="--notify --repo ${{ github.repository }}"
+          if [ -n "${{ github.event.inputs.date }}" ]; then
+            ARGS="$ARGS --date ${{ github.event.inputs.date }}"
+          fi
+          if [ -n "${{ github.event.inputs.days }}" ]; then
+            ARGS="$ARGS --days ${{ github.event.inputs.days }}"
+          fi
+          python modules/m8_e2e/healthcheck.py $ARGS
+          # 退出码 1 = 发现问题 → 本 workflow 失败 → GitHub 发失败邮件。
+          # 刻意用「失败」而不是「推送」来告警：这条通道不经过 Server酱。

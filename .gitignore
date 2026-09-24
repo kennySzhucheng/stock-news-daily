@@ -18,6 +18,7 @@ env/
 .claude/
 .vscode/
 .idea/
+.workbuddy/
 
 # ===== 系统 =====
 .DS_Store

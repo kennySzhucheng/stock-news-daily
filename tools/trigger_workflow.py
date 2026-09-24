@@ -20,6 +20,7 @@
     python tools/trigger_workflow.py --force            # 跳过"近期已有运行"的检查
     python tools/trigger_workflow.py --wait             # 触发后等待运行结束并打印结果
     python tools/trigger_workflow.py --print-task-cmd   # 打印 Windows 计划任务注册命令
+    python tools/trigger_workflow.py --check            # 只验证令牌能不能用，不触发运行
 
 查重：默认若「今天的这个时段」已经出过报告（查 gh-pages 上的产出文件），
       就不再触发（`--force` 可忽略）。这是为了避免与云端 cron 撞车——
@@ -120,6 +121,67 @@ def report_exists(repo, token, date_str, slot):
         return None
 
 
+PROBE_WORKFLOW = "__token-check-does-not-exist__.yml"
+
+
+def check_token(repo, token):
+    """验证令牌能否通过 dispatch 端点的鉴权——**不会真的触发运行**。
+
+    原理：GitHub 先鉴权、后查 workflow 文件。所以往一个**不存在的 workflow**
+    打 dispatch：鉴权通过得到 404（文件不存在），鉴权失败则是 401。
+    于是不触发任何运行也能验令牌——正是 cron-job.org 那种静默失败的场景。
+
+    判据（2026-09-24 实测）：
+        404 Not Found               → 令牌有效，鉴权已通过
+        401 Bad credentials         → 令牌无效/已撤销/值被粘坏（多空格、重复 Bearer 前缀）
+        401 Requires authentication → Authorization 头压根没发出去
+        403                         → 令牌有效，但缺 Actions: Read and write 权限
+        204                         → 不可能出现；真出现说明假文件名撞上了真实 workflow
+    """
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{repo}/actions/workflows/{PROBE_WORKFLOW}/dispatches",
+        method="POST", data=json.dumps({"ref": "main"}).encode(),
+        headers={"Authorization": f"Bearer {token}",
+                 "Accept": "application/vnd.github+json",
+                 "Content-Type": "application/json",
+                 "User-Agent": "trigger-workflow"})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(req, timeout=30) as r:
+            code, body = r.status, ""
+    except urllib.error.HTTPError as e:
+        code, body = e.code, e.read().decode("utf-8", errors="replace")
+    except Exception as e:
+        print(f"[FAIL] 探测请求本身失败：{type(e).__name__}: {e}")
+        return None
+
+    kind = ("fine-grained PAT" if token.startswith("github_pat_")
+            else "gh CLI 令牌" if token.startswith("gho_")
+            else "classic PAT" if token.startswith("ghp_") else "未知类型")
+    print(f"令牌：{kind}　长度 {len(token)}　开头 {token[:14]}…　结尾 …{token[-6:]}")
+    print("      （拿指纹去和 cron-job.org 里存的值对一下，能看出是不是同一枚）")
+    try:
+        msg = json.loads(body).get("message", "")
+    except Exception:
+        msg = body[:120]
+
+    if code == 404:
+        print("[OK] 令牌有效 —— 鉴权已通过")
+        print("     （404 是刻意用的假文件名，属预期；本次没有触发任何运行）")
+        return True
+    if code == 401:
+        print(f"[FAIL] 令牌无效：HTTP 401 {msg}")
+        print("      Bad credentials          → 值不对：已撤销/换过、多了空格、重复 Bearer 前缀")
+        print("      Requires authentication  → Authorization 头根本没发出去")
+        return False
+    if code == 403:
+        print(f"[FAIL] 鉴权通过但权限不足：HTTP 403 {msg}")
+        print("     到 PAT 设置里把 Actions 改成 Read and write")
+        return False
+    print(f"[??] 未预料的响应：HTTP {code} {msg}")
+    return None
+
+
 def wait_for_run(repo, token, before_ids, timeout=900):
     """等待新出现一次运行并跑到结束。before_ids 为触发前已有的 run id 集合。"""
     deadline = time.time() + timeout
@@ -214,6 +276,11 @@ def main():
     ap.add_argument("--ref", default="main", help="分支，默认 main")
     ap.add_argument("--token", default="",
                     help="令牌；不传则依次读 GITHUB_TOKEN / GH_PAT 环境变量、本机 gh auth token")
+    ap.add_argument("--token-file", default="",
+                    help="从文件里取令牌（自动抓 github_pat_/ghp_/gho_ 开头的串），"
+                         "如 --token-file docs/keys.md；避免把密钥写进命令行历史")
+    ap.add_argument("--check", action="store_true",
+                    help="只验证令牌能否通过鉴权，**不触发运行**，然后退出")
     ap.add_argument("--dry-run", action="store_true", help="只打印将要执行的动作")
     ap.add_argument("--force", action="store_true",
                     help="跳过本机侧与本时段的查重并强制重跑（会覆盖当天该时段的日报）")
@@ -236,16 +303,30 @@ def main():
         return
 
     slot = args.slot or ("am" if datetime.now(CST).hour < 12 else "pm")
-    token = (args.token or os.environ.get("GITHUB_TOKEN", "").strip()
+    token = args.token.strip()
+    if not token and args.token_file:
+        try:
+            txt = Path(args.token_file).read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            raise SystemExit(f"[FAIL] 读不到令牌文件 {args.token_file}：{e}")
+        m = re.search(r"(github_pat_\w+|ghp_\w+|gho_\w+)", txt)
+        if not m:
+            raise SystemExit(f"[FAIL] {args.token_file} 里没找到 github_pat_/ghp_/gho_ 开头的令牌")
+        token = m.group(1)
+    token = (token or os.environ.get("GITHUB_TOKEN", "").strip()
              or os.environ.get("GH_PAT", "").strip() or gh_token())
     if not token:
         raise SystemExit("[FAIL] 未找到令牌：设 GITHUB_TOKEN / GH_PAT 环境变量、"
-                         "用 --token 传入，或先 gh auth login")
+                         "用 --token / --token-file 传入，或先 gh auth login")
 
     repo = detect_repo()
     now_cst = datetime.now(CST)
     print(f"仓库: {repo}   工作流: {WORKFLOW}   分支: {args.ref}")
     print(f"时段: {slot}（{SLOT_CN[slot]}）   本地时间: {now_cst.strftime('%m-%d %H:%M')}")
+
+    if args.check:
+        check_token(repo, token)
+        return
 
     if not args.force:
         date_str = now_cst.strftime("%Y-%m-%d")

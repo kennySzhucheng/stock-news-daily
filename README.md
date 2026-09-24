@@ -100,7 +100,8 @@ M9 的线上版是静态导出（无后端），除 AI 追问外功能齐全；A
 ```
 stock-news-daily/
 ├── .github/workflows/
-│   └── daily.yml      ← GitHub Actions 定时工作流（每天 08:10 / 15:40）
+│   ├── daily.yml      ← GitHub Actions 定时工作流（每天 08:10 / 15:40）
+│   └── healthcheck.yml ← 送达体检，每天 22:00 核对「该到的到了没有」（第八·六节）
 ├── .gitignore         ← 排除密钥与运行时产物
 ├── README.md          ← 本文件
 ├── CHANGELOG.md       ← 开发日志（每完成一个模块更新一次）
@@ -115,7 +116,7 @@ stock-news-daily/
 │   ├── m4_quotes/     ← 行情数据
 │   ├── m5_report/     ← 网页日报生成
 │   ├── m6_push/       ← 微信推送（Server酱）
-│   ├── m8_e2e/        ← 端到端运行器与云端观察工具
+│   ├── m8_e2e/        ← 端到端运行器、云端观察工具、送达体检（healthcheck.py）
 │   └── m9_web/        ← 交互式网页版（server.py 本地服务 / export.py 静态导出
 │                        / sync.py 拉取云端产出 / aggregate.py 数据聚合
 │                        / ask.py AI 追问 / check.py 自检 / web/ 前端）
@@ -154,7 +155,10 @@ python modules/m9_web/export.py
 # ⑤ 云端产出观察（连续几天核对用）
 python modules/m8_e2e/observe.py
 
-# ⑥ 按点触发云端工作流（GitHub 的 cron 会延迟 4~5 小时，见 CHANGELOG 9-18）
+# ⑥ 送达体检（该到的到了没有；--days 7 连看一周，见第八·六节）
+python modules/m8_e2e/healthcheck.py --days 7
+
+# ⑦ 按点触发云端工作流（GitHub 的 cron 会延迟 4~5 小时，见 CHANGELOG 9-18）
 python tools/trigger_workflow.py --slot am          # 令牌自动用本机 gh auth token
 python tools/trigger_workflow.py --print-task-cmd   # 看怎么注册 Windows 计划任务
 ```
@@ -184,7 +188,7 @@ python tools/push_via_api.py             # 经 Git Data API 完成一次等效 p
   - ⚠️ GitHub 的 schedule 事件会被延迟投递（2026-09-17/18 实测延迟 4~5 小时），
     **改代码无法解决**。被延迟时日报与推送会自动标出「计划时点 / 实际运行时点」，
     提醒内容并非严格的盘前/盘后快照。
-  - **准点靠外部按点触发**（`tools/trigger_workflow.py`，见第七·五节 ⑥）。
+  - **准点靠外部按点触发**（`tools/trigger_workflow.py`，见第七·五节 ⑦）。
     本机 Windows 计划任务 `股市情报-盘前` 08:10 / `股市情报-盘后` 15:40 已注册，
     令牌自动复用本机 `gh auth token`，不需要 PAT 或第三方账号。
     ⚠️ **但本机任务在笔记本睡眠时不会执行** —— 实测睡眠超时仅 15 分钟（交流）/
@@ -243,14 +247,99 @@ python tools/push_via_api.py             # 经 Git Data API 完成一次等效 p
 | `Accept` | `application/vnd.github+json` |
 | `Content-Type` | `application/json` |
 
-**成功判据：HTTP 204。** 建好后点一次 "Run now" 验证；每个 job 可查看最近 50 次
-执行详情，建议开启失败邮件通知。
+**成功判据：HTTP 204。** 每个 job 可查看最近 50 次执行详情（**响应数据只留约 2 天**，
+别指望翻旧账），建议开启失败邮件通知。
+
+> ⚠️ **盘前和盘后是两个独立的 job，必须各建一个。** 建了一个不等于另一个有了 ——
+> 2026-09-24 才发现**盘后 15:40 那个压根没建过**，那段时间盘后一直只有 GitHub
+> 延迟 4~5 小时的 schedule 在兜底，却没人察觉。
+
+#### 怎么验证：TEST RUN 按钮是灰的，别跟它较劲（2026-09-24 补）
+
+cron-job.org 编辑页底部那个 **TEST RUN 按钮常年是灰的、点不动** —— 无论填什么都是
+禁用态，官方文档没有说明原因。**这不是你配错了**：按钮灰意味着浏览器**压根没发出
+请求**，所以令牌、认证方式、请求头配置**全都与它无关**，在这上面排查是白费力气。
+
+两条更好走的路：
+
+1. **HISTORY 按钮**（任务列表每行都有）—— 执行记录和响应正文都在里面。
+   定时执行本来就会跑，等它跑一次就能看到结果
+2. **临时改计划逼它跑一次** —— EDIT → **SCHEDULE** → 改成 3~5 分钟后 → SAVE →
+   等它跑完 → **HISTORY** 看 RESPONSE BODY → **立刻改回原时间**。
+   多跑的这几次会被 workflow 里的去重挡住，不会重复出报
+
+### 报 401 时怎么查（2026-09-24 补）
+
+**先验令牌，一条命令，不会触发任何运行**（GitHub 先鉴权、后查 workflow 文件，
+所以往一个不存在的 workflow 打 dispatch：404 = 鉴权通过，401 = 令牌有问题）：
+
+```
+python tools/trigger_workflow.py --check --token-file docs/keys.md
+```
+
+输出里的**令牌指纹**（长度 + 首尾几位）拿去和 cron-job.org 里存的值对照，
+就能看出是不是同一枚，且不必把完整密钥贴到任何地方。
+
+再对照 cron-job.org 执行详情里的 RESPONSE BODY：
+
+| 正文 | 含义 | 怎么办 |
+|---|---|---|
+| `Bad credentials` | **请求头没问题，值不对** —— 旧令牌 / 粘贴时多了空格 / 值里重复写了 `Bearer` | 把 `docs/keys.md` 里那枚重新粘一遍 |
+| `Requires authentication` | 请求头压根没发出去 | 检查 Headers 里 `Authorization` 这条是否存上了 |
+| HTTP 403 | 令牌有效但权限不足 | PAT 权限改成 **Actions: Read and write** |
+
+**关于 Basic 认证 —— 是条弯路（2026-09-24 实测后的结论）：**
+
+cron-job.org 自带的 Authentication 字段（用户名随便填如 `x`，密码填令牌）
+**技术上可行**，GitHub 的 API 认这种写法，本地也实测通过。**但排查 401 时反而更难**：
+密码框是打点的，**你看不见自己填了什么**，没法自查是不是同一枚令牌、有没有被截断。
+而 `Authorization` 请求头是**明文**的，填错了肉眼就能发现。
+
+所以：**认证问题优先用明文请求头。** 何况 `Bad credentials` 已经证明请求头这条路
+机械上是通的——坏的一直只是值。另外**两条路别同时开**：自定义请求头与自带认证
+同时存在时，哪条生效说不准。
 
 ### 与本机任务的关系
 
 两者可同时保留、互为兜底：哪个先跑通，当天该时段就由它产出，另一条由 workflow 内的
 「本时段是否已出报」去重挡住，不会重复推送。不再需要本机任务时用
 `Unregister-ScheduledTask -TaskName "股市情报-盘前" -Confirm:$false` 撤掉即可。
+
+## 八·六、送达体检：让静默失败自己冒出来
+
+这条链路上的失败几乎全是静默的，而且**表象和「只是延迟」长得一模一样**：
+
+- cron-job.org 令牌失效 → 请求被拒，**压根不产生运行**，Actions 记录里一条都看不到
+  （2026-09-19 建的 job 就这样潜伏到 09-24，那 5 天日报每天晚到 4~5 小时，没人察觉）
+- Server酱 免费额度只有 5 条/天 → 额度耗尽时推送失败，但日报照常生成、网页照常上线，
+  **只有微信收不到**
+- workflow 整体没跑 → 只要没人当天去翻日报，就发现不了
+
+`.github/workflows/healthcheck.yml` 每天 **22:00（北京）** 自动跑一次
+`modules/m8_e2e/healthcheck.py`，核对「该到的到底到了没有」：
+
+| 检查项 | 判据 |
+|---|---|
+| 盘前/盘后两份日报都产出并上线了吗 | 查 gh-pages 上的 `<日期>-am/-pm.html` |
+| 各自准点吗 | 与计划时点 08:10 / 15:40 比，容差 15 分钟 |
+| 当天有没有**外部触发** | 没有 = cron-job.org 这条准点通路断了 |
+| 当天**真正出报**几次 | **读产物名**，不看 conclusion（被去重跳过也是 success） |
+| 推送成功了吗 | 读 `reports/status-<日期>-<时段>.json`（M6 写入） |
+
+**告警走「让 workflow 失败」而不是只发微信** —— GitHub 会给仓库所有者发失败邮件，
+这条通道**不经过 Server酱**，所以「推送本身坏掉」这种情况也报得出来。
+
+本地随时可跑：
+
+```bash
+python modules/m8_e2e/healthcheck.py              # 体检最近已结束的一天
+python modules/m8_e2e/healthcheck.py --days 7     # 连看一周
+python modules/m8_e2e/healthcheck.py --date 2026-09-24
+```
+
+退出码 **1 = 发现严重问题**（CI 据此失败）。
+
+---
 
 ## 九、密钥安全约定
 
