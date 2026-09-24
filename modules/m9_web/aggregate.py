@@ -48,6 +48,28 @@ def _load_json(path, default=None):
         return default
 
 
+def _load_jsonl(path):
+    """JSON Lines → list[dict]。文件缺失或某行坏掉都不该让整个页面挂掉。
+
+    M10 的候选账本在 reports/picks/ 而不是 data/ —— 它随 gh-pages 跨天留存
+    （见 m10_picks/picks.py 的说明），是唯一跨运行累积的数据文件。
+    """
+    rows = []
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except Exception:
+        return rows
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
 def _load_m5_module():
     """按路径载入 M5 的 markdown 转换器，避免复制一份实现导致两处渲染不一致"""
     path = BASE / "modules" / "m5_report" / "report.py"
@@ -112,6 +134,10 @@ class Bundle:
         self.quotes_failed = quotes.get("failed", [])
         self.quotes_generated_at = quotes.get("generated_at", "")
 
+        # M10 候选账本：跨天累积，必须与 from_export 成对赋值，
+        # 否则 export 模式下这一页会永远空着
+        self.picks = _load_jsonl(self.reports_dir / "picks" / "ledger.jsonl")
+
         self.citation_map = self._build_citation_map()
         self._export_history = None
         self._m5 = None
@@ -151,6 +177,8 @@ class Bundle:
 
         b.analysis_md = (payloads.get("analysis") or {}).get("markdown", "") or ""
         b._export_history = (payloads.get("history") or {}).get("reports") or []
+        # 与 __init__ 成对：少了这一行，export 模式下候选页永远是空的
+        b.picks = (payloads.get("picks") or {}).get("rows") or []
         b.citation_map = b._build_citation_map()
         return b
 
@@ -380,6 +408,40 @@ class Bundle:
             out.append({"date": d, "entries": entries,
                         "latest": entries[-1]["file"]})
         return out
+
+    def picks_view(self, days=None):
+        """M10 候选观察清单 → 网页版需要的结构。
+
+        days 为 None 表示全量。静态导出传一个较小的窗口（见 export.py），
+        否则账本会常年累积（一天最多 6 条，一年约 1500 条）把首页流量翻倍；
+        local/export 两端**结构完全一致，只是行数不同**，前端不需要分支。
+
+        「今日」取账本里最新的日期而不是墙上时钟：盘前运行时当日还没有候选，
+        此时把昨天的候选标成「今日」是错的；标成日期本身（`latest_date`）才如实。
+        """
+        rows = []
+        for r in (self.picks or []):
+            # basis_refs 是 M3 digest 里的编号（M3 先按类别重排过），不是 news 数组
+            # 下标，直接拿去查新闻会翻出**另一条**。这里统一翻成真实下标，
+            # 前端只认 basis_ids，不必知道 digest 的排序规则。
+            r = dict(r)
+            r["basis_ids"] = [self.citation_map[b] for b in (r.get("basis_refs") or [])
+                              if b in self.citation_map]
+            rows.append(r)
+        if days is not None:      # 注意用 is not None：days=0 是「只要今天」，不是「不筛选」
+            cutoff = (datetime.now(CST) - timedelta(days=days)).strftime("%Y-%m-%d")
+            rows = [r for r in rows if (r.get("date") or "") >= cutoff]
+        rows.sort(key=lambda r: (r.get("date") or "", r.get("id") or ""), reverse=True)
+
+        latest = max((r.get("date") or "" for r in rows), default="")
+        # 均值与样本数由 M5 同一份实现算出，保证日报与网页版不会各算各的
+        stats = self.m5.picks_stats(rows)
+        return {
+            "rows": rows,
+            "latest_date": latest,
+            "stats": {str(k): v for k, v in stats.items()},
+            "total": len(rows),
+        }
 
     def raw_view(self):
         """M1 原始新闻 + 是否被 M2 选中。

@@ -135,6 +135,7 @@ def load_data():
     out["structured"] = json.loads((DATA_DIR / "structured_news.json").read_text(encoding="utf-8"))
     out["quotes"] = json.loads((DATA_DIR / "quotes.json").read_text(encoding="utf-8"))
     out["analysis_md"] = (DATA_DIR / "analysis.md").read_text(encoding="utf-8")
+    out["picks"] = load_picks()      # M10 可选产出，缺失即空列表
     return out
 
 
@@ -390,6 +391,165 @@ def render_news(structured):
 
 
 # ---------------------------------------------------------------------------
+# 版块 候选观察清单（M10）
+#
+# 这一块与其余版块的性质不同：前四块是「今天的判断」，这一块是「过往判断后来
+# 怎么样了」。所以跑输的条目和跑赢的用同一套版式、同等字号 —— 没有把失败藏起来
+# 的开关，也不给候选打对/错二值标签（跑赢 0.1% 与跑输 0.1% 不该渲染成两档）。
+# ---------------------------------------------------------------------------
+PICK_HISTORY_DAYS = 14        # 日报里回填记录展示多久
+PICK_MIN_SAMPLE = 3           # 样本少于此数不给均值（百分比在小样本上没有意义）
+
+_STATUS_CN = {"no_quote": "未匹配到行情", "no_bench": "基准缺失", "expired": "未取到行情"}
+
+
+def load_picks():
+    """reports/picks/ledger.jsonl → list[dict]。
+
+    M10 是可选产出：账本缺失或含坏行都不能阻塞日报，最多是少一个版块。
+    """
+    path = REPORTS_DIR / "picks" / "ledger.jsonl"
+    rows = []
+    if not path.exists():
+        return rows
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
+def _pct(v):
+    return "—" if v is None else f"{v:+.2%}"
+
+
+def _tier_cell(rev, k):
+    """一档复盘 → 单元格。未到期显示 —；补记的标注实际跨度（due 与 done 可能差几天）。"""
+    if not rev:
+        return '<span class="pick-pending">T+%d 未到期</span>' % k
+    if rev.get("status") != "ok":
+        return f'<span class="pick-pending">{esc(_STATUS_CN.get(rev.get("status"), rev.get("status")))}</span>'
+    lag = ""
+    if rev.get("done") and rev.get("due") and rev["done"] != rev["due"]:
+        lag = f'<span class="pick-lag">{esc(rev["done"][5:])}补</span>'
+    return (f'<b>{_pct(rev.get("ret"))}</b>'
+            f'<span class="pick-alpha">超额 {_pct(rev.get("alpha"))}</span>{lag}')
+
+
+def picks_stats(rows):
+    """各档平均收益与平均超额 → {k: {"n", "ret", "alpha"}}。
+
+    只统计 status == "ok" 的档位，n 就是参与平均的样本数 —— **n 必须与均值
+    一起显示**，本函数因此把 n 一并返回而不是只给均值。
+    不产出胜率/命中率这类字段：样本量小时百分比没有意义，且它会把连续的超额
+    压成二值的对/错。
+    """
+    out = {}
+    for k in (1, 3, 5):
+        vals_r, vals_a = [], []
+        for r in rows:
+            rev = (r.get("reviews") or {}).get(str(k))
+            if not rev or rev.get("status") != "ok":
+                continue
+            if rev.get("ret") is not None:
+                vals_r.append(rev["ret"])
+            if rev.get("alpha") is not None:
+                vals_a.append(rev["alpha"])
+        out[k] = {
+            "n": len(vals_r),
+            "ret": (sum(vals_r) / len(vals_r)) if vals_r else None,
+            "alpha": (sum(vals_a) / len(vals_a)) if vals_a else None,
+        }
+    return out
+
+
+def render_picks(picks, date_str):
+    """候选观察清单版块。没有任何账本数据时返回空串（不显示空版块）。"""
+    if not picks:
+        return ""
+    today_rows = [r for r in picks if r.get("date") == date_str]
+    cutoff = (datetime.strptime(date_str, "%Y-%m-%d")
+              - timedelta(days=PICK_HISTORY_DAYS)).strftime("%Y-%m-%d")
+    hist = sorted([r for r in picks if r.get("date") != date_str
+                   and r.get("date", "") >= cutoff],
+                  key=lambda r: (r.get("date", ""), r.get("id", "")), reverse=True)
+
+    # 今日候选卡：逻辑链 + 推翻条件是主体，价格只是脚注
+    cards = []
+    for r in today_rows:
+        tag = '<span class="pick-tag">板块</span>' if r.get("kind") == "board" else ""
+        refs = "".join(f'<span class="pick-ref">[{n}]</span>'
+                       for n in (r.get("basis_refs") or [])[:8])
+        cards.append(f"""<div class="pick-card">
+  <div class="pick-head"><b>{esc(r.get("name"))}</b>{tag}
+    <span class="pick-conf">置信度 {esc(r.get("confidence") or "—")}</span></div>
+  <p class="pick-logic">{esc(r.get("logic"))}</p>
+  <p class="pick-inval"><b>推翻条件</b>：{esc(r.get("invalidation"))}</p>
+  <div class="pick-foot">基准 {esc(r.get("base_price") or "未匹配到行情")}
+    {("· 所属板块 " + esc(r["board"])) if r.get("board") and r.get("kind") == "stock" else ""}
+    {("· 新闻依据 " + refs) if refs else ""}</div>
+</div>""")
+
+    if today_rows:
+        today_html = "".join(cards)
+    else:
+        today_html = ('<p class="pick-empty">本时段不记录新候选（新候选只在收盘后记录，'
+                      '以保证基准价就是当日收盘价）。以下是跟踪中候选的表现。</p>')
+
+    # 历史回填：逐条明细，每条自带 T+1/T+3/T+5 与同期基准
+    rows_html = []
+    for r in hist:
+        tag = '<span class="pick-tag">板块</span>' if r.get("kind") == "board" else ""
+        tiers = "".join(f'<div class="pick-tier"><span class="pick-tier-k">T+{k}</span>'
+                        f'{_tier_cell((r.get("reviews") or {}).get(str(k)), k)}</div>'
+                        for k in (1, 3, 5))
+        rows_html.append(f"""<div class="pick-row">
+  <div class="pick-row-head">{esc(r.get("date"))} · <b>{esc(r.get("name"))}</b>{tag}
+    <span class="pick-base">基准 {esc(r.get("base_price") if r.get("base_price") else "—")}</span></div>
+  <div class="pick-tiers">{tiers}</div>
+</div>""")
+
+    # 汇总行：均值与样本数**必须同时出现**
+    st = picks_stats(hist)
+    parts = []
+    for k in (1, 3, 5):
+        d = st[k]
+        if d["n"] == 0:
+            continue
+        if d["n"] < PICK_MIN_SAMPLE:
+            parts.append(f"T+{k} 样本 {d['n']} 条（少于 {PICK_MIN_SAMPLE} 条不给均值）")
+        else:
+            parts.append(f"T+{k} 均超额 {_pct(d['alpha'])}（样本 {d['n']} 条）")
+    stats_html = ("<p class=\"pick-stats\">" + "　".join(parts) + "</p>") if parts else ""
+
+    hist_html = ""
+    if rows_html:
+        hist_html = f"""<details class="fold">
+  <summary>
+    <h3>往期候选回填<span class="h2-count">{len(rows_html)} 条</span></h3>
+    <span class="fold-hint"><span class="fold-label"></span><span class="fold-arrow">▸</span></span>
+  </summary>
+  {''.join(rows_html)}
+  <p class="pick-note">收益率为<b>未复权</b>口径；区间内若发生除权除息，该档会被低估。
+  「补」表示实际打分日与到期日不同（周末/停牌/限流所致）。</p>
+</details>"""
+
+    n_today = len(today_rows)
+    return f"""<section class="block" id="picks">
+  <h2>候选观察清单<span class="h2-count">今日 {n_today} 条</span></h2>
+  <p class="pick-note">每条候选都带<b>推翻条件</b>与新闻依据，其后续表现按 T+1/T+3/T+5
+  原样回填，<b>含跑输的</b>。超额相对沪深300。<b>不是买入指令</b>，决策权归您本人。</p>
+  {today_html}
+  {stats_html}
+  {hist_html}
+</section>"""
+
+
+# ---------------------------------------------------------------------------
 # 页面骨架
 # ---------------------------------------------------------------------------
 CSS = """
@@ -559,6 +719,46 @@ section.block > h2{display:flex; align-items:center; gap:8px;}
   padding:1px 8px; border-radius:10px;
 }
 
+/* 候选观察清单（M10）。折叠的 h3 需要自己一份标题样式 —— 上面那条
+   `section.block > details > summary > h2` 只管 h2，h3 拿不到。 */
+section.block > details > summary > h3{
+  font-size:16px; font-weight:700; margin-bottom:0; padding-left:10px;
+  border-left:4px solid var(--accent); display:flex; align-items:center; gap:8px;
+}
+.pick-note{font-size:12.5px; color:var(--muted); line-height:1.6; margin:0 0 12px;}
+.pick-empty{font-size:13.5px; color:var(--muted); background:var(--card);
+  border:1px dashed var(--border); border-radius:8px; padding:12px 14px;}
+.pick-card{background:var(--card); border:1px solid var(--border);
+  border-radius:8px; padding:12px 14px; margin-bottom:10px;}
+.pick-head{display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:15px;}
+.pick-conf{font-size:11.5px; color:var(--muted); border:1px solid var(--border);
+  border-radius:10px; padding:1px 8px;}
+.pick-tag{font-size:11px; color:var(--accent); border:1px solid var(--accent);
+  border-radius:10px; padding:1px 7px;}
+.pick-logic{font-size:14px; line-height:1.65; margin:8px 0 6px;}
+.pick-inval{font-size:13px; line-height:1.6; margin:0; color:var(--muted);}
+.pick-inval b{color:var(--text);}
+.pick-foot{font-size:12px; color:var(--muted); margin-top:8px;
+  display:flex; flex-wrap:wrap; gap:6px; align-items:center;}
+.pick-ref{background:var(--bg2); border:1px solid var(--border);
+  border-radius:8px; padding:0 5px;}
+/* 回填明细：逐条列出，跑输的与跑赢的同版式同字号 */
+.pick-row{background:var(--card); border:1px solid var(--border);
+  border-radius:8px; padding:10px 12px; margin-bottom:8px;}
+.pick-row-head{font-size:13px; display:flex; flex-wrap:wrap; gap:6px; align-items:center;}
+.pick-base{font-size:12px; color:var(--muted);}
+.pick-tiers{display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;}
+.pick-tier{flex:1 1 84px; background:var(--bg2); border:1px solid var(--border);
+  border-radius:6px; padding:6px 8px; font-size:13px; display:flex;
+  flex-direction:column; gap:2px;}
+.pick-tier-k{font-size:11px; color:var(--muted);}
+.pick-alpha{font-size:11.5px; color:var(--muted);}
+.pick-pending{font-size:12px; color:var(--muted);}
+.pick-lag{font-size:10.5px; color:var(--muted); border:1px solid var(--border);
+  border-radius:8px; padding:0 5px; margin-left:4px;}
+.pick-stats{font-size:13px; background:var(--bg2); border:1px solid var(--border);
+  border-radius:8px; padding:8px 12px; margin:0 0 10px; line-height:1.7;}
+
 /* 索引页：按日期分组 */
 .day-group{
   background:var(--card); border:1px solid var(--border); border-radius:8px;
@@ -581,8 +781,10 @@ section.block > h2{display:flex; align-items:center; gap:8px;}
 
 
 def build_page(data, date_str, slot, delay=None):
-    """版块顺序：摘要 → 市场分析 → 个股行情 → 分板块新闻。
-    市场分析（M3 全文）置于新闻列表之前，先给判断再给素材。
+    """版块顺序：摘要 → 市场分析 → 候选观察清单 → 个股行情 → 分板块新闻。
+    市场分析（M3 全文）置于新闻列表之前，先给判断再给素材；候选清单紧跟在
+    市场分析之后，因为它是**由那份分析派生出来的、可事后检验的一层**，
+    而个股行情与新闻是参考素材。
 
     delay 为 delay_context() 的结果；late=True 时在标题与页顶标出延迟，
     避免读者把被延迟的定时任务误当成真正的盘前/盘后快照。
@@ -594,6 +796,10 @@ def build_page(data, date_str, slot, delay=None):
     slot_cn = SLOT_CN.get(slot, "")
     news_count = len(data["structured"].get("news", []))
     quote_count = data["quotes"].get("count", 0)
+
+    # M10 是可选产出：账本不存在（首次运行）就整个版块不出现，导航也不加锚点
+    picks_html = render_picks(data.get("picks") or [], date_str)
+    picks_nav = '<a href="#picks">候选清单</a>\n  ' if picks_html else ""
 
     delay = delay or {"late": False}
     title_suffix = f"（{delay['short']}）" if delay.get("late") else ""
@@ -621,7 +827,7 @@ def build_page(data, date_str, slot, delay=None):
 
 <nav class="toc">
   <a href="#market">市场分析</a>
-  <a href="#quotes">个股行情</a>
+  {picks_nav}<a href="#quotes">个股行情</a>
   <a href="#news">分板块新闻</a>
 </nav>
 
@@ -635,6 +841,7 @@ def build_page(data, date_str, slot, delay=None):
     <div class="analysis">{analysis_html}</div>
   </section>
 
+  {picks_html}
   <section class="block" id="quotes">
     <h2>个股行情一览<span class="h2-count">{quote_count} 只</span></h2>
     {quotes_html}

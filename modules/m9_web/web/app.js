@@ -93,9 +93,14 @@
 
   var S = {
     meta: null, overview: null, news: [], raw: [], rawLoaded: false,
-    quotes: [], failed: [], boards: [], history: [], analysis: null,
+    quotes: [], failed: [], boards: [], history: [], analysis: null, picks: null,
     rawMode: false, shown: PAGE, sort: { key: 'change_pct', asc: false }
   };
+
+  var KIND_CN = { stock: '个股', board: '板块' };
+  // 与 m10_picks/picks.py 的 _STATUS_CN / m5_report 保持一致
+  var REV_STATUS_CN = { no_quote: '未取到行情', no_bench: '基准缺失', expired: '未取到行情' };
+  var PICK_TIERS = [1, 3, 5];
 
   // ── 总览 ────────────────────────────────────────────────
   function renderOverview() {
@@ -424,6 +429,99 @@
     }).join('');
   }
 
+  // ── 候选观察清单（M10） ──────────────────────────────────
+  /* 不显示「胜率」「命中率」，也不给超额加红绿配色：超额 +0.1% 与 -0.1%
+     经济上几乎没有差别，用颜色把它们分成两档会凭空造出「对/错」的观感。
+     均值与**样本数**永远一起出现——样本 3 条时的均值不配单独示人。 */
+  function revCell(rev) {
+    if (!rev) return '<td class="num pick-pending">—</td>';
+    if (rev.status !== 'ok') {
+      return '<td class="num pick-pending">' + esc(REV_STATUS_CN[rev.status] || '未取到行情') +
+        '</td>';
+    }
+    var lag = (rev.done && rev.due && rev.done !== rev.due)
+      ? '<span class="pick-lag" title="计划 ' + esc(rev.due) + '，实际在 ' + esc(rev.done) +
+        ' 取到行情">补</span>' : '';
+    var a = (typeof rev.alpha === 'number')
+      ? '<b>' + pct(rev.alpha * 100) + '</b>'
+      : '<span class="muted">—</span>';
+    return '<td class="num">' + pct(rev.ret * 100) +
+      '<div class="pick-alpha">超额 ' + a + '</div>' + lag + '</td>';
+  }
+
+  function pickCard(r) {
+    var conf = r.confidence ? '<span class="pick-conf">置信度 ' + esc(r.confidence) + '</span>' : '';
+    var board = r.board ? '<span class="pick-tag">' + esc(r.board) + '</span>' : '';
+    var refs = (r.basis_ids || []).filter(function (i) { return i < S.news.length; });
+    var ref = refs.length
+      ? '<span class="pick-ref">依据 ' + refs.map(function (i) {
+          return '<a class="cite" href="#news-' + i + '" data-news-id="' + i + '">' + i + '</a>';
+        }).join(' ') + '</span>'
+      : '';
+    var base = (typeof r.base_price === 'number')
+      ? '<span class="pick-base">记录时价 ' + r.base_price + '</span>' : '';
+    return '<div class="pick-card">' +
+      '<div class="pick-head"><b>' + esc(r.name) + '</b>' +
+      '<span class="pick-kind">' + esc(KIND_CN[r.kind] || r.kind) + '</span>' +
+      board + conf + '</div>' +
+      (r.logic ? '<p class="pick-logic">' + esc(r.logic) + '</p>' : '') +
+      (r.invalidation
+        ? '<p class="pick-inval"><b>推翻条件</b>' + esc(r.invalidation) + '</p>' : '') +
+      '<div class="pick-foot">' + base + ref + '</div></div>';
+  }
+
+  function pickRow(r) {
+    return '<tr><td class="pick-date">' + esc(r.date) +
+      '<span class="muted small">' + esc(SLOT_CN[r.slot] || r.slot || '') + '</span></td>' +
+      '<td>' + esc(r.name) +
+      '<span class="muted small">' + esc(KIND_CN[r.kind] || '') +
+      (r.board ? ' · ' + esc(r.board) : '') + '</span></td>' +
+      PICK_TIERS.map(function (k) { return revCell((r.reviews || {})[String(k)]); }).join('') +
+      '</tr>';
+  }
+
+  function renderPicks() {
+    var p = S.picks || {};
+    var rows = p.rows || [];
+    if (!rows.length) {
+      $('#picksBody').innerHTML =
+        '<p class="pick-empty">还没有候选记录。候选在每次收盘后由 M10 写入，' +
+        '次日及之后回填 T+1/T+3/T+5 的表现。</p>';
+      return;
+    }
+
+    var stats = p.stats || {};
+    var statParts = PICK_TIERS.map(function (k) {
+      var s = stats[String(k)];
+      if (!s || !s.n) return '';
+      var mean = (typeof s.alpha === 'number')
+        ? '<b>' + pct(s.alpha * 100) + '</b>' : '<span class="muted">—</span>';
+      return '<span class="pick-stat">T+' + k + ' 均超额 ' + mean +
+        '<span class="muted">（样本 ' + s.n + ' 条）</span></span>';
+    }).filter(Boolean).join('');
+
+    var today = (p.latest_date || '').trim();
+    var todayRows = rows.filter(function (r) { return r.date === today; });
+    // 盘前那次运行时当日还没有候选，此时 latest_date 是上一交易日 —— 如实标日期，
+    // 不把它说成「今日」
+    var cards = todayRows.length
+      ? '<h3 class="pick-sub">' + esc(today) + ' 记录的候选（' + todayRows.length + ' 条）</h3>' +
+        '<div class="pick-cards">' + todayRows.map(pickCard).join('') + '</div>'
+      : '<p class="pick-empty">这次运行时还没有新的候选记录。</p>';
+
+    $('#picksBody').innerHTML =
+      '<div class="pick-stats">' + (statParts ||
+        '<span class="muted small">还没有到期回填的表现数据</span>') + '</div>' +
+      cards +
+      '<h3 class="pick-sub">历史明细（含跑输的，共 ' + p.total + ' 条）</h3>' +
+      '<div class="table-wrap"><table class="tbl pick-tbl"><thead><tr>' +
+      '<th>记录日</th><th>候选</th><th>T+1</th><th>T+3</th><th>T+5</th>' +
+      '</tr></thead><tbody>' + rows.map(pickRow).join('') + '</tbody></table></div>' +
+      '<p class="muted small">超额 = 该候选涨跌幅 − 同期沪深300 涨跌幅；' +
+      '收益率为未复权口径，除权除息期间会有偏差。' +
+      '「补」表示该档实际取价日迟于计划日期（周末/停牌/休市）。</p>';
+  }
+
   // ── 详情弹层 ────────────────────────────────────────────
   /* 关联新闻与行情都在浏览器端算：数据本来就全在手上，
      少一次往返，也让静态导出不必为每条新闻各生成一个文件。 */
@@ -551,6 +649,12 @@
       e.preventDefault();
       showDetail(parseInt(a.dataset.newsId, 10));
     });
+    $('#picksBody').addEventListener('click', function (e) {
+      var a = e.target.closest('a.cite');
+      if (!a) return;
+      e.preventDefault();
+      showDetail(parseInt(a.dataset.newsId, 10));
+    });
 
     $('#modalBody').addEventListener('click', function (e) {
       var row = e.target.closest('[data-goto]');
@@ -591,16 +695,18 @@
       apiGet('meta'), apiGet('overview'),
       apiGet('news', { limit: 2000 }),
       apiGet('quotes'), apiGet('boards'),
-      apiGet('analysis'), apiGet('history')
+      apiGet('analysis'), apiGet('history'),
+      apiGet('picks')                    // 新项一律追加在末尾：中间插入要顺移所有下标
     ]).then(function (r) {
       S.meta = r[0]; S.overview = r[1]; S.news = r[2].items || [];
       S.quotes = r[3].quotes || []; S.failed = r[3].failed || [];
       S.boards = r[4].boards || []; S.analysis = r[5]; S.history = r[6].reports || [];
+      S.picks = r[7] || null;
       S.raw = []; S.rawLoaded = false;   // 原始新闻按需再拉
 
       fillSelects();
       renderOverview(); renderNews(true); renderQuotes();
-      renderBoards(); renderAnalysis(); renderHistory();
+      renderBoards(); renderAnalysis(); renderHistory(); renderPicks();
       if (isReload) toast('已重新载入数据');
     }).catch(function (e) {
       $('#conclusionText').textContent = '数据加载失败';

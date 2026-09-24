@@ -233,10 +233,85 @@ def resolve_report_name(date_str, slot):
     return f"{date_str}-{slot}.html"
 
 
-def build_digest(date_str, slot, sentiment, market_view, top_news, delay=None):
-    """拼推送正文。顺序：延迟提示（若有）→ 市场分析（情绪 + 关注板块）→ 重点新闻 → 日报链接。
+def load_picks(date_str):
+    """reports/picks/ledger.jsonl → {"today": [...], "stats": "..."}，读不到返回 None。
+
+    **故意不 import m10_picks**：那个模块在 import 期就会加载 M4/M3 并连网，
+    为了读一个文件把整条依赖链拖进推送模块不值得（推送是最后一步，最该轻）。
+    这里自己解析 JSON Lines，坏行跳过，任何异常都退化成「没有候选块」。
+    """
+    try:
+        path = REPORTS_DIR / "picks" / "ledger.jsonl"
+        if not path.exists():
+            return None
+        rows = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        if not rows:
+            return None
+        today = [r for r in rows if r.get("date") == date_str]
+
+        # 汇总：**均值必须与样本数一起给**，且不叫「胜率」—— 样本量小时
+        # 百分比没有意义，二值的对/错也会抹掉「跑赢 0.1%」与「跑输 0.1%」的区别
+        bits = []
+        for k in (1, 3, 5):
+            vals = [(r.get("reviews") or {}).get(str(k)) for r in rows]
+            vals = [v for v in vals
+                    if v and v.get("status") == "ok" and v.get("alpha") is not None]
+            if not vals:
+                continue
+            if len(vals) < 3:
+                bits.append(f"T+{k} 样本 {len(vals)} 条（不足 3 条不给均值）")
+            else:
+                avg = sum(v["alpha"] for v in vals) / len(vals)
+                bits.append(f"T+{k} 均超额 {avg:+.2%}（样本 {len(vals)} 条）")
+        return {"today": today, "stats": "　".join(bits)}
+    except Exception as e:
+        print(f"[warn] 候选账本读取失败（{str(e)[:50]}），推送不含候选块")
+        return None
+
+
+def _clip(s, n):
+    s = " ".join((s or "").split())
+    return s if len(s) <= n else s[:n - 1] + "…"
+
+
+def build_picks_block(picks):
+    """候选观察清单 → 推送正文的一段。picks 为 None（账本缺失）时返回 []。"""
+    if not picks:
+        return []
+    parts = ["", "### 🎯 候选观察清单（不是买入建议）"]
+    today = picks.get("today") or []
+    if today:
+        for i, r in enumerate(today, 1):
+            tag = "〔板块〕" if r.get("kind") == "board" else ""
+            conf = f"（{r['confidence']}）" if r.get("confidence") else ""
+            parts.append(f"{i}. **{r.get('name')}**{tag}："
+                         f"{_clip(r.get('logic'), 60)}{conf}")
+            parts.append(f"   推翻信号：{_clip(r.get('invalidation'), 40)}")
+    else:
+        # 盘前那半数运行永远没有当日候选，但**跟踪中的候选往往正好到期**，
+        # 那段表现是盘前推送唯一的价值增量，不能只留一块空白
+        parts.append("盘前不记录新候选（新候选只在收盘后记录）；"
+                     "以下是跟踪中候选的表现。")
+    if picks.get("stats"):
+        parts.append(f"📊 已回填：{picks['stats']}")
+    parts.append("（候选为观察清单，非买入指令；历史表现不代表未来）")
+    return parts
+
+
+def build_digest(date_str, slot, sentiment, market_view, top_news, delay=None, picks=None):
+    """拼推送正文。顺序：延迟提示（若有）→ 市场分析（情绪 + 关注板块）
+    → 候选观察清单 → 重点新闻 → 日报链接。
 
     市场判断放最前，让用户不点开链接也能先拿到结论；新闻标题退居其次。
+    候选块紧跟市场分析 —— 它是从那份分析派生出来的、可事后检验的一层。
     """
     delay = delay or {"late": False}
     parts = []
@@ -253,6 +328,8 @@ def build_digest(date_str, slot, sentiment, market_view, top_news, delay=None):
         for i, (name, logic, conf) in enumerate(market_view, 1):
             tail = f"（{conf}）" if conf else ""
             parts.append(f"{i}. **{name}**：{logic}{tail}")
+
+    parts += build_picks_block(picks)
 
     parts.append("")
     parts.append("### 📌 重点新闻")
@@ -338,7 +415,9 @@ def main():
                  f"{SLOT_CN.get(slot, '')}·{delay['short']}")
     else:
         title = f"📊 股市情报日报 {date_str} · {SLOT_CN.get(slot, '')}"
-    desp = build_digest(date_str, slot, sentiment, market_view, top, delay) + link_line
+    picks = load_picks(date_str)
+    desp = build_digest(date_str, slot, sentiment, market_view, top, delay,
+                        picks=picks) + link_line
 
     ok, msg = send(title, desp, sendkey)
     if ok:
@@ -347,7 +426,8 @@ def main():
         print(f"[warn] 推送失败（{msg}），日报已生成不受影响")
     write_push_status(date_str, slot, ok, msg)
     # 成功与否都打印内容，便于核对
-    print(f"     时段: {slot} / 关注板块 {len(market_view)} 个")
+    print(f"     时段: {slot} / 关注板块 {len(market_view)} 个 / "
+          f"候选 {len((picks or {}).get('today') or [])} 条")
     print(f"     标题: {title}")
     print(f"     正文:\n{desp}")
 

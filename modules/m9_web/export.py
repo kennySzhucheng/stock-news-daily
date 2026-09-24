@@ -36,6 +36,8 @@ WEB_DIR = HERE / "web"
 # 原始新闻在静态版里只保留正文前若干字：完整 1000+ 条会撑到 600KB，
 # 而这个视图的用途是"看看被丢掉的是什么"，摘要足够
 RAW_TEXT_LIMIT = 300
+# 候选账本进静态导出的窗口。本地服务不加窗口（看全量），静态版要控制体积
+PICKS_EXPORT_DAYS = 30
 
 
 def build_payloads(bundle):
@@ -72,6 +74,9 @@ def build_payloads(bundle):
             "market_view": bundle.market_view(),
         },
         "history": {"reports": bundle.history()},
+        # 窗口化：账本一天最多 6 条、常年累积不清理，全量进 picks.js 会让静态页
+        # 体积随日期线性膨胀。与本地服务的数据结构完全一致，只是行数更少。
+        "picks": bundle.picks_view(days=PICKS_EXPORT_DAYS),
     }
 
 

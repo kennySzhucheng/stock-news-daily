@@ -99,6 +99,51 @@ def main():
     st, h = get("/api/history")
     check("GET /api/history", st == 200, f"{len(h.get('reports', []))} 天")
 
+    # ── M10 候选清单 ───────────────────────────────────────
+    st, pk = get("/api/picks")
+    rows = pk.get("rows", [])
+    check("GET /api/picks", st == 200 and isinstance(rows, list),
+          f"{pk.get('total')} 条 / 最新 {pk.get('latest_date')}")
+
+    if rows:
+        need = {"id", "date", "kind", "name", "reviews"}
+        bad = [r.get("id", "?") for r in rows if not need.issubset(r)]
+        check("候选条目字段完整", not bad, f"缺字段: {bad[:3]}" if bad else "")
+
+        # 候选里的个股必须真在行情里出现过——两个接口之间的跨源一致性。
+        # （板块走的是板块名单，不在 quotes 里，故只查个股）
+        qnames = {x.get("name") for x in get("/api/quotes")[1].get("quotes", [])}
+        stocks = [r["name"] for r in rows if r.get("kind") == "stock"]
+        miss = [n for n in stocks if n not in qnames]
+        check("候选个股在行情中存在", not miss, f"不在行情里: {miss[:3]}" if miss else "")
+
+        # 结构上保证「不是荐股」：推翻条件由 M10 代码强制，账本里不该有空值
+        noinv = [r.get("name") for r in rows if not (r.get("invalidation") or "").strip()]
+        check("每条候选都有推翻条件", not noinv,
+              f"缺失: {noinv[:3]}" if noinv else "（结构上保证非荐股）")
+
+        # 引用编号必须已翻成 news 下标，否则点开会是另一条新闻
+        nid = len(get("/api/news?limit=2000")[1].get("items", []))
+        badref = []
+        for r in rows:
+            for i in (r.get("basis_ids") or []):
+                if not isinstance(i, int) or not (0 <= i < nid):
+                    badref.append((r.get("name"), i))
+        check("新闻依据编号可解析", not badref, f"越界: {badref[:3]}" if badref else "")
+
+        # 产品决策的回归测试：不得出现「胜率」类措辞（样本量小时它没有意义）
+        blob = json.dumps(pk, ensure_ascii=False)
+        banned = [w for w in ("胜率", "命中率", "盈利率") if w in blob]
+        check("接口无「胜率」类字段", not banned, str(banned) if banned else "")
+
+        # 有均值就必须同时有样本数——这是硬性展示要求，接口层先保证 n 存在
+        st2 = pk.get("stats", {})
+        with_mean = [k for k, v in st2.items() if v.get("alpha") is not None]
+        no_n = [k for k in with_mean if not st2[k].get("n")]
+        check("均值与样本数同时存在", not no_n,
+              f"{'T+' + '/T+'.join(sorted(with_mean))} 有均值，均带 n={[st2[k]['n'] for k in sorted(with_mean)]}"
+              if with_mean else "暂无到期回填，跳过")
+
     # 筛选功能：分类过滤后条数应等于分类统计
     st, pol = get("/api/news?cat=policy&limit=2000")
     check("分类筛选与统计一致",

@@ -45,6 +45,9 @@ STEPS = [
      "env": ["DEEPSEEK_API_KEY"],   "timeout": 600},
     {"id": "M4", "name": "行情数据",            "script": "modules/m4_quotes/quotes.py",
      "env": [],                     "timeout": 600},
+    # M10 必须在 M4 之后（要当日行情锁基准价）、在 M5/M6/M9 之前（它们要读账本）
+    {"id": "M10", "name": "候选与复盘（DeepSeek）", "script": "modules/m10_picks/picks.py",
+     "env": ["DEEPSEEK_API_KEY"],   "timeout": 600},
     {"id": "M5", "name": "日报生成",            "script": "modules/m5_report/report.py",
      "env": [],                     "timeout": 120},
     {"id": "M9", "name": "网页版导出",          "script": "modules/m9_web/export.py",
@@ -99,6 +102,37 @@ def check_output(step_id, output=""):
         d = json.loads(p.read_text(encoding="utf-8"))
         checks.append(("行情条数", d.get("count", 0) > 0, f"{d.get('count', 0)} 只"))
 
+    elif step_id == "M10":
+        # 账本是跨天累积的文件，盘前/非交易日那次运行本就不该写新候选，
+        # 所以「没新增行」是正常结果，不能判为失败。
+        p = REPORTS_DIR / "picks" / "ledger.jsonl"
+        if not p.exists():
+            checks.append(("ledger.jsonl", True,
+                           "尚无账本（首次运行或盘前跳过，属正常）"))
+            return checks
+        rows = []
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                checks.append(("账本可解析", False, "存在无法解析的行"))
+                return checks
+        checks.append(("账本可解析", True, f"{len(rows)} 行"))
+        need = {"id", "date", "slot", "kind", "name", "reviews"}
+        bad = [r.get("id", "?") for r in rows if not need.issubset(r)]
+        checks.append(("每行字段完整", not bad, f"缺字段: {bad[:3]}" if bad else ""))
+        # 账本必须跨运行累积：只有一行说明每天在覆盖，而不是追加
+        days = {r.get("date") for r in rows}
+        checks.append(("跨天留存", len(days) >= 1, f"{len(days)} 个日期"))
+        # M10 的核心结构约束：没有推翻条件的候选在代码里就被丢弃了，
+        # 账本里出现空 invalidation 说明那层校验失效了
+        noinv = [r.get("name") for r in rows if not (r.get("invalidation") or "").strip()]
+        checks.append(("每条候选都有推翻条件", not noinv,
+                       f"缺失: {noinv[:3]}" if noinv else "（结构上保证非荐股）"))
+
     elif step_id == "M5":
         date_str = datetime.now(CST).strftime("%Y-%m-%d")
         # 盘前/盘后各一份，取当天已有的时段文件；没有则退回到当天任意一份
@@ -113,10 +147,14 @@ def check_output(step_id, output=""):
         checks.append(("日报文件大小", size > 5000, f"{size} 字节"))
         html = p.read_text(encoding="utf-8")
         # 版块顺序即用户要求：市场分析必须在新闻列表之前
-        for sec in ["市场分析", "个股行情一览", "分板块新闻", "风险声明"]:
-            checks.append((f"含「{sec}」版块", sec in html, ""))
-        i_mkt, i_news = html.find("市场分析"), html.find("分板块新闻")
-        checks.append(("市场分析在新闻列表之前", 0 <= i_mkt < i_news, ""))
+        for sec, anchor in [("市场分析", 'id="market"'), ("个股行情一览", 'id="quotes"'),
+                            ("分板块新闻", 'id="news"'), ("风险声明", 'class="risk"')]:
+            checks.append((f"含「{sec}」版块", anchor in html, f"锚点 {anchor}"))
+        # 按**版块锚点**比顺序，不按正文词。正文/注释里出现「分板块新闻」这几个字
+        # 是常事（折叠说明的 CSS 注释里就有一处），用 find(词) 会命中它而非版块
+        i_mkt, i_news = html.find('id="market"'), html.find('id="news"')
+        checks.append(("市场分析在新闻列表之前", 0 <= i_mkt < i_news,
+                       f"market@{i_mkt} news@{i_news}"))
         checks.append(("latest.html 存在", (REPORTS_DIR / "latest.html").exists(), ""))
         checks.append(("索引页存在", (REPORTS_DIR / "index.html").exists(), ""))
         # 时段保留：当天两个时段都跑过时，必须两份都在
@@ -125,18 +163,46 @@ def check_output(step_id, output=""):
         checks.append(("盘前盘后是否两份并存", True,
                        "两份都在" if both else "目前只有一份（另一时段尚未运行）"))
 
+        # 账本里有候选 → 日报必须出现候选版块（M10 的产出要真的被 M5 读到）
+        led = REPORTS_DIR / "picks" / "ledger.jsonl"
+        n_pick = 0
+        if led.exists():
+            for line in led.read_text(encoding="utf-8").splitlines():
+                try:
+                    if json.loads(line).get("date") == date_str:
+                        n_pick += 1
+                except json.JSONDecodeError:
+                    pass
+        if n_pick:
+            checks.append(("日报含「候选观察清单」版块", 'id="picks"' in html,
+                           f"当日账本 {n_pick} 条"))
+            # 顺序即叙事顺序：先给判断 → 再给由此推出的候选 → 然后才是数据
+            checks.append(("候选版块夹在判断与数据之间",
+                           html.find('id="market"') < html.find('id="picks"')
+                           < html.find('id="quotes"'), ""))
+        else:
+            checks.append(("日报候选版块", True, "当日账本无候选，版块不应出现"))
+
     elif step_id == "M9":
         web = REPORTS_DIR / "web" / "index.html"
         api = REPORTS_DIR / "web" / "api"
         if not web.exists():
             return [("reports/web/index.html", False, "文件不存在")]
         checks.append(("网页版 index.html", True, f"{web.stat().st_size} 字节"))
-        for f in ("news", "overview", "boards", "analysis", "history"):
+        for f in ("news", "overview", "boards", "analysis", "history", "picks"):
             p2 = api / f"{f}.js"
             checks.append((f"静态数据 {f}.js", p2.exists(),
                            f"{p2.stat().st_size} 字节" if p2.exists() else "缺失"))
         txt = web.read_text(encoding="utf-8")
         checks.append(("已切换为静态模式", "window.__STATIC__ = true" in txt, ""))
+        checks.append(("候选标签页存在", 'data-tab="picks"' in txt, ""))
+        # 前端 apiGet('picks') 走的文件名必须与 export.py 的 key 对得上，
+        # 否则静态版这个页永远空着（本地服务却正常，最难发现的那种）
+        pjs = api / "picks.js"
+        if pjs.exists():
+            checks.append(("picks.js 是合法载荷",
+                           'window.__DATA__["picks"]=' in
+                           pjs.read_text(encoding="utf-8"), ""))
         # 数据走 <script> 注入，file:// 直接双击也能打开（fetch 会被 CORS 拦）
         news_js = (api / "news.js")
         if news_js.exists():

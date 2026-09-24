@@ -170,6 +170,20 @@ jobs:
         if: steps.dup.outputs.skip != 'true'
         run: python modules/m4_quotes/quotes.py
 
+      # 必须排在 M5 之前：M5 日报、M6 推送、M9 网页版都要显示「今日候选」，
+      # 而候选是这一步写进 reports/picks/ledger.jsonl 的。排在 M5 之后会让
+      # 推送里提到的候选在日报里扑空。
+      # 账本随 gh-pages 自动跨天留存（部署 publish_dir=./reports，开头 tar 还原
+      # 整棵树），无需 git commit、无需 artifact、无需改 .gitignore。
+      # 可选产出：它挂了只是少一个版块，不该掐断主链路。
+      - name: M10 候选清单与复盘（DeepSeek）
+        if: steps.dup.outputs.skip != 'true'
+        continue-on-error: true
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          REPORT_SLOT: ${{ steps.slot.outputs.slot }}
+        run: python modules/m10_picks/picks.py
+
       - name: M5 生成日报
         if: steps.dup.outputs.skip != 'true'
         env:

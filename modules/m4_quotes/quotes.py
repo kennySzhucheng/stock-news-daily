@@ -159,10 +159,14 @@ def fetch_quote_tencent(secid, timeout=8):
     东财 push2 存在按 IP 的临时限流（表现为 RemoteDisconnected），
     限流期间切到腾讯源可保证行情板块不至于整块缺失。
 
-    字段下标：[1]名称 [2]代码 [3]现价 [4]昨收 [32]涨跌幅%。
+    字段下标：[1]名称 [2]代码 [3]现价 [4]昨收 [30]报价时刻 [32]涨跌幅%。
     涨跌幅直接取 [32] 而不是自己用 [3]/[4] 算——**腾讯的美股在休市时段
     不返回昨收与涨跌幅**（[4] 等于 [3]、[32] 为空），自己算会得到
     一个假的 0.00%。而 A 股收盘后 [32] 仍是当日真实涨跌幅。
+
+    [30] 是 `YYYYMMDDhhmmss` 的报价时刻（如 `20260924161413`），东财的 f43
+    没有对应字段。M10 的复盘闸门靠它判断"今日是否已收盘"——比看时钟准，
+    节假日/午休/延迟运行都能如实识别。
     """
     tcode = _to_tencent_code(secid)
     if not tcode:
@@ -197,6 +201,7 @@ def fetch_quote_tencent(secid, timeout=8):
             "price": price,
             "prev_close": prev_close,
             "change_pct": change_pct,
+            "time": parts[30].strip(),   # 报价时刻 YYYYMMDDhhmmss，M10 的收盘闸门用
         }
     except Exception as e:
         print(f"[warn] tencent {tcode}: {str(e)[:50]}")

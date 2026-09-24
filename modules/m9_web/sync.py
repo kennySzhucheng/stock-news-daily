@@ -37,7 +37,9 @@ UA = {"User-Agent": "Mozilla/5.0"}
 
 # 与 export.py 的产物保持一致
 PAGE_FILES = ["index.html", "style.css", "app.js"]
-API_FILES = ["meta", "overview", "news", "raw", "quotes", "boards", "analysis", "history"]
+# 漏加会被下面第 150 行附近的孤儿清理当成陌生文件删掉，表现为「同步后候选页空」
+API_FILES = ["meta", "overview", "news", "raw", "quotes", "boards", "analysis",
+             "history", "picks"]
 
 _EXPORT_RE = re.compile(r'window\.__DATA__\["([^"]+)"\]\s*=\s*(.*?)\s*;\s*$', re.S)
 

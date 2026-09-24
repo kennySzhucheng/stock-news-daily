@@ -38,6 +38,13 @@ import ask as ask_mod  # noqa: E402
 
 BASE = HERE.parent.parent
 DATA_FILES = ["raw_news.json", "structured_news.json", "quotes.json", "analysis.md"]
+# M10 账本不在 data/ 下，是唯一跨运行累积的文件，必须单独列出 ——
+# 漏了它，本地改完账本刷新页面看不到变化（mtime 缓存不失效）
+PICKS_FILE = BASE / "reports" / "picks" / "ledger.jsonl"
+
+
+def _local_files():
+    return [BASE / "data" / n for n in DATA_FILES] + [PICKS_FILE]
 
 WEB_DIR = HERE / "web"
 # sync.py 同步下来的云端产物就放在这里，可作为本地流水线数据之外的数据源
@@ -69,7 +76,7 @@ def _resolve_source(requested):
     """
     if requested != "auto":
         return requested
-    local_key = _mtime_key([BASE / "data" / n for n in DATA_FILES])
+    local_key = _mtime_key(_local_files())
     export_key = _mtime_key(list(EXPORT_API_DIR.glob("*.js")))
     has_local = (BASE / "data" / "structured_news.json").exists()
     if has_local and export_key is not None:
@@ -85,7 +92,7 @@ def get_bundle(force=None):
     if src == "export":
         key = (src, _mtime_key(list(EXPORT_API_DIR.glob("*.js"))))
     else:
-        key = (src, _mtime_key([BASE / "data" / n for n in DATA_FILES]))
+        key = (src, _mtime_key(_local_files()))
     if _cache["bundle"] is None or key != _cache["key"]:
         _cache["bundle"] = (aggregate.Bundle.from_export(EXPORT_API_DIR)
                             if src == "export" else aggregate.Bundle())
@@ -201,6 +208,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/history":
             return self._json({"reports": b.history()})
+
+        if path == "/api/picks":
+            return self._json(b.picks_view())
 
         return self._err(404, "未知接口")
 
