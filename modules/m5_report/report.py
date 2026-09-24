@@ -429,10 +429,27 @@ header.hero .date{color:var(--muted); font-size:14px; margin-top:4px;}
 }
 main{padding:0 12px;}
 section.block{margin:20px 8px;}
-section.block > h2{
+section.block > h2,
+section.block > details > summary > h2{
   font-size:18px; font-weight:700; margin-bottom:12px;
   padding-left:10px; border-left:4px solid var(--accent);
 }
+/* 分板块新闻默认折叠：它占全文八成篇幅（实测 09-24 盘后 24888/31592 字），
+   展开着会把真正有判断价值的前四块内容淹在几十屏新闻下面 */
+section.block > details > summary{
+  cursor:pointer; list-style:none; display:flex; align-items:center;
+  justify-content:space-between; gap:10px; padding:4px 0; border-radius:6px;
+  user-select:none; -webkit-tap-highlight-color:transparent;
+}
+section.block > details > summary::-webkit-details-marker{display:none;}
+section.block > details > summary::marker{content:"";}
+section.block > details > summary > h2{margin-bottom:0;}
+section.block > details > summary:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
+.fold-hint{font-size:13px; color:var(--muted); white-space:nowrap;}
+.fold-label::after{content:"展开";}
+details[open] > summary .fold-label::after{content:"收起";}
+.fold-arrow{display:inline-block; margin-left:4px; transition:transform .15s ease;}
+details[open] > summary .fold-arrow{transform:rotate(90deg);}
 .news-group{margin-bottom:18px;}
 .news-group h3{
   font-size:15px; color:var(--accent); font-weight:600;
@@ -624,8 +641,13 @@ def build_page(data, date_str, slot, delay=None):
   </section>
 
   <section class="block" id="news">
-    <h2>分板块新闻<span class="h2-count">{news_count} 条</span></h2>
-    {news_html}
+    <details class="fold">
+      <summary>
+        <h2>分板块新闻<span class="h2-count">{news_count} 条</span></h2>
+        <span class="fold-hint"><span class="fold-label"></span><span class="fold-arrow">▸</span></span>
+      </summary>
+      {news_html}
+    </details>
   </section>
 </main>
 
