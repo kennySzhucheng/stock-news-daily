@@ -206,11 +206,16 @@ jobs:
           publish_branch: gh-pages
           commit_message: "日报更新 ${{ github.run_number }} [${{ github.event.schedule || 'manual' }}]"
 
+      # 产物名带上时段：运行对象里既没有 inputs 也没有 schedule 字段，
+      # 外部工具（modules/m8_e2e/observe.py）光凭触发时刻推不出本次该出哪个时段
+      # —— 延迟的盘前 cron 要到 12:4x 才跑，按「是否过 12:00」判会算成盘后。
+      # 去重跳过的运行不会走到这一步（上面 if 已拦），故「有没有产物」同时
+      # 也是「本次有没有真的产出」的判据。
       - name: 上传产物（便于排查）
         if: always() && steps.dup.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: daily-data-${{ github.run_number }}
+          name: daily-data-${{ github.run_number }}-${{ steps.slot.outputs.slot }}
           path: |
             data/
             reports/
