@@ -1,0 +1,1 @@
+window.__DATA__=window.__DATA__||{};window.__DATA__["picks"]={"rows":[],"latest_date":"","stats":{"1":{"n":0,"ret":null,"alpha":null},"3":{"n":0,"ret":null,"alpha":null},"5":{"n":0,"ret":null,"alpha":null}},"total":0};

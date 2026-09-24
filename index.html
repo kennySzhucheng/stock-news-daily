@@ -41,10 +41,27 @@ header.hero .date{color:var(--muted); font-size:14px; margin-top:4px;}
 }
 main{padding:0 12px;}
 section.block{margin:20px 8px;}
-section.block > h2{
+section.block > h2,
+section.block > details > summary > h2{
   font-size:18px; font-weight:700; margin-bottom:12px;
   padding-left:10px; border-left:4px solid var(--accent);
 }
+/* 分板块新闻默认折叠：它占全文八成篇幅（实测 09-24 盘后 24888/31592 字），
+   展开着会把真正有判断价值的前四块内容淹在几十屏新闻下面 */
+section.block > details > summary{
+  cursor:pointer; list-style:none; display:flex; align-items:center;
+  justify-content:space-between; gap:10px; padding:4px 0; border-radius:6px;
+  user-select:none; -webkit-tap-highlight-color:transparent;
+}
+section.block > details > summary::-webkit-details-marker{display:none;}
+section.block > details > summary::marker{content:"";}
+section.block > details > summary > h2{margin-bottom:0;}
+section.block > details > summary:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
+.fold-hint{font-size:13px; color:var(--muted); white-space:nowrap;}
+.fold-label::after{content:"展开";}
+details[open] > summary .fold-label::after{content:"收起";}
+.fold-arrow{display:inline-block; margin-left:4px; transition:transform .15s ease;}
+details[open] > summary .fold-arrow{transform:rotate(90deg);}
 .news-group{margin-bottom:18px;}
 .news-group h3{
   font-size:15px; color:var(--accent); font-weight:600;
@@ -154,6 +171,46 @@ section.block > h2{display:flex; align-items:center; gap:8px;}
   padding:1px 8px; border-radius:10px;
 }
 
+/* 候选观察清单（M10）。折叠的 h3 需要自己一份标题样式 —— 上面那条
+   `section.block > details > summary > h2` 只管 h2，h3 拿不到。 */
+section.block > details > summary > h3{
+  font-size:16px; font-weight:700; margin-bottom:0; padding-left:10px;
+  border-left:4px solid var(--accent); display:flex; align-items:center; gap:8px;
+}
+.pick-note{font-size:12.5px; color:var(--muted); line-height:1.6; margin:0 0 12px;}
+.pick-empty{font-size:13.5px; color:var(--muted); background:var(--card);
+  border:1px dashed var(--border); border-radius:8px; padding:12px 14px;}
+.pick-card{background:var(--card); border:1px solid var(--border);
+  border-radius:8px; padding:12px 14px; margin-bottom:10px;}
+.pick-head{display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:15px;}
+.pick-conf{font-size:11.5px; color:var(--muted); border:1px solid var(--border);
+  border-radius:10px; padding:1px 8px;}
+.pick-tag{font-size:11px; color:var(--accent); border:1px solid var(--accent);
+  border-radius:10px; padding:1px 7px;}
+.pick-logic{font-size:14px; line-height:1.65; margin:8px 0 6px;}
+.pick-inval{font-size:13px; line-height:1.6; margin:0; color:var(--muted);}
+.pick-inval b{color:var(--text);}
+.pick-foot{font-size:12px; color:var(--muted); margin-top:8px;
+  display:flex; flex-wrap:wrap; gap:6px; align-items:center;}
+.pick-ref{background:var(--bg2); border:1px solid var(--border);
+  border-radius:8px; padding:0 5px;}
+/* 回填明细：逐条列出，跑输的与跑赢的同版式同字号 */
+.pick-row{background:var(--card); border:1px solid var(--border);
+  border-radius:8px; padding:10px 12px; margin-bottom:8px;}
+.pick-row-head{font-size:13px; display:flex; flex-wrap:wrap; gap:6px; align-items:center;}
+.pick-base{font-size:12px; color:var(--muted);}
+.pick-tiers{display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;}
+.pick-tier{flex:1 1 84px; background:var(--bg2); border:1px solid var(--border);
+  border-radius:6px; padding:6px 8px; font-size:13px; display:flex;
+  flex-direction:column; gap:2px;}
+.pick-tier-k{font-size:11px; color:var(--muted);}
+.pick-alpha{font-size:11.5px; color:var(--muted);}
+.pick-pending{font-size:12px; color:var(--muted);}
+.pick-lag{font-size:10.5px; color:var(--muted); border:1px solid var(--border);
+  border-radius:8px; padding:0 5px; margin-left:4px;}
+.pick-stats{font-size:13px; background:var(--bg2); border:1px solid var(--border);
+  border-radius:8px; padding:8px 12px; margin:0 0 10px; line-height:1.7;}
+
 /* 索引页：按日期分组 */
 .day-group{
   background:var(--card); border:1px solid var(--border); border-radius:8px;
@@ -182,7 +239,7 @@ section.block > h2{display:flex; align-items:center; gap:8px;}
 <main>
   <section class="block">
     <a class="index-item latest-item" href="latest.html"><div class="d">⚡ 最新一期</div><div class="s">直接打开最近一次运行生成的日报</div></a>
-    <div class="day-group"><div class="day-date">2026-09-24</div><div class="day-links"><a class="slot-link am" href="2026-09-24-am.html" title="2026-09-24-am.html"><span class="slot-name">盘前</span><span class="slot-go">查看 →</span></a><a class="slot-link pm" href="2026-09-24-pm.html" title="2026-09-24-pm.html"><span class="slot-name">盘后</span><span class="slot-go">查看 →</span></a></div><div class="day-latest"><a href="2026-09-24-pm.html">当日最新</a></div></div><div class="day-group"><div class="day-date">2026-09-23</div><div class="day-links"><a class="slot-link am" href="2026-09-23-am.html" title="2026-09-23-am.html"><span class="slot-name">盘前</span><span class="slot-go">查看 →</span></a><a class="slot-link pm" href="2026-09-23-pm.html" title="2026-09-23-pm.html"><span class="slot-name">盘后</span><span class="slot-go">查看 →</span></a></div><div class="day-latest"><a href="2026-09-23-pm.html">当日最新</a></div></div><div class="day-group"><div class="day-date">2026-09-22</div><div class="day-links"><a class="slot-link am" href="2026-09-22-am.html" title="2026-09-22-am.html"><span class="slot-name">盘前</span><span class="slot-go">查看 →</span></a><a class="slot-link pm" href="2026-09-22-pm.html" title="2026-09-22-pm.html"><span class="slot-name">盘后</span><span class="slot-go">查看 →</span></a></div><div class="day-latest"><a href="2026-09-22-pm.html">当日最新</a></div></div><div class="day-group"><div class="day-date">2026-09-21</div><div class="day-links"><a class="slot-link am" href="2026-09-21-am.html" title="2026-09-21-am.html"><span class="slot-name">盘前</span><span class="slot-go">查看 →</span></a><a class="slot-link pm" href="2026-09-21-pm.html" title="2026-09-21-pm.html"><span class="slot-name">盘后</span><span class="slot-go">查看 →</span></a></div><div class="day-latest"><a href="2026-09-21-pm.html">当日最新</a></div></div><div class="day-group"><div class="day-date">2026-09-20</div><div class="day-links"><a class="slot-link am" href="2026-09-20-am.html" title="2026-09-20-am.html"><span class="slot-name">盘前</span><span class="slot-go">查看 →</span></a><a class="slot-link pm" href="2026-09-20-pm.html" title="2026-09-20-pm.html"><span class="slot-name">盘后</span><span class="slot-go">查看 →</span></a></div><div class="day-latest"><a href="2026-09-20-pm.html">当日最新</a></div></div><div class="day-group"><div class="day-date">2026-09-19</div><div class="day-links"><a class="slot-link am" href="2026-09-19-am.html" title="2026-09-19-am.html"><span class="slot-name">盘前</span><span class="slot-go">查看 →</span></a><a class="slot-link pm" href="2026-09-19-pm.html" title="2026-09-19-pm.html"><span class="slot-name">盘后</span><span class="slot-go">查看 →</span></a></div><div class="day-latest"><a href="2026-09-19-pm.html">当日最新</a></div></div><div class="day-group"><div class="day-date">2026-09-18</div><div class="day-links"><a class="slot-link am" href="2026-09-18-am.html" title="2026-09-18-am.html"><span class="slot-name">盘前</span><span class="slot-go">查看 →</span></a><a class="slot-link pm" href="2026-09-18-pm.html" title="2026-09-18-pm.html"><span class="slot-name">盘后</span><span class="slot-go">查看 →</span></a></div><div class="day-latest"><a href="2026-09-18-pm.html">当日最新</a></div></div><div class="day-group"><div class="day-date">2026-09-17</div><div class="day-links"><a class="slot-link am" href="2026-09-17-am.html" title="2026-09-17-am.html"><span class="slot-name">盘前</span><span class="slot-go">查看 →</span></a><a class="slot-link pm" href="2026-09-17-pm.html" title="2026-09-17-pm.html"><span class="slot-name">盘后</span><span class="slot-go">查看 →</span></a></div><div class="day-latest"><a href="2026-09-17-pm.html">当日最新</a></div></div><div class="day-group"><div class="day-date">2026-09-16</div><div class="day-links"><a class="slot-link na" href="2026-09-16.html" title="2026-09-16.html"><span class="slot-name">早期</span><span class="slot-go">查看 →</span></a><a class="slot-link pm" href="2026-09-16-pm.html" title="2026-09-16-pm.html"><span class="slot-name">盘后</span><span class="slot-go">查看 →</span></a></div><div class="day-latest"><a href="2026-09-16-pm.html">当日最新</a></div></div>
+    <div class="day-group"><div class="day-date">2026-09-25</div><div class="day-links"><a class="slot-link am" href="2026-09-25-am.html" title="2026-09-25-am.html"><span class="slot-name">盘前</span><span class="slot-go">查看 →</span></a></div><div class="day-latest"><a href="2026-09-25-am.html">当日最新</a></div></div><div class="day-group"><div class="day-date">2026-09-24</div><div class="day-links"><a class="slot-link am" href="2026-09-24-am.html" title="2026-09-24-am.html"><span class="slot-name">盘前</span><span class="slot-go">查看 →</span></a><a class="slot-link pm" href="2026-09-24-pm.html" title="2026-09-24-pm.html"><span class="slot-name">盘后</span><span class="slot-go">查看 →</span></a></div><div class="day-latest"><a href="2026-09-24-pm.html">当日最新</a></div></div><div class="day-group"><div class="day-date">2026-09-23</div><div class="day-links"><a class="slot-link am" href="2026-09-23-am.html" title="2026-09-23-am.html"><span class="slot-name">盘前</span><span class="slot-go">查看 →</span></a><a class="slot-link pm" href="2026-09-23-pm.html" title="2026-09-23-pm.html"><span class="slot-name">盘后</span><span class="slot-go">查看 →</span></a></div><div class="day-latest"><a href="2026-09-23-pm.html">当日最新</a></div></div><div class="day-group"><div class="day-date">2026-09-22</div><div class="day-links"><a class="slot-link am" href="2026-09-22-am.html" title="2026-09-22-am.html"><span class="slot-name">盘前</span><span class="slot-go">查看 →</span></a><a class="slot-link pm" href="2026-09-22-pm.html" title="2026-09-22-pm.html"><span class="slot-name">盘后</span><span class="slot-go">查看 →</span></a></div><div class="day-latest"><a href="2026-09-22-pm.html">当日最新</a></div></div><div class="day-group"><div class="day-date">2026-09-21</div><div class="day-links"><a class="slot-link am" href="2026-09-21-am.html" title="2026-09-21-am.html"><span class="slot-name">盘前</span><span class="slot-go">查看 →</span></a><a class="slot-link pm" href="2026-09-21-pm.html" title="2026-09-21-pm.html"><span class="slot-name">盘后</span><span class="slot-go">查看 →</span></a></div><div class="day-latest"><a href="2026-09-21-pm.html">当日最新</a></div></div><div class="day-group"><div class="day-date">2026-09-20</div><div class="day-links"><a class="slot-link am" href="2026-09-20-am.html" title="2026-09-20-am.html"><span class="slot-name">盘前</span><span class="slot-go">查看 →</span></a><a class="slot-link pm" href="2026-09-20-pm.html" title="2026-09-20-pm.html"><span class="slot-name">盘后</span><span class="slot-go">查看 →</span></a></div><div class="day-latest"><a href="2026-09-20-pm.html">当日最新</a></div></div><div class="day-group"><div class="day-date">2026-09-19</div><div class="day-links"><a class="slot-link am" href="2026-09-19-am.html" title="2026-09-19-am.html"><span class="slot-name">盘前</span><span class="slot-go">查看 →</span></a><a class="slot-link pm" href="2026-09-19-pm.html" title="2026-09-19-pm.html"><span class="slot-name">盘后</span><span class="slot-go">查看 →</span></a></div><div class="day-latest"><a href="2026-09-19-pm.html">当日最新</a></div></div><div class="day-group"><div class="day-date">2026-09-18</div><div class="day-links"><a class="slot-link am" href="2026-09-18-am.html" title="2026-09-18-am.html"><span class="slot-name">盘前</span><span class="slot-go">查看 →</span></a><a class="slot-link pm" href="2026-09-18-pm.html" title="2026-09-18-pm.html"><span class="slot-name">盘后</span><span class="slot-go">查看 →</span></a></div><div class="day-latest"><a href="2026-09-18-pm.html">当日最新</a></div></div><div class="day-group"><div class="day-date">2026-09-17</div><div class="day-links"><a class="slot-link am" href="2026-09-17-am.html" title="2026-09-17-am.html"><span class="slot-name">盘前</span><span class="slot-go">查看 →</span></a><a class="slot-link pm" href="2026-09-17-pm.html" title="2026-09-17-pm.html"><span class="slot-name">盘后</span><span class="slot-go">查看 →</span></a></div><div class="day-latest"><a href="2026-09-17-pm.html">当日最新</a></div></div><div class="day-group"><div class="day-date">2026-09-16</div><div class="day-links"><a class="slot-link na" href="2026-09-16.html" title="2026-09-16.html"><span class="slot-name">早期</span><span class="slot-go">查看 →</span></a><a class="slot-link pm" href="2026-09-16-pm.html" title="2026-09-16-pm.html"><span class="slot-name">盘后</span><span class="slot-go">查看 →</span></a></div><div class="day-latest"><a href="2026-09-16-pm.html">当日最新</a></div></div>
   </section>
 </main>
 <footer class="risk">

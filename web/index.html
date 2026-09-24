@@ -27,6 +27,7 @@
   <button class="tab" data-tab="quotes">行情</button>
   <button class="tab" data-tab="boards">板块</button>
   <button class="tab" data-tab="analysis">深度分析</button>
+  <button class="tab" data-tab="picks">候选</button>
   <button class="tab" data-tab="history">历史</button>
 </nav>
 
@@ -164,6 +165,19 @@
     <div class="card">
       <h2>市场分析全文</h2>
       <div class="markdown" id="analysisBody">加载中…</div>
+    </div>
+  </section>
+
+  <!-- ── 候选观察清单 ─────────────────────────────────────── -->
+  <section class="panel hidden" id="panel-picks">
+    <div class="card">
+      <h2>候选观察清单</h2>
+      <p class="muted small">
+        每条候选都带<b>推翻条件</b>与新闻依据；其后续表现按 T+1/T+3/T+5 原样回填，
+        <b>含跑输的</b>，不做选择性展示。超额相对沪深300，收益率为未复权口径。
+        <b>不是买入指令，决策权归您本人。</b>
+      </p>
+      <div id="picksBody">加载中…</div>
     </div>
   </section>
 
