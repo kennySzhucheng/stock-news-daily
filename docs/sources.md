@@ -59,7 +59,9 @@
 
 | 来源 | 原因 |
 |---|---|
-| 财联社电报 | 接口有反爬（2026-09-16 实测返回 HTML 而非 JSON） |
+| 财联社电报 | 接口有反爬（2026-09-16 实测返回 HTML 而非 JSON）。**2026-09-25 复核仍不可用**：`cn-financial-scraper` skill 的 `cls_scraper` 打 `https://www.cls.cn/api/sw` 返回 **404**（端点已变更），故仍然放弃 |
+| 新浪滚动 `lid=2510`（要闻） | 2026-09-25 实测返回的是 **2~7 个月前的旧闻**（02-02 / 05-26 / 08-29），滚动机制已失效 |
+| `query_financial_data("news")` 统一入口 | 东财适配器缺 `client` 参数，上游返回 `Required String parameter 'client' is not present`，而适配器把该报错当成功返回——**错误未被拦住** |
 
 ## 五、交叉验证规则
 
@@ -71,3 +73,50 @@
 ## 六、维护约定
 
 M1 实施时：每接入一个新源先在本文件登记接口格式与验证结果；上线后每周（M7 工作流可自动附带）测活一次，失效源标记并在 CHANGELOG 记录更换方案。
+
+## 七、第二阶段新增（2026-09-25，三个源）
+
+端点取自新装的 `cn-financial-scraper` skill，但**没有直接 import 它**：skill 装在
+`~/.claude/skills/`、**不是 git 仓库**，云端 runner 拿不到；且它依赖 `requests` +
+自带的 `http_utils`（1932 行）。故只**取端点**，按本模块的纯标准库风格重写
+（复用 `_urlopen` / `_post_form` / 0.6s 间隔 / UA），workflow 无需加 `pip install`。
+
+| 来源 | 接口 | 类别 | 实测 |
+|---|---|---|---|
+| 巨潮资讯公告 | `POST www.cninfo.com.cn/new/hisAnnouncement/query`（表单） | **个股公告** | ✅ 33 条/次，9 源全绿 |
+| 东方财富宏观政策 | `np-listapi.eastmoney.com/comm/web/getNewsByColumns?column=345` | 财经/政策解读 | ✅ 40 条 |
+| 新浪财经滚动 | `feed.mix.sina.com.cn/api/roll/get?lid=2516` | 国际/港股视角 | ✅ 25 条 |
+
+### 巨潮：两个静默的坑（都已在代码里设防）
+
+1. **类目码无效不报错，而是静默回退成「全部公告」**（约 1400 条/天）。
+   2026-09-25 实测：`gqbd`（股权变动）/ `rcjy`（日常经营）/ `yjygjxz`（业绩预告）/
+   `sjdbg` / `yjdbg` **有效**；skill 里带中文标签的 `zcjy` / `gdqz` / `gdzc` / `hg` /
+   `ndbg` / `bndbg` **对线上 API 无效**（返回全部 = 未过滤）。
+   → `fetch_cninfo()` 先取「全部」基线，逐类目比对 `totalRecordNum`，
+   **对不上就丢弃该类目并打印告警**，宁可少抓也不能抓错。
+2. **`announcementTime` 只有日期，时刻恒为北京 00:00**，`column` 参数实际被忽略
+   （`szse` 与 `sse` 返回完全相同结果，靠 `_szsh` 后缀即覆盖沪深）。
+   → 时间戳如实照抄、不编造时刻；代价是这些条目在「按时间倒序」里排到当日快讯之后，
+   故 category 提示用 `announcement` 并由 M2 的 `PRIORITY_CATEGORIES` 优先保留。
+
+### 与 M2 预筛的耦合（改动 M2 的原因）
+
+`prefilter_local` 原来只有 `policy` 优先。新增公告后实测：**32 条公告 0 条存活** ——
+它们的时间戳全是 00:00，而 150 条截断线当天在 11:02，整批被挤掉。
+现改为 `PRIORITY_CATEGORIES = ("policy", "announcement")`，实测 **32/32 存活**。
+
+预筛分布变化（同一份 raw_news，1098 条 → 150 条）：
+
+| | 公告 | 政策 | 财经 | 科技 |
+|---|---|---|---|---|
+| 改前 | 0 | 40 | 105 | 5 |
+| 改后 | **32** | 40 | 75 | 3 |
+
+代价是财经快讯少进 30 条、科技少 2 条 —— 用通用快讯的名额换成了逐条可定位到
+个股的公告，净值为正。各源存活率：巨潮 100%、新浪滚动 84%、中国政府网 100%、
+东方财富宏观 8%、快讯类 5~13%（快讯本就重复度高）。
+
+> **待验收**：M2 的 GLM 端到端本地**未跑**——`ZAI_API_KEY` 不在 `docs/keys.md`
+> （该行只写了「用户现有智谱密钥」）。`prefilter_local` / `normalize_cat` 是纯本地
+> 函数、已离线验过；GLM 调用本身未改动。补验方式见 CHANGELOG 当天条目。

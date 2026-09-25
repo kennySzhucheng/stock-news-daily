@@ -23,6 +23,11 @@ GLM_MODEL = "glm-4-flash"
 
 VALID_CATEGORIES = ["policy", "industry", "stock", "international", "other"]
 
+# prefilter 的优先组：先占 max_for_llm 的名额，再由其余类别按时间倒序补满。
+# `announcement` 是 M1 巨潮公告的 category 提示（不是 M2 的最终分类，最终仍由
+# 模型判定）——它的原始时间戳恒为 00:00，不进优先组就会被时间截断整批挤掉。
+PRIORITY_CATEGORIES = ("policy", "announcement")
+
 
 def normalize_cat(c):
     """模型可能输出 'finance' 等近义值，映射到合法分类"""
@@ -30,7 +35,9 @@ def normalize_cat(c):
     if c in VALID_CATEGORIES:
         return c
     alias = {"finance": "stock", "market": "international", "industry_news": "industry",
-             "macro": "policy", "company": "stock", "company_news": "stock"}
+             "macro": "policy", "company": "stock", "company_news": "stock",
+             "announcement": "stock",   # M1 的公告提示 → 最终归入个股类
+             "tech": "other", "official": "policy"}
     return alias.get(c, "other")
 VALID_SENTIMENT = ["bullish", "bearish", "neutral"]
 VALID_VERIFY = ["confirmed", "unverified"]
@@ -192,24 +199,35 @@ keep=false 表示纯社会新闻与股市无关应丢弃。"""
 
 def prefilter_local(news_items, max_for_llm=150):
     """本地预筛：控制送进 LLM 的量。
-    策略：finance/policy 类全保留候选；official/tech 类做关键字过滤。
+
+    策略（**优先组先占位，其余按时间倒序补满**）：
+    - `policy`（政府文件原文）与 `announcement`（上市公司公告）优先保留 ——
+      两者条数有界、信号密度高，且**不能被「按时间倒序」的截断挤掉**；
+    - `finance` 全部进候选；`official` / `tech` 走关键字过滤。
+
+    为什么公告必须进优先组（2026-09-25 实测）：巨潮的 `announcementTime`
+    **只有日期、时刻恒为 00:00**，于是按时间倒序排时，全部 32 条公告落在当日
+    快讯之后 —— 截断线当天在 11:02，**0/32 存活**。不给优先级等于白抓。
     """
     keep, dropped = [], 0
     kw_fin = re.compile(r"股|市|基金|证券|央行|人民币|利[率率]|GDP|CPI|PMI|美联储|降准|降息|上市|发行|回购|并购|重组|营收|净利")
     for n in news_items:
         c = n.get("category", "")
-        if c in ("finance", "policy"):
+        if c in ("finance", "policy", "announcement"):
             keep.append(n)
         elif kw_fin.search(n["text"]):
             keep.append(n)
         else:
             dropped += 1
     if len(keep) > max_for_llm:
-        # 优先保留 policy 类与 finance 中的头部，抽样截断
-        policy = [n for n in keep if n["category"] == "policy"]
-        rest = [n for n in keep if n["category"] != "policy"]
-        rest = rest[:max_for_llm - len(policy)]
-        kept, dropped = policy + rest, len(keep) - len(policy) - len(rest)
+        priority = [n for n in keep if n["category"] in PRIORITY_CATEGORIES]
+        rest = [n for n in keep if n["category"] not in PRIORITY_CATEGORIES]
+        # 优先组自身也可能超预算（公告被大量抓入时），此时它内部按原序
+        # （即时间倒序）截断，不会反过来吃掉全部额度
+        priority = priority[:max_for_llm]
+        rest = rest[:max(0, max_for_llm - len(priority))]
+        kept = priority + rest
+        dropped += len(keep) - len(kept)
         keep = kept
     return keep, dropped
 
@@ -232,9 +250,11 @@ def main():
         batch = keep[bs:bs + 20]
         result = batch_filter(batch)
         if result is None:
-            # LLM 失败时本批全保留（保守策略，宁多勿漏）
+            # LLM 失败时本批全保留（保守策略，宁多勿漏）。
+            # 类别同样要过 normalize_cat：直接塞原始提示会把 finance / tech /
+            # announcement 这些**不在 VALID_CATEGORIES 里**的值漏进下游。
             for i in range(len(batch)):
-                structured.append({"category": batch[i].get("category", "other"),
+                structured.append({"category": normalize_cat(batch[i].get("category")),
                                    "board": [], "stocks": [],
                                    "sentiment": "neutral",
                                    "keep": True})

@@ -28,6 +28,22 @@
 
 **验收：** 本地运行能产出 ≥50 条/天的新闻，含至少 3 个不同类别来源
 
+**第二阶段（2026-09-25，接入 cn-financial-scraper skill 的端点）：**
+- [x] 评估 skill 可用性：`get_regulatory_updates` / `get_monetary_policy` /
+      `get_stock_news_all` **可用**；`query_financial_data("news")`（适配器吞掉上游报错）、
+      财联社 `cls_scraper`（`/api/sw` 404）、`get_market_digest`（返回空）**不可用**
+- [x] **不直接 import skill** —— 它在 `~/.claude/skills/`、非 git 仓库，云端 runner 拿不到，
+      且依赖 `requests` + 自带 `http_utils`(1932 行)。改为**取端点、按 M1 纯标准库风格重写**，
+      workflow 不加 `pip install`
+- [x] 新增 3 源并登记进 `docs/sources.md` 第七节：
+      **巨潮公告**（填补「个股公告」这个空类目）/ **东财宏观政策** / **新浪滚动 lid=2516**（国际视角）
+- [x] 巨潮**类目码静默回退**设防：先取「全部」基线逐类目比对 `totalRecordNum`，
+      对不上即丢弃该类目并告警 —— 实测 skill 里带标签的 `zcjy`/`gdqz`/`gdzc`/`hg`/`ndbg`
+      对线上 API **全部无效**（会静默返回全部 1400 条/天）
+- [x] M1 真实跑通：**9/9 源全绿**，1098 条；分布 `finance 614 / official 390 /
+      policy 40 / announcement 32 / tech 22`
+- [ ] **M2 的 GLM 端到端未跑**（本地无 `ZAI_API_KEY`）—— 待补验后勾选
+
 ---
 
 ## M2 新闻筛选与结构化模块
@@ -44,6 +60,17 @@
 **输出文件：** `data/structured_news.json`
 
 **验收：** 对一天数据跑完后，分类准确率人工抽查 ≥80%，确认/待核实标记正确
+
+**预筛优先级（2026-09-25，为配合 M1 第二阶段的公告源）：**
+- [x] 新增 `PRIORITY_CATEGORIES = ("policy", "announcement")` —— 巨潮公告的原始时间戳
+      **恒为北京 00:00**，按时间倒序会被 150 条截断整批挤掉（实测改前 **0/32 存活**），
+      改后 **32/32 存活**；代价是财经快讯少进 30 条、科技少 2 条
+- [x] `normalize_cat` 补 `announcement`→`stock`、`tech`→`other`、`official`→`policy`；
+      LLM 失败兜底分支改为过 `normalize_cat()`（原来直接塞原始提示，会把不在
+      `VALID_CATEGORIES` 里的值漏进下游）
+- [x] 修 `dropped` 被截断分支覆盖的问题：原日志把「被截断」报成「纯无关内容」
+      （报 614，实际关键词丢弃 334），现累加后如实报 948
+- [ ] M2 GLM 端到端补验（本地缺 `ZAI_API_KEY`）
 
 ---
 
