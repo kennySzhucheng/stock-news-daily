@@ -105,6 +105,12 @@ def api(method, path, body=None, token="", retries=3):
     raise SystemExit(f"[FAIL] {method} {path} 重试 {retries} 次仍失败：{last}")
 
 
+# 与 daily.yml 的 EARLY_TOL_MIN 保持一致：早于「计划时点 − 30 分钟」的产出
+# 判为测试/调试运行，不占用本时段。两处必须同值，否则本机侧放行、云端拦住
+# （或反过来），行为就不可预测了。
+EARLY_TOL_MIN = 30
+
+
 def report_exists(repo, token, date_str, slot):
     """查 gh-pages 上今天的这个时段是否已经出过报告。
 
@@ -114,6 +120,8 @@ def report_exists(repo, token, date_str, slot):
     延迟的 cron，结果 20:53 才推。
 
     返回 True=已出报，False=未出报，None=查询失败（调用方按未出报放行）。
+
+    ⚠️ 光有 True 还不够 —— 还得看它是几点产的，见 report_lead_minutes()。
     """
     req = urllib.request.Request(
         f"https://api.github.com/repos/{repo}/contents/{date_str}-{slot}.html?ref=gh-pages",
@@ -128,6 +136,43 @@ def report_exists(repo, token, date_str, slot):
         return False if e.code == 404 else None
     except Exception:
         return None
+
+
+def report_lead_minutes(repo, token, date_str, slot):
+    """已出报时，该产出写入 gh-pages 的时刻比计划时点**早**多少分钟。
+
+    与 `daily.yml` 的去重同一条判据：早于「计划时点 − EARLY_TOL_MIN」的产出是
+    测试/调试运行，**不占用本时段**。缺了这一步，本机计划任务会重演 2026-09-25
+    的事故 —— 凌晨一次测试产出让 08:10 的触发在**本机侧**就被挡下，根本走不到
+    workflow 里那条已经修好的去重。
+
+    这里用**该文件自己的提交时刻**（commits 接口按 path 过滤），比 workflow 里
+    用的文件 mtime 更准（后者是 tip 提交时刻，对整棵树统一盖章）。两者在现实
+    场景下结论一致，详见 daily.yml 的注释。
+
+    返回分钟数；查不到提交 / 没有计划时点 / 请求失败 → 返回 None（调用方
+    按「不是测试」处理，即照旧拦住，与 workflow 的兜底分支一致）。
+    """
+    plan = SLOT_PLAN.get(slot, "")
+    if not plan:
+        return None
+    try:
+        d = api("GET", f"/repos/{repo}/commits?sha=gh-pages&per_page=1"
+                       f"&path={date_str}-{slot}.html", token=token)
+    except SystemExit:
+        return None
+    if not d:
+        return None
+    raw = ((d[0].get("commit") or {}).get("committer") or {}).get("date", "")
+    if not raw:
+        return None
+    try:
+        when = datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(CST)
+        plan_dt = datetime.strptime(f"{date_str} {plan}",
+                                    "%Y-%m-%d %H:%M").replace(tzinfo=CST)
+    except ValueError:
+        return None
+    return int((plan_dt - when).total_seconds() // 60)
 
 
 PROBE_WORKFLOW = "__token-check-does-not-exist__.yml"
@@ -376,9 +421,16 @@ def main():
         date_str = now_cst.strftime("%Y-%m-%d")
         exists = report_exists(repo, token, date_str, slot)
         if exists is True:
-            print(f"[skip] {date_str} 的{SLOT_CN[slot]}报告已存在，"
-                  f"不重复触发（--force 可忽略）")
-            return
+            lead = report_lead_minutes(repo, token, date_str, slot)
+            if lead is not None and lead > EARLY_TOL_MIN:
+                # 同 daily.yml：过早的产出是测试，不占用本时段，放行正式触发
+                print(f"[rerun] {date_str} 的{SLOT_CN[slot]}报告产出于计划 "
+                      f"{SLOT_PLAN[slot]} 前 {lead} 分钟，判定为测试/调试运行，"
+                      f"不占用本时段，照常触发")
+            else:
+                print(f"[skip] {date_str} 的{SLOT_CN[slot]}报告已存在，"
+                      f"不重复触发（--force 可忽略）")
+                return
         if exists is None:
             print("[warn] 查询 gh-pages 产出失败，按未出报处理，继续触发")
 
