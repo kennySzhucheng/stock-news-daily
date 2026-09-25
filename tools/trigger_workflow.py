@@ -18,9 +18,15 @@
     python tools/trigger_workflow.py --slot am
     python tools/trigger_workflow.py --dry-run          # 只打印，不触发
     python tools/trigger_workflow.py --force            # 跳过"近期已有运行"的检查
+    python tools/trigger_workflow.py --no-push          # 调试：跑流水线但不发微信
+    python tools/trigger_workflow.py --push             # 强制推送，覆盖下面的自动判定
     python tools/trigger_workflow.py --wait             # 触发后等待运行结束并打印结果
     python tools/trigger_workflow.py --print-task-cmd   # 打印 Windows 计划任务注册命令
     python tools/trigger_workflow.py --check            # 只验证令牌能不能用，不触发运行
+
+推送：**早于计划时点（盘前 08:10 / 盘后 15:40）的触发默认不发微信**，
+      因为那时候不可能产出该时段的正式内容——只可能是调试。迟到的补跑照发。
+      想推就 `--push`，不想推就 `--no-push`（见 decide_no_push()）。
 
 查重：默认若「今天的这个时段」已经出过报告（查 gh-pages 上的产出文件），
       就不再触发（`--force` 可忽略）。这是为了避免与云端 cron 撞车——
@@ -54,6 +60,9 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 CST = timezone(timedelta(hours=8))
 WORKFLOW = "daily.yml"
 SLOT_CN = {"am": "盘前", "pm": "盘后"}
+# 各时段的计划时点（北京时间），与 daily.yml 的 cron 及 healthcheck.py 的 PLAN 一致。
+# 用于「现在比计划早多少」的判定——早于计划就不是正式产出，见 decide_no_push()。
+SLOT_PLAN = {"am": "08:10", "pm": "15:40"}
 
 
 def detect_repo():
@@ -269,6 +278,32 @@ def print_task_cmd(script_path):
           "若机器只是休眠/关机错过时点，StartWhenAvailable 会在恢复后尽快补跑一次。")
 
 
+def decide_no_push(slot, now_cst, want_push, want_no_push):
+    """判定这次触发要不要跳过微信推送。返回 (no_push, 说明文字)。
+
+    Server酱 免费版每天只有 5 条（见 docs/keys.md / M6），而且推送是**没有撤回**的：
+    发出去就是发出去了。2026-09-25 凌晨 00:06 有一次为验收而做的真实 dispatch，
+    完整跑了流水线、00:15 推了一条「2026-09-25 · 盘前」到手机上，内容却是前一晚
+    的新闻，还占掉了当天盘前的名额——那份产出让 08:10 的准点触发被判为重复而跳过。
+
+    所以默认规则是：**比计划时点还早的触发，一律按测试处理、不推送**。
+    时间上「还没到该发的时候就发」本身就是测试的铁证——正式触发源不会早发。
+    迟到的补跑（本机 StartWhenAvailable 顺延）仍然推送，那是用户真的该收到的内容。
+
+    `--push` / `--no-push` 可以覆盖默认判定。
+    """
+    if want_push and want_no_push:
+        raise SystemExit("[FAIL] --push 与 --no-push 互斥，只能给一个")
+    plan = SLOT_PLAN[slot]
+    if want_no_push:
+        return True, "--no-push 指定"
+    if want_push:
+        return False, "--push 指定"
+    if now_cst.strftime("%H%M") < plan.replace(":", ""):
+        return True, f"当前 {now_cst.strftime('%H:%M')} 早于计划 {plan}，判定为测试运行"
+    return False, f"当前 {now_cst.strftime('%H:%M')} 不早于计划 {plan}"
+
+
 def main():
     ap = argparse.ArgumentParser(description="按点触发云端日报工作流")
     ap.add_argument("--slot", choices=["am", "pm"], default="",
@@ -284,6 +319,11 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="只打印将要执行的动作")
     ap.add_argument("--force", action="store_true",
                     help="跳过本机侧与本时段的查重并强制重跑（会覆盖当天该时段的日报）")
+    ap.add_argument("--no-push", action="store_true",
+                    help="不发微信推送（调试用）：流水线照跑、日报照上线，"
+                         "只是不占 Server酱 配额、不打扰手机")
+    ap.add_argument("--push", action="store_true",
+                    help="强制发推送，覆盖默认的「早于计划时点则不推」判定")
     ap.add_argument("--wait", action="store_true", help="触发后等待运行结束")
     ap.add_argument("--log-file", default="",
                     help="把输出追加写入该文件（计划任务用；无控制台可看）")
@@ -321,8 +361,12 @@ def main():
 
     repo = detect_repo()
     now_cst = datetime.now(CST)
+    no_push, why = decide_no_push(slot, now_cst, args.push, args.no_push)
     print(f"仓库: {repo}   工作流: {WORKFLOW}   分支: {args.ref}")
-    print(f"时段: {slot}（{SLOT_CN[slot]}）   本地时间: {now_cst.strftime('%m-%d %H:%M')}")
+    print(f"时段: {slot}（{SLOT_CN[slot]}）   本地时间: {now_cst.strftime('%m-%d %H:%M')}"
+          f"   计划时点: {SLOT_PLAN[slot]}")
+    print(("[-] 本次不发微信推送：" + why + "（--push 可强制开启）") if no_push
+          else f"[+] 本次会发微信推送：{why}")
 
     if args.check:
         check_token(repo, token)
@@ -339,7 +383,8 @@ def main():
             print("[warn] 查询 gh-pages 产出失败，按未出报处理，继续触发")
 
     if args.dry_run:
-        print(f"[dry-run] 将触发 {WORKFLOW} @ {args.ref}，inputs.slot={slot}")
+        print(f"[dry-run] 将触发 {WORKFLOW} @ {args.ref}，"
+              f"inputs.slot={slot} inputs.no_push={'true' if no_push else 'false'}")
         return
 
     before = {r["id"] for r in
@@ -347,9 +392,12 @@ def main():
                   token=token).get("workflow_runs", [])}
     api("POST", f"/repos/{repo}/actions/workflows/{WORKFLOW}/dispatches",
         body={"ref": args.ref,
-              "inputs": {"slot": slot, "force": "true" if args.force else "false"}},
+              "inputs": {"slot": slot,
+                         "force": "true" if args.force else "false",
+                         "no_push": "true" if no_push else "false"}},
         token=token)
-    print(f"[OK] 已触发 {SLOT_CN[slot]}日报工作流（HTTP 204）")
+    print(f"[OK] 已触发 {SLOT_CN[slot]}日报工作流（HTTP 204）"
+          + ("　（按 no_push 跳过微信推送）" if no_push else ""))
 
     if args.wait:
         wait_for_run(repo, token, before)

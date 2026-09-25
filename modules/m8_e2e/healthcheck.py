@@ -271,14 +271,26 @@ def check_date(repo, pages_base, date_str):
         got = deliveries[slot]
         plan_dt = datetime.strptime(f"{date_str} {plan_hm}", "%Y-%m-%d %H:%M").replace(tzinfo=CST)
         delay = (got - plan_dt).total_seconds() / 60
-        if delay <= ON_TIME_TOL_MIN:
-            out.append(f"  {SLOT_CN[slot]}  计划 {plan_hm}  送达 {got:%H:%M:%S}  "
-                       f"✓ 准点（{'早' if delay < 0 else '迟'}{fmt_delay(abs(delay))}）")
-        else:
+        # 判据必须是**双向**的。原来只写 `delay <= ON_TIME_TOL_MIN`，于是「早到」
+        # 被当成准点表扬：2026-09-25 盘前计划 08:10、实到 00:15，delay=-475，
+        # −475 ≤ 15 成立 → 打印「✓ 准点（早7h55m）」，当晚体检因此输出
+        # 「一切正常 ✓」，把一次「测试运行占掉正式时段、当天准点触发被去重挡掉」
+        # 的真实故障完整地漏了过去。
+        if delay > ON_TIME_TOL_MIN:
             problems.append((SEVERE, f"{SLOT_CN[slot]}日报迟 {fmt_delay(delay)}"
                                      f"（计划 {plan_hm}，实到 {got:%H:%M}）"))
             out.append(f"  {SLOT_CN[slot]}  计划 {plan_hm}  送达 {got:%H:%M:%S}  "
                        f"⚠ 迟 {fmt_delay(delay)}")
+        elif delay < -ON_TIME_TOL_MIN:
+            problems.append((SEVERE, f"{SLOT_CN[slot]}日报**过早送达** {fmt_delay(abs(delay))}"
+                                     f"（计划 {plan_hm}，实到 {got:%H:%M}）——"
+                                     f"多半是测试/调试运行产出了这一份，"
+                                     f"内容并非该时段的快照"))
+            out.append(f"  {SLOT_CN[slot]}  计划 {plan_hm}  送达 {got:%H:%M:%S}  "
+                       f"⚠ 过早 {fmt_delay(abs(delay))}")
+        else:
+            out.append(f"  {SLOT_CN[slot]}  计划 {plan_hm}  送达 {got:%H:%M:%S}  "
+                       f"✓ 准点（{'早' if delay < 0 else '迟'}{fmt_delay(abs(delay))}）")
 
     # 5：推送是否成功
     out.append("\n推送：")

@@ -18,6 +18,14 @@ on:
         required: false
         default: ''
         type: string
+      # 测试/调试触发用：跑完整条流水线但不发微信，免得把 Server酱 配额
+      # 和用户的手机一起污染。正式触发（cron-job.org、本机计划任务、
+      # GitHub 自己的 schedule）都不带这个字段，推送照常。
+      no_push:
+        description: '不发微信推送（调试用）：填 true 则跳过 M6'
+        required: false
+        default: ''
+        type: string
 
 # gh-pages 部署需要写权限
 permissions:
@@ -77,6 +85,18 @@ jobs:
                  if [ "$H" -lt 12 ]; then SLOT=am; else SLOT=pm; fi ;;
             esac
           fi
+          # 时段定了，计划时点也就定了，与「怎么被触发的」无关——手动触发盘前
+          # 同样计划在 08:10。此前 PLAN 只在「由 schedule 反推时段」那条分支里
+          # 赋值，于是 cron-job.org / 本机任务走的 workflow_dispatch 下 plan 恒为空，
+          # 下面的去重步骤拿不到计划时点，就无法判断已存在的产出是不是测试跑的
+          # （2026-09-25 凌晨一次测试 dispatch 占掉当天盘前名额，08:10 准点触发
+          # 被判重复而跳过，见 M8 条目）。
+          #
+          # DELAY 仍只对 schedule 计算（下面的 if 没动），故 M5/M6 的延迟标注
+          # 不受影响：delay_context 要求 plan 与 delay **同时**非空才会标注。
+          if [ -z "$PLAN" ]; then
+            case "$SLOT" in am) PLAN="08:10" ;; pm) PLAN="15:40" ;; esac
+          fi
           # 只有 schedule 触发且已知计划时点时才存在"延迟"；手动触发无从谈起
           DELAY=""
           if [ "${{ github.event_name }}" = "schedule" ] && [ -n "$PLAN" ]; then
@@ -88,7 +108,7 @@ jobs:
           echo "plan=$PLAN" >> "$GITHUB_OUTPUT"
           echo "delay=$DELAY" >> "$GITHUB_OUTPUT"
           echo "本次运行时段: $SLOT（$([ "$SLOT" = am ] && echo 盘前 || echo 盘后)）"
-          echo "计划时点: ${PLAN:-无（手动触发）}　延迟: ${DELAY:-不适用} 分钟"
+          echo "计划时点: $PLAN　延迟: ${DELAY:-不适用（非 schedule 触发）} 分钟"
 
       # 两个触发源都可能产出同一时段的报告：外部调度（本机计划任务 / cron-job.org）
       # 按点触发 workflow_dispatch，云端 cron 又可能延迟数小时后在同日再触发一次。
@@ -106,24 +126,63 @@ jobs:
       # 触发源因故障补跑时，前一次运行可能仍在进行（并发组会把它排到队列里），
       # 等它真正开始跑时 gh-pages 上已有产出，故不会误判。
       # 确实想覆盖重出时，用 inputs.force=true（本机脚本的 --force）。
+      #
+      # **「有文件」不等于「该时段已经出过报」—— 还得看它是几点产出的。**
+      # 2026-09-25：一次凌晨 00:06 的测试 dispatch 产出了 00:15 的
+      # `2026-09-25-am.html`（内容是前一晚的新闻，标题却写「盘前」），08:10 准点
+      # 触发一查「文件已存在」就整条跳过，用户既没收到推送、当天读到的也是错误
+      # 时点的快照，而所有检查都显示「一切正常」。
+      #
+      # 故增加时间判据：**产出早于「计划时点 − 30 分钟」的，视为测试/调试运行，
+      # 不占用本时段，放行本次正式触发**（阈值见下面 EARLY_TOL_MIN）。判据是
+      # 单向的——只放行「过早」的，「迟到」的一律照旧拦住，否则 GitHub cron 那个
+      # 延迟 4~5 小时的兜底（电脑关机时唯一的保底）会被自己挡死。
+      #
+      # 时间取 `git archive | tar -x` 解出来的文件 mtime。注意它**不是**该文件
+      # 首次被写入的时刻，而是 gh-pages **tip 提交**的时刻（git archive 对整棵树
+      # 统一盖提交日期）。这在本判据下**只会保守、不会误判**：tip 时刻恒 ≥ 该文件
+      # 真正被写入的时刻，所以「mtime 判为过早」时真相比它更早；而 tip 要么就是
+      # 产出该文件的那次部署（00:15 → 判为过早，放行 ✓），要么是更晚的部署
+      # （08:15 → 判为已正点出报，拦住 ✓），计划时点前那半小时内没有部署。
       - name: 检查本时段是否已出报
         id: dup
         if: github.event_name != 'workflow_dispatch' || github.event.inputs.force != 'true'
         run: |
           SLOT="${{ steps.slot.outputs.slot }}"
+          PLAN="${{ steps.slot.outputs.plan }}"
           TODAY=$(TZ=Asia/Shanghai date +%F)
           TARGET="reports/${TODAY}-${SLOT}.html"
+          # 提前多久以上算「不是正式产出」。正式触发源（GitHub schedule /
+          # cron-job.org / 本机任务）都卡在计划时点前后数秒，不可能提前半小时，
+          # 所以提前超过 30 分钟的产出只可能是测试/调试。
+          # 余量取得很紧是**有意的**：宁可对一次「恰好提前 40 分钟的正式产出」
+          # 放行重跑（顶多多一条推送），也不能让一份错误时点的日报占住整天。
+          # 漏网的还有 healthcheck 兜底——它的容差只有 15 分钟，会照样告警。
+          EARLY_TOL_MIN=30
           # 历史日报没恢复成功（首次运行，或 fetch 瞬断）时无从判断，放行——
           # 宁可重复一次，也不能让去重检查挡住出报
           if [ "${{ steps.restore.outputs.ok }}" != "true" ]; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
             echo "历史日报未恢复，无从判断是否重复，照常执行"
-          elif [ -f "$TARGET" ]; then
+          elif [ ! -f "$TARGET" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "今日 ${SLOT} 报告尚未生成，执行本次"
+          elif [ -z "$PLAN" ]; then
+            # 没有计划时点就无从判断早晚，退回旧逻辑（保守：拦住）
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "今日 ${SLOT} 报告已存在（$TARGET），跳过本次以避免重复推送"
           else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "今日 ${SLOT} 报告尚未生成，执行本次"
+            PLAN_E=$(TZ=Asia/Shanghai date -d "$(TZ=Asia/Shanghai date +%F) $PLAN" +%s)
+            FILE_E=$(stat -c %Y "$TARGET")
+            LEAD_MIN=$(( (PLAN_E - FILE_E) / 60 ))
+            if [ "$LEAD_MIN" -gt "$EARLY_TOL_MIN" ]; then
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+              echo "已存在的 $TARGET 产出于计划 ${PLAN} 前 ${LEAD_MIN} 分钟"
+              echo "判定为测试/调试运行，不占用本时段，照常执行正式触发"
+            else
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "今日 ${SLOT} 报告已存在（$TARGET，计划 ${PLAN} 前 ${LEAD_MIN} 分钟产出），跳过本次以避免重复推送"
+            fi
           fi
 
       - name: M1 新闻收集
@@ -192,9 +251,14 @@ jobs:
           REPORT_DELAY_MIN: ${{ steps.slot.outputs.delay }}
         run: python modules/m5_report/report.py
 
-      # M6 失败不影响日报本身（脚本内部已处理，这里再加 always 兜底）
+      # M6 失败不影响日报本身（脚本内部已处理，这里再加 always 兜底）。
+      #
+      # `no_push` 是调试触发的闸门：跑完整条流水线、日报照常上线，只是不占
+      # Server酱 的每日 5 条配额、也不往用户手机上推测试内容。正式触发源
+      # （cron-job.org / 本机计划任务 / GitHub schedule）都不传这个字段，
+      # `'' != 'true'` 成立，推送照常。
       - name: M6 微信推送
-        if: always() && steps.dup.outputs.skip != 'true'
+        if: always() && steps.dup.outputs.skip != 'true' && github.event.inputs.no_push != 'true'
         env:
           SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
           REPORT_BASE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}

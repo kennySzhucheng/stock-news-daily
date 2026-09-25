@@ -172,7 +172,13 @@ python modules/m8_e2e/healthcheck.py --days 7
 # ⑦ 按点触发云端工作流（GitHub 的 cron 会延迟 4~5 小时，见 CHANGELOG 9-18）
 python tools/trigger_workflow.py --slot am          # 令牌自动用本机 gh auth token
 python tools/trigger_workflow.py --print-task-cmd   # 看怎么注册 Windows 计划任务
+python tools/trigger_workflow.py --dry-run          # 只打印，不触发
+python tools/trigger_workflow.py --no-push          # 调试：跑流水线但不发微信
 ```
+
+**调试触发默认不发微信**：早于计划时点（盘前 08:10 / 盘后 15:40）的触发
+一律按测试处理、不推送——那时候不可能产出该时段的正式内容。迟到的补跑照发。
+`--push` / `--no-push` 可覆盖默认判定（见 `decide_no_push()`）。
 
 数据更新后，网页版**刷新页面即可**，服务会按数据文件的修改时间自动重载，不用重启。
 `server.py --source auto`（默认）在有本地流水线产出时用本地的，否则自动回落到
@@ -316,6 +322,15 @@ cron-job.org 自带的 Authentication 字段（用户名随便填如 `x`，密�
 「本时段是否已出报」去重挡住，不会重复推送。不再需要本机任务时用
 `Unregister-ScheduledTask -TaskName "股市情报-盘前" -Confirm:$false` 撤掉即可。
 
+**去重是带时间判据的，不是「有文件就算出过报」。** 产出早于「计划时点 − 30 分钟」
+的视为测试/调试运行，**不占用本时段**，放行正式触发；迟到的照旧拦住（否则会把
+GitHub cron 那个延迟 4~5 小时的兜底挡死）。
+
+这条判据是 2026-09-25 加的，起因是一次真实事故：凌晨 00:06 为验收而做的测试
+dispatch 产出了 00:15 的 `2026-09-25-am.html`，08:10 准点触发一查「文件已存在」
+就整条跳过 —— **既没推送，当天读到的也是前一晚内容的「盘前」报**，而所有检查
+当时都显示「一切正常」。详见 CHANGELOG 当天条目。
+
 ## 八·六、送达体检：让静默失败自己冒出来
 
 这条链路上的失败几乎全是静默的，而且**表象和「只是延迟」长得一模一样**：
@@ -332,7 +347,7 @@ cron-job.org 自带的 Authentication 字段（用户名随便填如 `x`，密�
 | 检查项 | 判据 |
 |---|---|
 | 盘前/盘后两份日报都产出并上线了吗 | 查 gh-pages 上的 `<日期>-am/-pm.html` |
-| 各自准点吗 | 与计划时点 08:10 / 15:40 比，容差 15 分钟 |
+| 各自准点吗 | 与计划时点 08:10 / 15:40 比，**双向**容差 15 分钟——**早太多同样是问题** |
 | 当天有没有**外部触发** | 没有 = cron-job.org 这条准点通路断了 |
 | 当天**真正出报**几次 | **读产物名**，不看 conclusion（被去重跳过也是 success） |
 | 推送成功了吗 | 读 `reports/status-<日期>-<时段>.json`（M6 写入） |
