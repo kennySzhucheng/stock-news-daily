@@ -42,7 +42,13 @@
       对线上 API **全部无效**（会静默返回全部 1400 条/天）
 - [x] M1 真实跑通：**9/9 源全绿**，1098 条；分布 `finance 614 / official 390 /
       policy 40 / announcement 32 / tech 22`
-- [ ] **M2 的 GLM 端到端未跑**（本地无 `ZAI_API_KEY`）—— 待补验后勾选
+- [x] **M2 的 GLM 端到端已跑通**（9-25 15:12，8 批全走真实 LLM 路径，150 → 130 条）：
+      巨潮公告 **32/32 进结构化**且 **32/32 提取到个股**、新浪滚动 21、东财宏观 3；
+      `international` 从长期空缺变成 **32 条**。`m9_web/check.py` 25 项通过（新数据）
+- [x] **查清 ZAI key 的来历（9-25）**：它**一直只在 GitHub Secrets 里**
+      （`daily.yml` 的 `${{ secrets.ZAI_API_KEY }}`），`docs/keys.md` 只是说明文档、
+      **从未抄过值**，Windows 环境变量也没有 —— 所以云端从来没缺过、本地从来没有过。
+      已把 key 写入 `keys.md`（`git check-ignore` 验证不入库），本地 e2e 不必再单独传
 
 ---
 
@@ -70,7 +76,9 @@
       `VALID_CATEGORIES` 里的值漏进下游）
 - [x] 修 `dropped` 被截断分支覆盖的问题：原日志把「被截断」报成「纯无关内容」
       （报 614，实际关键词丢弃 334），现累加后如实报 948
-- [ ] M2 GLM 端到端补验（本地缺 `ZAI_API_KEY`）
+- [x] M2 GLM 端到端已补验（9-25 15:12，8 批全走真实 LLM 路径）：150 → 130 条，
+      `stock 48 / international 32 / policy 32 / other 12 / industry 6`，
+      公告 **32/32** 全部以 `stock` 类别且带个股进入结构化
 
 ---
 
