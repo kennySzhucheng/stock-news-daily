@@ -7,6 +7,7 @@
 """
 import argparse
 import json
+import re
 import sys
 import urllib.request
 from pathlib import Path
@@ -24,6 +25,12 @@ ok_count = fail_count = 0
 def get(path):
     with urllib.request.urlopen(BASE + path, timeout=20) as r:
         return r.status, json.loads(r.read().decode("utf-8"))
+
+
+def get_text(path):
+    """取纯文本（HTML/JS），用于静态页面结构的回归检查"""
+    with urllib.request.urlopen(BASE + path, timeout=20) as r:
+        return r.status, r.read().decode("utf-8", "replace")
 
 
 def check(label, cond, detail=""):
@@ -117,6 +124,14 @@ def main():
         miss = [n for n in stocks if n not in qnames]
         check("候选个股在行情中存在", not miss, f"不在行情里: {miss[:3]}" if miss else "")
 
+        # 沪深 A 股硬约束（picks.py PROMPT 第 7 条 + record() 闸门）：
+        # 账本里已带代码的个股必须是 6/0/3 开头的 6 位（判据与 picks.is_sh_sz_a 一致）
+        badc = [f"{r.get('name')}({r.get('code')})"
+                for r in rows if r.get("kind") == "stock" and r.get("code")
+                and not re.fullmatch(r"[603]\d{5}", str(r["code"]))]
+        check("候选个股均为沪深 A 股", not badc,
+              f"非沪深 A: {badc[:3]}" if badc else "")
+
         # 结构上保证「不是荐股」：推翻条件由 M10 代码强制，账本里不该有空值
         noinv = [r.get("name") for r in rows if not (r.get("invalidation") or "").strip()]
         check("每条候选都有推翻条件", not noinv,
@@ -143,6 +158,13 @@ def main():
         check("均值与样本数同时存在", not no_n,
               f"{'T+' + '/T+'.join(sorted(with_mean))} 有均值，均带 n={[st2[k]['n'] for k in sorted(with_mean)]}"
               if with_mean else "暂无到期回填，跳过")
+
+    # ── M9 持仓标签页（纯前端 + localStorage，无后端接口） ──────
+    st, html = get_text("/")
+    check("页面含持仓标签页", st == 200 and 'data-tab="portfolio"' in html, "")
+    st, js = get_text("/app.js")
+    check("app.js 含持仓报价逻辑",
+          st == 200 and "pfFetchQuotes" in js and "PF_KEY" in js, "")
 
     # 筛选功能：分类过滤后条数应等于分类统计
     st, pol = get("/api/news?cat=policy&limit=2000")

@@ -382,6 +382,19 @@ a.cite:hover{background:var(--accent); color:#fff; text-decoration:none;}
   color:var(--mid); border:1px solid var(--mid); border-radius:4px; vertical-align:1px;
 }
 
+/* ── 持仓（M9 本机标签页） ─────────────────────────────── */
+.pf-form{display:flex; flex-wrap:wrap; gap:10px; align-items:center;}
+.pf-form input{
+  background:var(--bg2); border:1px solid var(--border); border-radius:8px;
+  padding:9px 12px; min-width:0;
+}
+.pf-form input:focus{outline:none; border-color:var(--accent);}
+#pfCode{flex:0 0 190px; letter-spacing:1px;}
+#pfPrice{flex:0 0 120px;}
+#pfShares{flex:0 0 110px;}
+.pf-del{padding:3px 10px; font-size:13px; line-height:1.5;}
+#pfSummary .stat .v.up,#pfSummary .stat .v.down{font-variant-numeric:tabular-nums;}
+
 /* ── 页脚 & 提示 ──────────────────────────────────────── */
 .foot{
   max-width:1080px; margin:26px auto 0; padding:16px 20px 0;

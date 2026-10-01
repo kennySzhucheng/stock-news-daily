@@ -306,6 +306,15 @@ def match_board(name, board_map):
 
 # ---------------------------------------------------------------- LLM 选股
 
+def is_sh_sz_a(code):
+    """是否沪深 A 股 6 位代码：6 开头（沪）/ 0、3 开头（深）。
+
+    排除：北交所（4/8 开头）、沪 B（9 开头）、深 B（2 开头）、
+    港股（5 位数字）、美股（字母）。与 M9 持仓页的 pfTencentCode 判据一致。
+    """
+    return bool(re.fullmatch(r"[603]\d{5}", code or ""))
+
+
 PROMPT_HEAD = """你是 A 股研究助理。下面是今日新闻摘要、一份已完成的市场分析、以及相关个股的当日行情。
 
 请从中挑出 2-{max_stocks} 只个股 + 0-{max_boards} 个板块，作为「今日候选观察清单」。
@@ -324,13 +333,18 @@ PROMPT_HEAD = """你是 A 股研究助理。下面是今日新闻摘要、一份
    「马上买入」等表述。用「纳入观察」「值得跟踪」。
 5. 【置信度】每条标 高/中/低。单源待核实(unve)新闻支撑的最高只能给「中」。
 6. 【依据编号】basis_refs 列出支撑该候选的新闻编号（就是下面清单里的 [n]）。
+7. 【只选沪深 A 股】个股必须是沪深 A 股：沪市 6 开头、深市 0 或 3 开头的
+   6 位数字代码。港股、美股、北交所（4/8 开头）、B 股一律不选，
+   即使它们出现在行情清单或新闻里 —— 下面的行情清单已按此过滤。
+8. 【小资金偏好】用户资金规模小：依据强度相当时**优先单价更低的个股**
+   （一般 20 元以下优先）；单价高的只有依据明显更强时才入选。
 
 ## 输出格式
 只输出 JSON，不要任何解释文字，不要 markdown 围栏：
 {{"candidates":[{{"kind":"stock","name":"","code_hint":"","board":"",
   "logic":"一句话逻辑链","invalidation":"可观测的证伪信号","confidence":"中","basis_refs":[1,2]}}]}}
 
-kind 取 "stock" 或 "board"；code_hint 只在个股且你知道 6 位代码时填，否则留空。
+kind 取 "stock" 或 "board"；code_hint 只在个股且你知道沪深 A 股 6 位代码时填，否则留空。
 
 ## 已完成的市场分析
 {analysis}
@@ -343,9 +357,12 @@ kind 取 "stock" 或 "board"；code_hint 只在个股且你知道 6 位代码时
 
 
 def build_prompt(digest, digest_count, analysis_md, quotes):
+    # 行情清单只给沪深 A 股：新闻里偶尔会带港股/美股，喂进去就是给 LLM 递刀
+    # （prompt 第 7 条要求它不选，但材料里根本不出现才最稳）。
+    a_quotes = [q for q in quotes if is_sh_sz_a(str(q.get("code") or ""))]
     q_lines = "\n".join(
         f"- {q['name']}({q.get('code','')}) 现价 {q.get('price')} 涨跌 {q.get('change_pct')}%"
-        for q in quotes[:60]) or "（今日未取到行情）"
+        for q in a_quotes[:60]) or "（今日未取到行情）"
     return PROMPT_HEAD.format(
         max_stocks=MAX_STOCKS, max_boards=MAX_BOARDS,
         analysis=analysis_md[:12000], quotes=q_lines,
@@ -399,6 +416,15 @@ def parse_candidates(text):
         if not logic:
             print(f"[warn] 丢弃「{name}」：缺逻辑链")
             continue
+        # 个股代码：看得出 6 位数字但不是沪深 A 股（北交所/B 股/港股带后缀等）
+        # 直接丢弃；看不出 6 位代码则清空，交给 record() 按名解析后再判一次
+        code_hint = str(it.get("code_hint") or "").strip()
+        if kind == "stock" and code_hint:
+            m = re.search(r"\d{6}", code_hint)
+            if m and not is_sh_sz_a(m.group(0)):
+                print(f"[warn] 丢弃「{name}」：非沪深 A 股代码 {code_hint}")
+                continue
+            code_hint = m.group(0) if m else ""
         # 复用 M3 的禁用词扫描，让「禁止投资指令」由代码强制而非只靠措辞
         bad, _ = M3.postcheck(logic + inval + name)
         if bad:
@@ -413,7 +439,7 @@ def parse_candidates(text):
         refs = it.get("basis_refs")
         out.append({
             "kind": kind, "name": name,
-            "code_hint": str(it.get("code_hint") or "").strip(),
+            "code_hint": code_hint if kind == "stock" else "",
             "board": str(it.get("board") or "").strip(),
             "logic": logic, "invalidation": inval,
             "confidence": conf if conf in ("高", "中", "低") else "中",
@@ -445,7 +471,7 @@ def resolve_target(cand, board_map, cache, by_name):
         # 「猜市场」——那条针对的是美股/港股混在一起、前缀无从推断的情况。
         q = by_name.get(cand["name"])
         code = (q or {}).get("code") or ""
-        if re.fullmatch(r"\d{6}", code):
+        if is_sh_sz_a(code):            # 只兜底沪深 A 股，港股 5 位码等一律不猜
             return (f"{'1' if code[0] == '6' else '0'}.{code}",
                     code, q.get("market", ""))
         return None, None, ""
@@ -481,6 +507,22 @@ def record(rows, today, slot, cands, bench, board_map, cache, by_code, by_name):
             print(f"[warn] {cid} 已存在，跳过（幂等）")
             continue
         secid, code, market = resolve_target(cand, board_map, cache, by_name)
+        # 沪深 A 股硬闸（用户要求「主要为沪A和深A」）：解析出来发现是港股/美股/
+        # 北交所/B 股的，整条丢弃而非降级记账 —— 用户账户买不了这些，
+        # 留在账本里只会污染复盘样本。name 解析失败（code/secid 均空）的
+        # 仍按 M10 要求 4 记账不打分，因为无从判断它属于哪个市场。
+        if cand["kind"] == "stock":
+            sec_prefix = (secid or "").split(".", 1)[0]
+            # 解析全失败时再查一次 quotes.json 的市场标签（M4 给过「港股/美股」
+            # 但本次 resolve 抽风的场景），有标签就按标签判
+            mkt = market or str(
+                (by_name.get(cand["name"]) or {}).get("market") or "")
+            if ((code and not is_sh_sz_a(code))
+                    or sec_prefix in ("105", "106", "107", "116")
+                    or "港" in mkt or "美" in mkt):
+                print(f"[warn] 丢弃「{cand['name']}」：非沪深 A 股"
+                      f"（code={code} secid={secid} market={mkt}）")
+                continue
         price = prev = src = None
         if secid:
             price, prev, src = base_quote(secid, code, by_code)

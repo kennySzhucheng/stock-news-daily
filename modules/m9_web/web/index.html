@@ -25,6 +25,7 @@
   <button class="tab active" data-tab="overview">总览</button>
   <button class="tab" data-tab="news">新闻</button>
   <button class="tab" data-tab="quotes">行情</button>
+  <button class="tab" data-tab="portfolio">持仓</button>
   <button class="tab" data-tab="boards">板块</button>
   <button class="tab" data-tab="analysis">深度分析</button>
   <button class="tab" data-tab="picks">候选</button>
@@ -139,6 +140,54 @@
     </div>
   </section>
 
+  <!-- ── 持仓 ───────────────────────────────────────────── -->
+  <section class="panel hidden" id="panel-portfolio">
+    <div class="card">
+      <h2>添加持仓<span class="h-count">数据只存在本机浏览器</span></h2>
+      <p class="muted small">
+        持仓数据保存在<b>本浏览器的 localStorage</b>，不上传服务器、换设备不同步、清浏览器数据会丢。
+        盈亏仅供参考，<b>以券商 app 为准</b>；报价来自腾讯行情接口，打开本页时实时拉取。
+      </p>
+      <form id="pfForm" class="pf-form">
+        <input id="pfCode" inputmode="numeric" maxlength="6" placeholder="代码（6位，如 600519）" autocomplete="off">
+        <input id="pfPrice" inputmode="decimal" placeholder="买入价" autocomplete="off">
+        <input id="pfShares" inputmode="numeric" placeholder="股数" autocomplete="off">
+        <button class="btn primary" type="submit">添加</button>
+        <span class="muted small">只支持沪深 A 股（60 / 00 / 30 开头）</span>
+      </form>
+    </div>
+
+    <div class="stat-grid" id="pfSummary"></div>
+
+    <div class="card">
+      <h2>我的持仓<span class="h-count" id="pfCount"></span>
+        <span style="flex:1"></span>
+        <button class="btn ghost" id="pfRefresh" type="button">↻ 刷新报价</button>
+      </h2>
+      <div class="table-wrap">
+        <table class="tbl" id="pfTable">
+          <thead><tr>
+            <th>个股</th>
+            <th>现价</th>
+            <th>今日涨跌</th>
+            <th>买入价</th>
+            <th>股数</th>
+            <th>市值</th>
+            <th>盈亏</th>
+            <th></th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="muted small" id="pfQuoteTime"></div>
+    </div>
+
+    <div class="card">
+      <h2>持仓相关新闻（今日）<span class="h-count" id="pfNewsCount"></span></h2>
+      <div id="pfNewsList" class="news-list"></div>
+    </div>
+  </section>
+
   <!-- ── 板块 ───────────────────────────────────────────── -->
   <section class="panel hidden" id="panel-boards">
     <div class="result-bar"><span id="boardCount">—</span></div>
@@ -175,6 +224,7 @@
       <p class="muted small">
         每条候选都带<b>推翻条件</b>与新闻依据；其后续表现按 T+1/T+3/T+5 原样回填，
         <b>含跑输的</b>，不做选择性展示。超额相对沪深300，收益率为未复权口径。
+        个股候选<b>仅限沪深 A 股</b>，同等依据下优先单价更低的标的。
         <b>不是买入指令，决策权归您本人。</b>
       </p>
       <div id="picksBody">加载中…</div>
