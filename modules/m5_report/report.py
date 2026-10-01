@@ -198,7 +198,8 @@ def md_to_html(md_text):
         t = esc(t)
         t = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", t)
         t = re.sub(r"\*(.+?)\*", r"<em>\1</em>", t)
-        # 引用编号 [12] 保留原样（已经是普通文本）
+        # 引用编号 [12] → 上标弱化（财经媒体风：引用退居正文之后）
+        t = re.sub(r"\[(\d+)\]", r'<sup class="cite-n">\1</sup>', t)
         return t
 
     while i < len(lines):
@@ -531,7 +532,7 @@ def render_picks(picks, date_str):
         hist_html = f"""<details class="fold">
   <summary>
     <h3>往期候选回填<span class="h2-count">{len(rows_html)} 条</span></h3>
-    <span class="fold-hint"><span class="fold-label"></span><span class="fold-arrow">▸</span></span>
+    <span class="fold-hint"><span class="fold-label"></span><span class="fold-arrow"></span></span>
   </summary>
   {''.join(rows_html)}
   <p class="pick-note">收益率为<b>未复权</b>口径；区间内若发生除权除息，该档会被低估。
@@ -554,51 +555,86 @@ def render_picks(picks, date_str):
 # ---------------------------------------------------------------------------
 CSS = """
 :root{
-  --bg:#0f1115; --bg2:#161a22; --card:#1a1f2b; --border:#2a3140;
-  --text:#e6e9ef; --muted:#9aa4b5; --accent:#4c8dff;
-  --up:#ff5c5c; --down:#2ecc71; --flat:#9aa4b5;
-  --confirmed:#4c8dff; --unverified:#f5a623;
+  /* 财经媒体风 · 浅色纸面主调：暖白底 / 墨色字 / 细线分割，
+     红绿只上数字，强调色用墨蓝（红绿已被涨跌独占） */
+  --bg:#f7f4ee; --bg2:#efeae1; --card:#ffffff; --border:#ddd6c9;
+  --ink:#1f1d1a; --text:#2b2822; --muted:#7a746a;
+  --accent:#1e4d7a; --warn:#9a6b12;
+  --up:#c4362b; --down:#12734f; --flat:#7a746a;
+  --confirmed:#1e4d7a; --unverified:#9a6b12;
+  --serif:Georgia,"Times New Roman","Songti SC","SimSun","Noto Serif CJK SC",
+    "Source Han Serif SC",serif;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",
+    "Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
 }
-@media (prefers-color-scheme: light){
-  :root:not([data-theme="dark"]){
-    --bg:#f5f6f8; --bg2:#ffffff; --card:#ffffff; --border:#e3e6ec;
-    --text:#1c2230; --muted:#6b7486; --accent:#2f6fe0;
-    --up:#e04848; --down:#1a9e5c; --flat:#6b7486;
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#15161a; --bg2:#1c1d22; --card:#1c1d22; --border:#2e2f36;
+    --ink:#f0ede6; --text:#ddd9d1; --muted:#97918a;
+    --accent:#7fb0e0; --warn:#e0a94e;
+    --up:#ff6b5e; --down:#3fbd8a; --flat:#97918a;
+    --confirmed:#7fb0e0; --unverified:#e0a94e;
   }
 }
 *{box-sizing:border-box; margin:0; padding:0;}
 html{-webkit-text-size-adjust:100%;}
 body{
   background:var(--bg); color:var(--text);
-  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",
-    "Hiragino Sans GB","Microsoft YaHei",sans-serif;
-  line-height:1.7; font-size:16px; padding:0 0 48px;
+  font-family:var(--sans);
+  line-height:1.78; font-size:16px; padding:0 0 48px;
   max-width:760px; margin:0 auto;
 }
 a{color:var(--accent); text-decoration:none; word-break:break-all;}
+/* 报头：报纸双线（粗上细下），无色块无 emoji */
 header.hero{
-  padding:24px 16px 12px; background:var(--bg2);
-  border-bottom:1px solid var(--border);
+  padding:0 16px 8px; background:var(--bg);
+  border-top:4px solid var(--ink); border-bottom:1px solid var(--ink);
 }
-header.hero h1{font-size:22px; font-weight:700;}
-header.hero .date{color:var(--muted); font-size:14px; margin-top:4px;}
+header.hero .kicker{
+  font:12px/1.6 var(--sans); letter-spacing:.18em; color:var(--muted);
+  padding-top:14px;
+}
+header.hero h1{
+  font-family:var(--serif); font-size:26px; font-weight:700;
+  letter-spacing:.02em; line-height:1.25;
+}
+header.hero .date{
+  color:var(--muted); font-size:12.5px; letter-spacing:.06em;
+  margin-top:8px; padding-top:6px; border-top:1px solid var(--border);
+}
+@media (min-width:600px){
+  header.hero h1{font-size:32px;}
+}
 .summary-box{
-  margin:16px; padding:14px 16px; background:var(--card);
-  border:1px solid var(--border); border-left:3px solid var(--accent);
-  border-radius:8px; font-size:15px;
+  margin:16px 16px 0; padding:14px 16px; background:var(--bg2);
+  border-top:1px solid var(--border); border-bottom:1px solid var(--border);
+  font-size:16px;
 }
 main{padding:0 12px;}
-section.block{margin:20px 8px;}
+section.block{margin:24px 8px;}
 section.block > h2,
 section.block > details > summary > h2{
-  font-size:18px; font-weight:700; margin-bottom:12px;
-  padding-left:10px; border-left:4px solid var(--accent);
+  font-family:var(--serif); font-size:18px; font-weight:700;
+  margin-bottom:12px; padding-bottom:8px;
+  border-bottom:1px solid var(--border);
+  counter-increment:sec;
+}
+/* 版块序号：纯 CSS 计数（01 02 03），不动模板结构 */
+section.block > h2::before,
+section.block > details > summary > h2::before{
+  content:counter(sec,decimal-leading-zero) " ";
+  font:400 12px/1 var(--sans); color:var(--muted);
+  letter-spacing:.1em; margin-right:8px; vertical-align:2px;
+}
+@media (min-width:600px){
+  section.block > h2,
+  section.block > details > summary > h2{font-size:20px;}
 }
 /* 分板块新闻默认折叠：它占全文八成篇幅（实测 09-24 盘后 24888/31592 字），
    展开着会把真正有判断价值的前四块内容淹在几十屏新闻下面 */
 section.block > details > summary{
   cursor:pointer; list-style:none; display:flex; align-items:center;
-  justify-content:space-between; gap:10px; padding:4px 0; border-radius:6px;
+  justify-content:space-between; gap:10px; padding:4px 0;
   user-select:none; -webkit-tap-highlight-color:transparent;
 }
 section.block > details > summary::-webkit-details-marker{display:none;}
@@ -608,58 +644,69 @@ section.block > details > summary:focus-visible{outline:2px solid var(--accent);
 .fold-hint{font-size:13px; color:var(--muted); white-space:nowrap;}
 .fold-label::after{content:"展开";}
 details[open] > summary .fold-label::after{content:"收起";}
-.fold-arrow{display:inline-block; margin-left:4px; transition:transform .15s ease;}
+/* 折叠箭头：CSS 三角，替代 ▸ 字符 */
+.fold-arrow{
+  display:inline-block; width:0; height:0; margin-left:6px;
+  border-left:5px solid currentColor; border-top:4px solid transparent;
+  border-bottom:4px solid transparent; transition:transform .15s ease;
+}
 details[open] > summary .fold-arrow{transform:rotate(90deg);}
 .news-group{margin-bottom:18px;}
 .news-group h3{
-  font-size:15px; color:var(--accent); font-weight:600;
+  font-family:var(--serif); font-size:15.5px; color:var(--ink); font-weight:700;
   margin:14px 0 8px; display:flex; align-items:center; gap:8px;
 }
 .news-group h3 .count{
-  background:var(--bg2); color:var(--muted); font-size:12px;
-  padding:1px 8px; border-radius:10px; border:1px solid var(--border);
+  background:none; color:var(--muted); font:400 12px var(--sans);
+  padding:0; border:0;
 }
+/* 新闻条目流：细线分隔，非卡片 */
 .news-card{
-  background:var(--card); border:1px solid var(--border);
-  border-radius:8px; padding:12px 14px; margin-bottom:10px;
+  background:transparent; border:0; border-bottom:1px solid var(--border);
+  padding:14px 0; margin-bottom:0;
 }
+.news-card:last-of-type{border-bottom:0;}
 .news-text{font-size:15px; word-break:break-word;}
 .news-meta{
   display:flex; flex-wrap:wrap; align-items:center; gap:6px;
   margin-top:8px; font-size:13px; color:var(--muted);
 }
 .badge{
-  display:inline-block; font-size:12px; padding:1px 8px;
-  border-radius:4px; line-height:1.5; white-space:nowrap;
+  display:inline-block; font-size:12px; padding:1px 7px;
+  border-radius:2px; line-height:1.5; white-space:nowrap;
 }
-.badge.confirmed{background:rgba(76,141,255,.15); color:var(--confirmed); border:1px solid var(--confirmed);}
-.badge.unverified{background:rgba(245,166,35,.15); color:var(--unverified); border:1px solid var(--unverified);}
+.badge.confirmed{background:none; color:var(--confirmed); border:1px solid var(--confirmed);}
+.badge.unverified{background:none; color:var(--unverified); border:1px solid var(--unverified);}
 .badge.senti{border:1px solid var(--border);}
-.badge.senti.up{color:var(--up); border-color:var(--up); background:rgba(255,92,92,.08);}
-.badge.senti.down{color:var(--down); border-color:var(--down); background:rgba(46,204,113,.08);}
+.badge.senti.up{color:var(--up); border-color:var(--up); background:none;}
+.badge.senti.down{color:var(--down); border-color:var(--down); background:none;}
 .badge.senti.flat{color:var(--flat);}
 .tag{
-  font-size:12px; padding:1px 7px; border-radius:4px;
-  background:var(--bg2); border:1px solid var(--border); color:var(--muted);
+  font-size:12px; padding:1px 6px; border-radius:2px;
+  background:var(--bg2); border:0; color:var(--muted);
 }
-.tag.stock{color:var(--accent); border-color:var(--accent);}
+.tag.stock{color:var(--accent); border:1px solid var(--accent); background:none;}
 .src-link{font-size:13px;}
-.table-wrap{overflow-x:auto; -webkit-overflow-scrolling:touch; border-radius:8px; border:1px solid var(--border);}
-table.quote-table{width:100%; border-collapse:collapse; background:var(--card); font-size:14px; min-width:420px;}
+.table-wrap{overflow-x:auto; -webkit-overflow-scrolling:touch; border-radius:0; border:1px solid var(--border);}
+table.quote-table{width:100%; border-collapse:collapse; background:var(--bg); font-size:14px; min-width:420px; font-variant-numeric:tabular-nums;}
 table.quote-table th, table.quote-table td{
   padding:10px 12px; text-align:left; border-bottom:1px solid var(--border);
   white-space:nowrap;
 }
-table.quote-table thead th{background:var(--bg2); color:var(--muted); font-weight:600; font-size:13px;}
+table.quote-table thead th{
+  background:var(--bg2); color:var(--muted); font-weight:600; font-size:12px;
+  letter-spacing:.06em;
+}
 .q-name{font-weight:600;}
 .q-code{display:block; font-size:12px; color:var(--muted); font-weight:400;}
 .q-mkt{color:var(--muted); font-size:13px;}
 .up{color:var(--up);} .down{color:var(--down);} .flat{color:var(--flat);}
+/* 市场分析正文：去卡片化，靠排版层次立结构 */
 .analysis{
-  background:var(--card); border:1px solid var(--border);
-  border-radius:8px; padding:16px; font-size:15px;
+  background:transparent; border:0;
+  padding:0; font-size:15px;
 }
-.analysis h1,.analysis h2,.analysis h3{margin:16px 0 8px; line-height:1.4;}
+.analysis h1,.analysis h2,.analysis h3{margin:16px 0 8px; line-height:1.4; font-family:var(--serif);}
 .analysis h1{font-size:20px;} .analysis h2{font-size:18px;} .analysis h3{font-size:16px;}
 .analysis p{margin:8px 0;}
 .analysis ul,.analysis ol{margin:8px 0 8px 22px;}
@@ -670,105 +717,117 @@ table.quote-table thead th{background:var(--bg2); color:var(--muted); font-weigh
   border:1px solid var(--border); padding:8px 10px; text-align:left; vertical-align:top;
 }
 .analysis .md-table th{background:var(--bg2); white-space:nowrap;}
-.analysis strong{color:var(--text);}
+.analysis strong{color:var(--ink);}
+/* 行内引用编号 [n] → 上标弱化；连排时补逗号避免数字粘连误读 */
+.cite-n{font-size:.72em; color:var(--muted); letter-spacing:.02em;
+  vertical-align:super; line-height:1;}
+.cite-n + .cite-n::before{content:",";}
+/* 风险声明：双线规线页脚 */
 footer.risk{
-  margin:28px 8px 8px; padding:16px; background:var(--bg2);
-  border:1px solid var(--border); border-radius:8px;
+  margin:28px 8px 8px; padding:16px 0 8px; background:transparent;
+  border:0; border-top:3px double var(--ink); border-radius:0;
   font-size:13px; color:var(--muted); line-height:1.6;
 }
-footer.risk h3{font-size:14px; color:var(--unverified); margin-bottom:6px;}
+footer.risk h3{font-family:var(--serif); font-size:14px; color:var(--ink); margin-bottom:6px;}
 .muted{color:var(--muted);} .small{font-size:13px;} .empty{color:var(--muted); padding:12px 0;}
 .index-item{
-  display:block; background:var(--card); border:1px solid var(--border);
-  border-radius:8px; padding:14px 16px; margin-bottom:10px; color:var(--text);
+  display:block; background:transparent; border:1px solid var(--border);
+  border-radius:0; padding:14px 16px; margin-bottom:10px; color:var(--text);
 }
-.index-item .d{font-weight:600;} .index-item .s{color:var(--muted); font-size:13px;}
-.latest-item{border-left:3px solid var(--accent); margin-bottom:18px;}
+.index-item .d{font-weight:600; font-family:var(--serif); font-size:16px;}
+.index-item .s{color:var(--muted); font-size:13px;}
+.latest-item{border-top:1px solid var(--ink); border-bottom:1px solid var(--ink); margin-bottom:18px;}
 
 /* 时段徽章：盘前 / 盘后 */
 .slot-badge{
-  display:inline-block; font-size:12px; padding:1px 8px; border-radius:4px;
+  display:inline-block; font-size:12px; padding:1px 7px; border-radius:2px;
   margin-right:6px; vertical-align:1px; white-space:nowrap;
 }
-.slot-badge.am{background:rgba(245,166,35,.15); color:var(--unverified); border:1px solid var(--unverified);}
-.slot-badge.pm{background:rgba(76,141,255,.15); color:var(--accent); border:1px solid var(--accent);}
+.slot-badge.am{background:none; color:var(--warn); border:1px solid var(--warn);}
+.slot-badge.pm{background:none; color:var(--accent); border:1px solid var(--accent);}
 
 /* 定时延迟提示条 */
 .delay-banner{
-  margin:12px 16px 0; padding:10px 14px; border-radius:8px;
-  background:rgba(245,166,35,.12); border:1px solid var(--unverified);
+  margin:12px 16px 0; padding:10px 14px; border-radius:0;
+  background:var(--bg2); border:0; border-left:3px solid var(--warn);
   font-size:13px; line-height:1.6; color:var(--text);
 }
-.delay-banner b{color:var(--unverified);}
+.delay-banner b{color:var(--warn);}
 
-/* 顶部版块跳转 */
+/* 顶部版块跳转：竖线分隔的文字索引（报刊目录式），非胶囊 */
 nav.toc{
-  display:flex; gap:8px; padding:10px 16px; background:var(--bg2);
+  display:flex; gap:0; padding:10px 16px; background:var(--bg);
   border-bottom:1px solid var(--border); overflow-x:auto;
   -webkit-overflow-scrolling:touch;
 }
 nav.toc a{
-  font-size:13px; padding:4px 12px; border-radius:14px; white-space:nowrap;
-  background:var(--card); border:1px solid var(--border); color:var(--text);
+  font-size:13px; padding:4px 10px; white-space:nowrap;
+  background:none; border:0; color:var(--text);
 }
+nav.toc a:first-child{padding-left:0;}
+nav.toc a + a{border-left:1px solid var(--border);}
+nav.toc a:hover{color:var(--accent);}
 section.block{scroll-margin-top:8px;}
 section.block > h2{display:flex; align-items:center; gap:8px;}
 .h2-count{
-  font-size:12px; font-weight:400; color:var(--muted);
-  background:var(--bg2); border:1px solid var(--border);
-  padding:1px 8px; border-radius:10px;
+  font-size:12.5px; font-weight:400; color:var(--muted);
+  background:none; border:0; padding:0;
 }
 
 /* 候选观察清单（M10）。折叠的 h3 需要自己一份标题样式 —— 上面那条
    `section.block > details > summary > h2` 只管 h2，h3 拿不到。 */
 section.block > details > summary > h3{
-  font-size:16px; font-weight:700; margin-bottom:0; padding-left:10px;
-  border-left:4px solid var(--accent); display:flex; align-items:center; gap:8px;
+  font-family:var(--serif); font-size:16px; font-weight:700; margin-bottom:0;
+  padding-bottom:6px; border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:8px;
 }
 .pick-note{font-size:12.5px; color:var(--muted); line-height:1.6; margin:0 0 12px;}
-.pick-empty{font-size:13.5px; color:var(--muted); background:var(--card);
-  border:1px dashed var(--border); border-radius:8px; padding:12px 14px;}
-.pick-card{background:var(--card); border:1px solid var(--border);
-  border-radius:8px; padding:12px 14px; margin-bottom:10px;}
+.pick-empty{font-size:13.5px; color:var(--muted); background:var(--bg2);
+  border:0; border-radius:0; padding:12px 14px;}
+.pick-card{background:transparent; border:0; border-bottom:1px solid var(--border);
+  border-radius:0; padding:14px 0; margin-bottom:0;}
+.pick-card:last-of-type{border-bottom:0;}
 .pick-head{display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:15px;}
 .pick-conf{font-size:11.5px; color:var(--muted); border:1px solid var(--border);
-  border-radius:10px; padding:1px 8px;}
+  border-radius:2px; padding:1px 7px;}
 .pick-tag{font-size:11px; color:var(--accent); border:1px solid var(--accent);
-  border-radius:10px; padding:1px 7px;}
+  border-radius:2px; padding:1px 6px;}
 .pick-logic{font-size:14px; line-height:1.65; margin:8px 0 6px;}
 .pick-inval{font-size:13px; line-height:1.6; margin:0; color:var(--muted);}
 .pick-inval b{color:var(--text);}
 .pick-foot{font-size:12px; color:var(--muted); margin-top:8px;
   display:flex; flex-wrap:wrap; gap:6px; align-items:center;}
-.pick-ref{background:var(--bg2); border:1px solid var(--border);
-  border-radius:8px; padding:0 5px;}
+.pick-ref{background:var(--bg2); border:0;
+  border-radius:2px; padding:0 5px;}
 /* 回填明细：逐条列出，跑输的与跑赢的同版式同字号 */
-.pick-row{background:var(--card); border:1px solid var(--border);
-  border-radius:8px; padding:10px 12px; margin-bottom:8px;}
+.pick-row{background:transparent; border:0; border-bottom:1px solid var(--border);
+  border-radius:0; padding:12px 0; margin-bottom:0;}
+.pick-row:last-of-type{border-bottom:0;}
 .pick-row-head{font-size:13px; display:flex; flex-wrap:wrap; gap:6px; align-items:center;}
 .pick-base{font-size:12px; color:var(--muted);}
 .pick-tiers{display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;}
 .pick-tier{flex:1 1 84px; background:var(--bg2); border:1px solid var(--border);
-  border-radius:6px; padding:6px 8px; font-size:13px; display:flex;
-  flex-direction:column; gap:2px;}
+  border-radius:0; padding:6px 8px; font-size:13px; display:flex;
+  flex-direction:column; gap:2px; font-variant-numeric:tabular-nums;}
 .pick-tier-k{font-size:11px; color:var(--muted);}
 .pick-alpha{font-size:11.5px; color:var(--muted);}
 .pick-pending{font-size:12px; color:var(--muted);}
 .pick-lag{font-size:10.5px; color:var(--muted); border:1px solid var(--border);
-  border-radius:8px; padding:0 5px; margin-left:4px;}
-.pick-stats{font-size:13px; background:var(--bg2); border:1px solid var(--border);
-  border-radius:8px; padding:8px 12px; margin:0 0 10px; line-height:1.7;}
+  border-radius:2px; padding:0 5px; margin-left:4px;}
+.pick-stats{font-size:13px; background:var(--bg2); border:0;
+  border-radius:0; padding:8px 12px; margin:0 0 10px; line-height:1.7;}
 
 /* 索引页：按日期分组 */
 .day-group{
-  background:var(--card); border:1px solid var(--border); border-radius:8px;
-  padding:12px 14px; margin-bottom:10px;
+  background:transparent; border:0; border-bottom:1px solid var(--border);
+  border-radius:0; padding:14px 0; margin-bottom:0;
 }
-.day-date{font-weight:600; font-size:15px; margin-bottom:8px;}
+.day-group:last-of-type{border-bottom:0;}
+.day-date{font-family:var(--serif); font-weight:700; font-size:17px; margin-bottom:8px;}
 .day-links{display:flex; flex-wrap:wrap; gap:8px;}
 .slot-link{
   display:flex; align-items:center; gap:8px; flex:1 1 120px;
-  padding:8px 12px; border-radius:6px; background:var(--bg2);
+  padding:8px 12px; border-radius:0; background:var(--bg2);
   border:1px solid var(--border); color:var(--text); font-size:14px;
 }
 .slot-link.am{border-left:3px solid var(--unverified);}
@@ -804,7 +863,7 @@ def build_page(data, date_str, slot, delay=None):
     delay = delay or {"late": False}
     title_suffix = f"（{delay['short']}）" if delay.get("late") else ""
     delay_banner = (
-        f'<div class="delay-banner">⚠️ <b>定时任务延迟</b><br>{esc(delay["text"])}</div>'
+        f'<div class="delay-banner"><b>提示 · 定时任务延迟</b><br>{esc(delay["text"])}</div>'
         if delay.get("late") else ""
     )
 
@@ -818,7 +877,8 @@ def build_page(data, date_str, slot, delay=None):
 </head>
 <body>
 <header class="hero">
-  <h1>📊 股市情报日报</h1>
+  <div class="kicker">STOCK NEWS DAILY</div>
+  <h1>股市情报日报</h1>
   <div class="date">
     <span class="slot-badge {esc(slot)}">{esc(slot_cn)}</span>
     {esc(date_str)} · AI 自动生成 · 仅供参考
@@ -851,7 +911,7 @@ def build_page(data, date_str, slot, delay=None):
     <details class="fold">
       <summary>
         <h2>分板块新闻<span class="h2-count">{news_count} 条</span></h2>
-        <span class="fold-hint"><span class="fold-label"></span><span class="fold-arrow">▸</span></span>
+        <span class="fold-hint"><span class="fold-label"></span><span class="fold-arrow"></span></span>
       </summary>
       {news_html}
     </details>
@@ -859,7 +919,7 @@ def build_page(data, date_str, slot, delay=None):
 </main>
 
 <footer class="risk">
-  <h3>⚠️ 风险声明</h3>
+  <h3>风险声明</h3>
   <p>本报告由 AI 自动生成，仅供参考，不构成任何投资建议。新闻解读可能存在偏差，
   市场有风险，投资需谨慎，请独立判断。所有 AI 结论均基于文中列出的新闻原文，
   未经过人工核实，单一来源信息标注"待核实"。决策权归您本人。</p>
@@ -915,7 +975,7 @@ def build_index(report_files):
     has_latest = (REPORTS_DIR / "latest.html").exists()
     latest_link = (
         '<a class="index-item latest-item" href="latest.html">'
-        '<div class="d">⚡ 最新一期</div>'
+        '<div class="d">最新一期</div>'
         '<div class="s">直接打开最近一次运行生成的日报</div></a>'
         if has_latest else ""
     )
@@ -929,7 +989,8 @@ def build_index(report_files):
 </head>
 <body>
 <header class="hero">
-  <h1>📊 股市情报日报</h1>
+  <div class="kicker">STOCK NEWS DAILY</div>
+  <h1>股市情报日报</h1>
   <div class="date">全部日报 · 按日期倒序 · 每天盘前/盘后各一份</div>
 </header>
 <main>
