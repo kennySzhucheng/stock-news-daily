@@ -53,9 +53,12 @@ CST = timezone(timedelta(hours=8))
 BENCH_SECID = "1.000300"      # 沪深300，与个股同一端点同一字段结构，实测可用
 BENCH_NAME = "沪深300"
 
-# 板块指数：东财板块代码前缀 90（实测 secid=90.BK0447 可取到行情）
+# 板块指数：东财板块代码前缀 90（实测 secid=90.BK0447 可取到行情）。
+# pz 服务端钳在 100（传 1000 也只回 100），且按 fid=f3 涨跌幅排序 ——
+# 只取第一页 = 只有「当日涨幅前 100」的板块，半导体这类常态板块会整批漏掉
+# （2026-10-01 --probe 实测三个常用板块全部未匹配），必须翻页取全。
 BOARD_LIST_API = ("https://push2.eastmoney.com/api/qt/clist/get"
-                  "?pn=1&pz=1000&po=1&np=1&fltt=2&invt=2&fid=f3"
+                  "?pn={pn}&pz=100&po=1&np=1&fltt=2&invt=2&fid=f3"
                   "&fs=m:90+t:{t}&fields=f12,f14")
 # M4._get_json 不打备用域名（那层循环在 fetch_quote 自己身上），故这里自己走一遍
 BOARD_LIST_MIRROR = BOARD_LIST_API.replace("//push2.eastmoney.com", "//push2delay.eastmoney.com")
@@ -229,22 +232,34 @@ def build_board_map():
     cached = _load_board_cache()
     fresh = {}
     for t in BOARD_TYPES:
-        d, err = None, None
-        for api in (BOARD_LIST_API, BOARD_LIST_MIRROR):
-            try:
-                d = M4._get_json(api.format(t=t))
+        # 服务端每页最多 100（pz 钳制），逐页取到末页；total 在第一页的
+        # data.total 里，比 len 多一层保险（接口抽风返回空页时也能停）
+        rows, total = [], None
+        for pn in range(1, 21):
+            d, err = None, None
+            for api in (BOARD_LIST_API, BOARD_LIST_MIRROR):
+                try:
+                    d = M4._get_json(api.format(t=t, pn=pn))
+                    break
+                except Exception as e:
+                    err = e
+            if d is None:
+                if pn == 1:
+                    print(f"[warn] 板块列表 t={t} 取数失败（含备用域名）: {str(err)[:50]}")
+                else:
+                    print(f"[warn] 板块列表 t={t} 第 {pn} 页失败，用已取到的 {len(rows)} 条")
                 break
-            except Exception as e:
-                err = e
-        if d is None:
-            print(f"[warn] 板块列表 t={t} 取数失败（含备用域名）: {str(err)[:50]}")
-            continue
-        rows = (d.get("data") or {}).get("diff") or []
+            page = (d.get("data") or {}).get("diff") or []
+            rows.extend(page)
+            total = (d.get("data") or {}).get("total") or total
+            if len(page) < 100 or (total and len(rows) >= total):
+                break
+            time.sleep(0.3)
         for r in rows:
             code, name = r.get("f12"), r.get("f14")
             if code and name:
                 fresh.setdefault(name, {"code": code, "secid": f"90.{code}"})
-        print(f"[OK] 板块列表 t={t}: {len(rows)} 个")
+        print(f"[OK] 板块列表 t={t}: {len(rows)} 个" + (f"/共 {total}" if total else ""))
     if fresh:
         merged = dict(cached)
         merged.update(fresh)          # 缓存打底，本次结果覆盖（只抓到一类也不丢另一类）
