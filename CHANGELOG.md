@@ -4,6 +4,48 @@
 
 ---
 
+## 2026-10-01 · 两页美化：财经媒体风（浅色为主） ✅ 完成
+
+用户反馈日报页与网页版「不够美观、AI 味太浓」，方向定为**财经媒体风 + 浅色纸面为主**
+（深色仅作 `prefers-color-scheme` 适配），两页共用一套 token。
+
+### 一、M5 日报（report.py）
+
+- **token 极性翻转**：`--bg:#f7f4ee` 暖白纸面进 `:root`，深色值移入 dark media；
+  红绿只上数字（`--up/--down`），强调色墨蓝 `--accent`（红涨绿跌已把红绿占掉）
+- **扁平报头**：上下 ink 双线 + `STOCK NEWS DAILY` kicker + 衬线大标题；数字
+  `tabular-nums`
+- **版块 h2** 衬线 + 纯 CSS 序号（`counter` 01/02…，模板不动）+ 底部 hairline；
+  全站去卡片化 —— 新闻条目流、表格圆角 0、风险页脚 3px double 规线、导语改上下细线带
+- **行内引用上标化**：`md_to_html.inline()` 把 `[12]` 排成 `<sup class="cite-n">12</sup>`，
+  相邻簇自动补逗号分隔
+- 模板 emoji → 排版（`📊`/`⚠️`/`⚡` 删除，折叠箭头 `▸` → CSS 三角）；
+  `→`/`↗`/`↻`/`✕` 等排版符号保留
+
+### 二、M9 网页版（style.css 全量重着色 + index.html 两处）
+
+- 同一套浅色 token；`--radius:2px`、`--shadow:none`；卡片改**细线方框**（透明底，
+  白色只留给 modal/toast）；顶栏 ink 底线 + 方印 logo（`股`）；标签页改下划线激活态；
+  统计格改 FT 式顶部 2px 墨线；新闻条目流 + 徽章去填色只留描边
+- `a.cite` 上标弱化（`.72em` + 点线下划）—— **类名与可点性不变**，check.py 断言不受影响
+- **app.js 零改动**；`📊` logo、`🤖` 追问两处 emoji 清除；`.btn` 补
+  `white-space:nowrap` 修顶栏刷新按钮换行
+- **`aggregate.linkify_citations()` 入口先把 `<sup class="cite-n">12</sup>` 还原成
+  `[12]` 再挂链** —— 修掉上标化对 M9 可点引用的回归（`check.py`「引用编号已可点击」
+  归零暴露；改前 27/28，改后 28/28）
+
+### 验收
+
+- [x] `e2e_run.py --from M5 --no-push` 与 `--from M9 --no-push` 全过（market/news/picks/
+      risk 锚点与顺序、文件名断言未动；两次均带 `--no-push` 防真发微信）
+- [x] `check.py` 28/28；`node --check app.js`；两模块 + 生成产物 emoji 残留扫描 = 0
+- [x] headless Edge CDP：8 标签 × 浅/深 16 张 + 弹层 + 静态 `file://` 导出，**0 JS 错误**、
+      静态版 119 处 `a.cite` 可点、无横向滚动；关键截图经 DOM 计算样式 + 像素采样核验
+      （徽章透明、候选卡 3px accent 左线、报头 4px ink 线均在）
+- [x] M5 日报深色 CDP 模拟：body 底色 / `--ink` / 报头线极性翻转正确
+
+---
+
 ## 2026-10-01 · M9 持仓标签页 + M10 沪深A硬闸与低价偏好 ✅ 完成
 
 两项用户需求，一次提交。

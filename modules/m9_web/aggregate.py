@@ -215,7 +215,11 @@ class Bundle:
         """把分析 HTML 里的 [12] 换成可点击的引用链接。
 
         只处理标签之外的文本，避免误伤属性值。
+        M5 的 md_to_html 已把 [12] 排成 <sup class="cite-n">12</sup>（日报
+        上标样式），先还原成 [12] 再挂链，两条渲染管线产出同一种可点引用。
         """
+        html_text = re.sub(r'<sup class="cite-n">(\d{1,4})</sup>', r"[\1]", html_text)
+
         def repl(m):
             num = int(m.group(1))
             if num not in self.citation_map:
