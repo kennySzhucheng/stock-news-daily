@@ -4,6 +4,43 @@
 
 ---
 
+## 2026-10-02 · 索引页底部加网页版入口 ✅ 完成
+
+用户提「希望在索引页下方加上一个 web 的入口，更方便查看」。
+
+### 改动（`modules/m5_report/report.py`，21 行）
+
+- `build_index()` 在「最新一期」之后追加 `.web-entry` 区块：`<a href="web/">`
+  → 标题「网页版门户」+ 副标题（新闻搜索与筛选 · 个股行情 · 板块 · 深度分析 ·
+  候选清单 · 持仓盈亏）+「进入网页版 →」
+- 相对路径 `web/` 而非绝对路径 —— 线上（`/` → `/web/`）与本地双击
+  （`reports/` → `reports/web/`）两种打开方式都成立
+- 样式沿用财经风：1px 细线方框 + 3px 墨蓝左条、无圆角无阴影，hover 标题转
+  `--accent`；**只动 `build_index()`，`build_page()`（日报正文页）未碰**
+
+### 验收
+
+- [x] `e2e_run.py --from M5 --no-push` 全过（锚点与文件名断言未动）
+- [x] 手机宽 390px：`scrollWidth 390 == clientWidth 390` 无横向滚动；像素采样
+      左条 `rgb(30,77,122)` = `#1e4d7a`、上下边线 `#ddd6c9`、底色与纸面同色
+- [x] DOM：`href` 解析正确、`text-decoration:none`、区块高 139px 无溢出；截图经
+      GLM-4V 复核文字完整无重叠
+- [x] 部署 run 36959773420 成功；线上索引页第 312 行已含 `class="web-entry"`，
+      `/web/` 与 `/latest.html` 均 200
+
+### 附带记录：github.com 的 IP 坑
+
+push 时报 `Failed to connect to github.com:443`，但 `api.github.com`、
+`raw.githubusercontent.com` 都正常 —— 定位为本机 DNS 把 `github.com` 解析到
+`20.205.243.166`，**该 IP 的 443 不通**（`140.82.112.3`/`140.82.113.3`/
+`20.27.177.113` 实测可用），不是断网也不是代理问题。应急做法：本地起一个
+CONNECT 隧道把连接固定到可用 IP，再 `git -c http.proxy=http://127.0.0.1:9801`
+（脚本在 `%TEMP%\snd-redesign\gh_tunnel.py`，非仓库文件）。下次遇到先
+`curl --noproxy '*' -w "%{http_code}" https://api.github.com` 分清是单 IP 挂
+还是真断网。
+
+---
+
 ## 2026-10-01 · 两页美化：财经媒体风（浅色为主） ✅ 完成
 
 用户反馈日报页与网页版「不够美观、AI 味太浓」，方向定为**财经媒体风 + 浅色纸面为主**
