@@ -737,6 +737,16 @@ footer.risk h3{font-family:var(--serif); font-size:14px; color:var(--ink); margi
 .index-item .d{font-weight:600; font-family:var(--serif); font-size:16px;}
 .index-item .s{color:var(--muted); font-size:13px;}
 .latest-item{border-top:1px solid var(--ink); border-bottom:1px solid var(--ink); margin-bottom:18px;}
+/* 索引页底部：网页版门户入口 */
+.web-entry{
+  display:block; color:var(--text); text-decoration:none;
+  border:1px solid var(--border); border-left:3px solid var(--accent);
+  border-radius:0; padding:14px 16px; margin-top:22px;
+}
+.web-entry .d{font-weight:600; font-family:var(--serif); font-size:16px; color:var(--ink);}
+.web-entry .s{color:var(--muted); font-size:13px; margin-top:3px;}
+.web-entry .go{color:var(--accent); font-size:13px; margin-top:8px;}
+.web-entry:hover .d{color:var(--accent);}
 
 /* 时段徽章：盘前 / 盘后 */
 .slot-badge{
@@ -979,6 +989,16 @@ def build_index(report_files):
         '<div class="s">直接打开最近一次运行生成的日报</div></a>'
         if has_latest else ""
     )
+    # 页面底部给网页版留一个入口：索引页只列日报，交互查询（搜索/筛选/持仓/候选）
+    # 都在 M9 网页版里，放个直达链接省得记地址。相对路径在线上（/ → /web/）
+    # 与本地双击打开（reports/ → reports/web/）都成立。
+    web_entry = (
+        '<a class="web-entry" href="web/">'
+        '<div class="d">网页版门户</div>'
+        '<div class="s">交互式查阅：新闻搜索与筛选 · 个股行情 · 板块 · 深度分析 · 候选清单 · 持仓盈亏</div>'
+        '<div class="go">进入网页版 →</div>'
+        "</a>"
+    )
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -997,6 +1017,7 @@ def build_index(report_files):
   <section class="block">
     {latest_link}
     {body}
+    {web_entry}
   </section>
 </main>
 <footer class="risk">
