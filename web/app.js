@@ -94,7 +94,9 @@
   var S = {
     meta: null, overview: null, news: [], raw: [], rawLoaded: false,
     quotes: [], failed: [], boards: [], history: [], analysis: null, picks: null,
-    rawMode: false, shown: PAGE, sort: { key: 'change_pct', asc: false }
+    rawMode: false, shown: PAGE, sort: { key: 'change_pct', asc: false },
+    // 持仓标签页：本机数据，不经过任何服务端
+    pfList: [], pfQuotes: {}, pfQuoteAt: 0, pfQuoteTime: '', pfLoading: false
   };
 
   var KIND_CN = { stock: '个股', board: '板块' };
@@ -327,6 +329,198 @@
     $('#quoteFailed').textContent = S.failed.length
       ? '未取到行情：' + S.failed.map(function (f) { return f.name; }).join('、')
       : '';
+  }
+
+  // ── 持仓（浏览器本地，不经服务端） ────────────────────────
+  /* 持仓只存 localStorage：不上传、换设备不同步、清浏览器数据会丢 —— UI 里已如实标注，
+     盈亏以券商 app 为准。实时报价走腾讯 qt.gtimg.cn 的 script 标签注入：
+     该接口带 Access-Control-Allow-Origin: *，返回 `v_sh600519="1~..."` 形式的 JS 赋值，
+     与静态导出同一套思路 —— file:// 下 fetch 不可用，script 标签不受限。
+     字段下标与 M4 的腾讯源一致：[1]名称 [2]代码 [3]现价 [4]昨收
+     [30]报价时刻 YYYYMMDDHHMMSS [32]涨跌幅%。 */
+  var PF_KEY = 'snd_portfolio_v1';
+
+  function pfLoad() {
+    try {
+      var a = JSON.parse(localStorage.getItem(PF_KEY) || '[]');
+      return Array.isArray(a) ? a.filter(function (h) {
+        return h && /^\d{6}$/.test(String(h.code || '')) && h.buy > 0 && h.shares > 0;
+      }) : [];
+    } catch (e) { return []; }
+  }
+  function pfSave(list) {
+    try { localStorage.setItem(PF_KEY, JSON.stringify(list)); return true; }
+    catch (e) { toast('保存失败：' + e.message); return false; }
+  }
+  /* 只收沪深 A 股：6 开头→沪，0/3 开头→深；
+     4/8（北交所）、5（基金）、9（B 股）一律拒收 */
+  function pfTencentCode(code) {
+    if (/^6/.test(code)) return 'sh' + code;
+    if (/^[03]/.test(code)) return 'sz' + code;
+    return null;
+  }
+
+  function pfFetchQuotes(codes, cb) {
+    var tcs = [];
+    codes.forEach(function (c) { var tc = pfTencentCode(c); if (tc) tcs.push(tc); });
+    if (!tcs.length) { cb(null, {}); return; }
+    tcs.forEach(function (tc) { try { delete window['v_' + tc]; } catch (e) {} });
+    var s = document.createElement('script');
+    var finished = false;
+    var timer = setTimeout(function () { finish(new Error('行情接口超时')); }, 8000);
+    function finish(err) {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      if (s.parentNode) s.parentNode.removeChild(s);
+      if (err) { cb(err, {}); return; }
+      var out = {};
+      tcs.forEach(function (tc) {
+        var raw = window['v_' + tc];
+        if (typeof raw !== 'string') return;
+        var p = raw.split('~');
+        if (p.length <= 32) return;
+        var price = parseFloat(p[3]), prev = parseFloat(p[4]), chg = parseFloat(p[32]);
+        out[tc.slice(2)] = {
+          name: (p[1] || '').replace(/\s+/g, ''),   // 腾讯会给部分名字加空格：「五 粮 液」
+          price: isNaN(price) ? null : price,
+          prev: isNaN(prev) ? null : prev,
+          time: (p[30] || '').trim(),
+          chg: isNaN(chg) ? null : chg
+        };
+      });
+      cb(null, out);
+    }
+    s.charset = 'gbk';
+    s.onload = function () { finish(null); };
+    s.onerror = function () { finish(new Error('行情接口无法访问')); };
+    s.src = 'https://qt.gtimg.cn/q=' + tcs.join(',') + '&_=' + Date.now();
+    document.head.appendChild(s);
+  }
+
+  function pfFmtTime(t) {
+    var m = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})?$/.exec(t || '');
+    if (!m) return t || '';
+    return m[1] + '-' + m[2] + '-' + m[3] + ' ' + m[4] + ':' + m[5] + (m[6] ? ':' + m[6] : '');
+  }
+  function pfDispName(h) {
+    var q = S.pfQuotes[h.code];
+    if (q && q.name) return q.name;
+    for (var i = 0; i < S.quotes.length; i++) {   // 腾讯报价失败时退回 M4 的行情名单
+      if (S.quotes[i].code === h.code) return S.quotes[i].name;
+    }
+    return h.code;
+  }
+
+  function renderPortfolio() {
+    var list = S.pfList;
+    $('#pfCount').textContent = list.length ? list.length + ' 只' : '';
+    if (!list.length) {
+      $('#pfSummary').innerHTML = '';
+      $('#pfTable tbody').innerHTML =
+        '<tr><td colspan="8" class="empty">还没有持仓 —— 上方输入代码、买入价、股数即可添加</td></tr>';
+      $('#pfQuoteTime').textContent = '';
+      $('#pfNewsCount').textContent = '';
+      $('#pfNewsList').innerHTML = '<p class="empty">添加持仓后，这里会显示相关新闻</p>';
+      return;
+    }
+
+    var mv = 0, costQuoted = 0, costAll = 0, dayPnl = 0, quoted = 0;
+    var rows = list.map(function (h) {
+      var q = S.pfQuotes[h.code];
+      var price = (q && typeof q.price === 'number') ? q.price : null;
+      var chg = (q && typeof q.chg === 'number') ? q.chg : null;
+      var value = null, pnl = null, pnlPct = null, day = null;
+      costAll += h.buy * h.shares;
+      if (price != null) {
+        value = price * h.shares;
+        pnl = (price - h.buy) * h.shares;
+        pnlPct = (price / h.buy - 1) * 100;
+        mv += value; costQuoted += h.buy * h.shares; quoted++;
+        if (typeof q.prev === 'number' && q.prev) {
+          day = (price - q.prev) * h.shares;
+          dayPnl += day;
+        }
+      }
+      return '<tr>' +
+        '<td><strong>' + esc(pfDispName(h)) + '</strong><span class="muted small"> ' +
+        esc(h.code) + '</span></td>' +
+        '<td class="num">' + (price != null ? price.toFixed(2) : '—') + '</td>' +
+        '<td class="num ' + dirCls(chg) + '">' + pct(chg) + '</td>' +
+        '<td class="num">' + esc(String(h.buy)) + '</td>' +
+        '<td class="num">' + h.shares + '</td>' +
+        '<td class="num">' + (value != null ? value.toFixed(2) : '—') + '</td>' +
+        '<td class="num ' + dirCls(pnl) + '">' +
+        (pnl != null ? (pnl >= 0 ? '+' : '') + pnl.toFixed(2) +
+          '<div class="pick-alpha">' + pct(pnlPct) + '</div>' : '—') + '</td>' +
+        '<td><button class="btn ghost pf-del" data-code="' + esc(h.code) +
+        '" type="button" title="删除">✕</button></td>' +
+        '</tr>';
+    });
+    $('#pfTable tbody').innerHTML = rows.join('');
+
+    var pnl = mv - costQuoted;
+    var pnlPct = costQuoted > 0 ? (pnl / costQuoted) * 100 : 0;
+    $('#pfSummary').innerHTML = [
+      stat(mv.toFixed(2), '持仓市值（元）',
+           quoted < list.length ? (list.length - quoted) + ' 只未取到报价' : '按实时报价'),
+      stat(costAll.toFixed(2), '持仓成本（元）', '买入价 × 股数'),
+      statSpan(pnl, (pnl >= 0 ? '+' : '') + pnl.toFixed(2), '累计盈亏（元）', pct(pnlPct)),
+      statSpan(dayPnl, (dayPnl >= 0 ? '+' : '') + dayPnl.toFixed(2),
+               '今日盈亏（元）', '相对昨收')
+    ].join('');
+
+    var times = Object.keys(S.pfQuotes).map(function (c) {
+      return (S.pfQuotes[c] || {}).time;
+    }).filter(Boolean).sort();
+    $('#pfQuoteTime').textContent = times.length
+      ? '报价时刻 ' + pfFmtTime(times[times.length - 1]) +
+        ' · 腾讯行情 · 仅供参考，盈亏以券商 app 为准'
+      : (S.pfLoading ? '报价拉取中…'
+                     : '报价未拉取到（网络或接口问题），点「刷新报价」重试');
+
+    // 今日相关新闻：按持仓个股名/代码命中，最多展示 12 条
+    var names = {}, codes = {};
+    list.forEach(function (h) {
+      codes[h.code] = 1;
+      names[pfDispName(h)] = 1;
+    });
+    var hits = [];
+    S.news.forEach(function (n, i) {
+      var stocks = n.stocks || [];
+      if (stocks.some(function (s) {
+        return names[s] || codes[s] ||
+               Object.keys(codes).some(function (c) { return s.indexOf(c) >= 0; });
+      })) hits.push(i);
+    });
+    $('#pfNewsCount').textContent = hits.length ? hits.length + ' 条' : '';
+    $('#pfNewsList').innerHTML = hits.length
+      ? hits.slice(0, 12).map(function (i) { return newsCard(S.news[i], false); }).join('') +
+        (hits.length > 12 ? '<p class="muted small">仅显示前 12 条，去「新闻」页可看全部</p>' : '')
+      : '<p class="empty">今日新闻里没有命中持仓的个股</p>';
+  }
+  function statSpan(v, text, k, note) {
+    return '<div class="stat"><div class="v ' + dirCls(v) + '">' + text +
+      '</div><div class="k">' + esc(k) + '</div><div class="note">' + esc(note || '') +
+      '</div></div>';
+  }
+
+  function pfRefresh(silent) {
+    if (!S.pfList.length || S.pfLoading) return;
+    S.pfLoading = true;
+    renderPortfolio();
+    pfFetchQuotes(S.pfList.map(function (h) { return h.code; }), function (err, out) {
+      S.pfLoading = false;
+      if (err) {
+        renderPortfolio();
+        if (!silent) toast('报价拉取失败：' + err.message);
+        return;
+      }
+      S.pfQuotes = out;
+      S.pfQuoteAt = Date.now();
+      renderPortfolio();
+      if (!silent) toast('报价已更新');
+    });
   }
 
   // ── 板块 ────────────────────────────────────────────────
@@ -580,6 +774,8 @@
       p.classList.toggle('hidden', p.id !== 'panel-' + name);
     });
     if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
+    // 持仓页每次进入都保证报价不过期（60 秒内的报价直接复用）
+    if (name === 'portfolio' && Date.now() - S.pfQuoteAt > 60000) pfRefresh(true);
   }
 
   // ── 事件绑定 ────────────────────────────────────────────
@@ -685,6 +881,51 @@
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') ask();
     });
 
+    // 持仓：添加（同代码 = 更新）、删除、手动刷新、相关新闻跳详情
+    $('#pfForm').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var code = $('#pfCode').value.trim();
+      var buy = parseFloat($('#pfPrice').value);
+      var shares = parseInt($('#pfShares').value, 10);
+      if (!/^\d{6}$/.test(code) || !pfTencentCode(code)) {
+        toast('代码须为 6 位沪深 A 股（60 / 00 / 30 开头）');
+        return;
+      }
+      if (!(buy > 0)) { toast('买入价需为正数'); return; }
+      if (!(shares > 0) || shares !== parseFloat($('#pfShares').value)) {
+        toast('股数需为正整数');
+        return;
+      }
+      var list = S.pfList.slice();
+      var idx = -1;
+      list.forEach(function (h, i) { if (h.code === code) idx = i; });
+      if (idx >= 0) list[idx] = { code: code, buy: buy, shares: shares };
+      else list.push({ code: code, buy: buy, shares: shares });
+      if (!pfSave(list)) return;
+      S.pfList = list;
+      $('#pfForm').reset();
+      renderPortfolio();
+      pfRefresh(true);
+      toast(idx >= 0 ? ('已更新 ' + code) : ('已添加 ' + code));
+    });
+    $('#pfRefresh').addEventListener('click', function () { pfRefresh(false); });
+    $('#pfTable').addEventListener('click', function (e) {
+      var b = e.target.closest('.pf-del');
+      if (!b) return;
+      var code = b.dataset.code;
+      var list = S.pfList.filter(function (h) { return h.code !== code; });
+      if (!pfSave(list)) return;
+      S.pfList = list;
+      delete S.pfQuotes[code];
+      renderPortfolio();
+      toast('已删除 ' + code);
+    });
+    $('#pfNewsList').addEventListener('click', function (e) {
+      var card = e.target.closest('.news-item');
+      if (!card || !card.dataset.id) return;
+      showDetail(parseInt(card.dataset.id, 10));
+    });
+
     $('#btnRefresh').addEventListener('click', function () { load(true); });
   }
 
@@ -707,6 +948,9 @@
       fillSelects();
       renderOverview(); renderNews(true); renderQuotes();
       renderBoards(); renderAnalysis(); renderHistory(); renderPicks();
+      renderPortfolio();
+      // 报价不随页面数据刷新（独立于 /api），首次进入持仓页时才拉
+      if (S.pfList.length && !S.pfQuoteAt) pfRefresh(true);
       if (isReload) toast('已重新载入数据');
     }).catch(function (e) {
       $('#conclusionText').textContent = '数据加载失败';
@@ -717,6 +961,7 @@
     });
   }
 
+  S.pfList = pfLoad();          // 持仓来自 localStorage，与接口数据无关，先行载入
   bind();
   var initial = (location.hash || '').replace('#', '');
   if (initial && $('#panel-' + initial)) switchTab(initial);
