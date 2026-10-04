@@ -264,6 +264,11 @@
       if (n.category) meta.push('<span class="tag">' + esc(CAT_CN[n.category] || n.category) + '</span>');
       meta.push('<span class="badge ' + (n.verified === 'confirmed' ? 'confirmed' : 'unverified') + '">' +
                 (n.verified === 'confirmed' ? '已确认' : '待核实') + '</span>');
+      // 来源清单（2026-10-04）：confirmed 不再只给一个二值标记 —— 显示是哪几家
+      // 独立出版方刊发了同一事件，读者可自行判断印证强度。字段由 aggregate.py
+      // 的 query_news 提供（confirmed_sources 已按 4 家截断；为空串时不渲染）。
+      // 不能塞进 .badge（那个类 white-space:nowrap，长来源名会撑破窄屏）。
+      if (n.confirmed_sources) meta.push('<span>' + esc(n.confirmed_sources) + '</span>');
       meta.push('<span class="badge ' + esc(n.sentiment || 'neutral') + '">' +
                 esc(SENTI_CN[n.sentiment] || '中性') + '</span>');
       (n.board || []).forEach(function (b) {
@@ -746,6 +751,8 @@
       (d.verified === 'confirmed' ? '已确认（多源）' : '待核实（单源）') + '</span>' +
       '<span class="badge ' + esc(d.sentiment || 'neutral') + '">' +
       esc(SENTI_CN[d.sentiment] || '中性') + '</span>' +
+      // 详情弹层里**完整**列出所有来源（confirmed_sources_full 不截断）
+      (d.confirmed_sources_full ? '<span>' + esc(d.confirmed_sources_full) + '</span>' : '') +
       '<span>' + esc(d.time || '') + '</span><span>' + esc(d.source || '') + '</span>' +
       (d.url ? '<a href="' + esc(d.url) + '" target="_blank" rel="noopener">原文 ↗</a>' : '') +
       '</div>');

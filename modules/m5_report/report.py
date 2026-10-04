@@ -397,6 +397,50 @@ def render_quotes(quotes):
     )
 
 
+# ---------------------------------------------------------------------------
+# 来源清单：confirmed 的条目要说清"是谁刊发的"
+#
+# 背景（2026-10-04）：M2 的 confirmed 判据是「至少两个**独立出版方**刊发过同一
+# 事件」，而 M1 的跨源去重已把所有报道过该事件的来源聚合进 `sources`（已排序，
+# 至少含自身 source）。所以这里能列出来源清单 —— 只给一个「已确认」徽章，等于
+# 把印证强度替读者判断完了；列出是谁报的，印证有多硬由读者自己看。
+#
+# 规则只有这一份：去重、保序、最多 SOURCES_IN_BADGE 家，超出用「等 N 家」
+# （N 是来源**总数**，不是显示条数）。
+# ---------------------------------------------------------------------------
+SOURCES_IN_BADGE = 4
+
+
+def news_sources(n):
+    """该新闻的全部报道来源：优先 sources，缺字段时退回自身 source。
+
+    去重、保持原顺序（M1 已按名称排好）。旧数据没有 sources 字段，退化成
+    只显示自己那一家；两者都取不到时返回 []，由调用方决定不渲染。
+    """
+    raw = n.get("sources") or []
+    if not raw:
+        raw = [n.get("source")]
+    out = []
+    for s in raw:
+        s = s.strip() if isinstance(s, str) else ""
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
+def sources_label(n, max_sources=SOURCES_IN_BADGE):
+    """「来源：新浪财经、东方财富」；来源过多时「来源：A、B、C、D 等 6 家」。
+
+    没有可取来源时返回 ""（调用方据此不渲染空标签）。
+    """
+    srcs = news_sources(n)
+    if not srcs:
+        return ""
+    if max_sources and len(srcs) > max_sources:
+        return "来源：" + "、".join(srcs[:max_sources]) + f" 等 {len(srcs)} 家"
+    return "来源：" + "、".join(srcs)
+
+
 def render_news(structured):
     """分板块新闻列表，带验证标记、情绪、板块/个股标签、原文链接"""
     news = structured.get("news", [])
@@ -419,6 +463,13 @@ def render_news(structured):
                 if verified
                 else '<span class="badge unverified">待核实</span>'
             )
+            # 只有 confirmed 附来源清单：单源条目的来源就是它自己那一家，左边
+            # <span class="src"> 已经显示过一次，重复列是画蛇添足（也避免读者
+            # 误以为"列出来了 = 有印证"）。来源取不到时整段不渲染。
+            src_text = sources_label(n) if verified else ""
+            src_html = (
+                f'<span class="src-list">· {esc(src_text)}</span>' if src_text else ""
+            )
             senti = n.get("sentiment") or "neutral"
             s_badge = (
                 f'<span class="badge senti {SENTI_CLS.get(senti, "flat")}">'
@@ -439,7 +490,7 @@ def render_news(structured):
                 '<div class="news-meta">'
                 f'<span class="time">{time_str}</span>'
                 f'<span class="src">{esc(n.get("source"))}</span>'
-                f"{v_badge}{s_badge}"
+                f"{v_badge}{src_html}{s_badge}"
                 f'<span class="tags">{boards}{stocks}</span>'
                 f"{link}"
                 "</div></div>"
@@ -740,6 +791,9 @@ details[open] > summary .fold-arrow{transform:rotate(90deg);}
 }
 .badge.confirmed{background:none; color:var(--confirmed); border:1px solid var(--confirmed);}
 .badge.unverified{background:none; color:var(--unverified); border:1px solid var(--unverified);}
+/* confirmed 徽章后的来源清单：沿用页面 token（--muted），不引入新颜色。
+   .news-meta 已是 flex-wrap，手机上整段会折到下一行，不会撑破版心。 */
+.src-list{font-size:12px; color:var(--muted); line-height:1.5; min-width:0; overflow-wrap:anywhere;}
 .badge.senti{border:1px solid var(--border);}
 .badge.senti.up{color:var(--up); border-color:var(--up); background:none;}
 .badge.senti.down{color:var(--down); border-color:var(--down); background:none;}

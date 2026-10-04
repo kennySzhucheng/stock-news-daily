@@ -595,5 +595,159 @@ class CoverageBreadth(unittest.TestCase):
         self.assertNotIn("keep=false 表示纯社会新闻与股市无关应丢弃", src)
 
 
+class TradingCalendarAndOneSlotPerRun(unittest.TestCase):
+    """T+1/T+3/T+5 的到期日按**交易日**算，且**一轮只补最早的一档**（2026-10-04 用户决定）。
+
+    改前的两个毛病（都已核实）：
+      ① `due = 记录日 + k 个自然日` → 周末与节假日被当成"过了 1 天"；
+      ② 一轮把所有到期档位一次性补齐 → 跨长假时 T+3 与 T+5 落在**同一天、同一个价格**，
+         实际只有约 2 个交易日跨度，却在均值里各算一个样本。
+    改后：due 走交易日历（东财沪深300日K，落 `reports/picks/trading_days.json` 缓存，
+    取不到退化为「周一~周五 − 2026 休市表」并打 warn），每轮只补一档，
+    新增 `span`（基准日→补录日的实际交易日数）供展示层说明"这条 T+1 其实是第 3 个交易日"。
+    """
+
+    def setUp(self):
+        import tempfile
+        self.pk = load("m10_picks", "modules/m10_picks/picks.py")
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="snd-cal-"))
+        self._old_cache = self.pk.TRADING_DAYS_CACHE_PATH
+        self.pk.TRADING_DAYS_CACHE_PATH = self.tmp / "trading_days.json"
+        # 注入一段"真实"交易日历：跳过周末与 2026 中秋(09-25)
+        self.pk._inject_trading_days([
+            "2026-09-11", "2026-09-14", "2026-09-15", "2026-09-16", "2026-09-17",
+            "2026-09-18", "2026-09-21", "2026-09-22", "2026-09-23", "2026-09-24",
+            "2026-09-28", "2026-09-29", "2026-09-30",
+        ])
+
+    def tearDown(self):
+        self.pk._cal_reset()
+        self.pk.TRADING_DAYS_CACHE_PATH = self._old_cache
+
+    def _d(self, s):
+        return datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=hc.CST)
+
+    def test_due_uses_trading_days(self):
+        pk = self.pk
+        # 周五记录 → T+1 是下周一（不是周六）
+        self.assertEqual(pk.due(1, self._d("2026-09-11")).strftime("%Y-%m-%d"), "2026-09-14")
+        self.assertEqual(pk.due(3, self._d("2026-09-11")).strftime("%Y-%m-%d"), "2026-09-16")
+        self.assertEqual(pk.due(5, self._d("2026-09-11")).strftime("%Y-%m-%d"), "2026-09-18")
+        # 跨中秋：09-18 的下一个交易日是 09-21，第 3 个是 09-23，第 5 个要跳过 09-25 到 09-28
+        self.assertEqual(pk.due(5, self._d("2026-09-18")).strftime("%Y-%m-%d"), "2026-09-28")
+        # 节前最后一天记录 → T+3 跨国庆，绝不能是自然日口径的 10-02
+        self.assertNotEqual(pk.due(3, self._d("2026-09-30")).strftime("%Y-%m-%d"), "2026-10-02")
+
+    def _row(self, base="2026-09-11", name="测试股份", secid="1.600001"):
+        return {"id": f"{base}-pm-s-{name}", "date": base, "slot": "pm", "kind": "stock",
+                "name": name, "code": "600001", "secid": secid, "market": "沪A",
+                "base_price": 10.0, "base_prev_close": 9.9, "bench_level": 4000.0,
+                "reviews": {str(k): None for k in self.pk.REVIEW_DAYS}}
+
+    def test_one_slot_per_run(self):
+        pk = self.pk
+        row = self._row()
+        row["reviews"] = {str(k): None for k in pk.REVIEW_DAYS}
+        rows = [row]
+        # 打桩：行情固定，避免联网。bench_now 是**基准指数点位（float）**
+        pk.fetch_any = lambda secid: ({"price": 11.0, "prev_close": 10.0}, "stub")
+        pk.fetch_bench = lambda: (None, {"level": 4000.0, "qdate": "20260914", "qhm": "1500"})
+
+        # 第 1 轮（T+1 到期日 09-14）：只补 T+1
+        pk.score_pending(rows, self._d("2026-09-14"), 4000.0)
+        filled = [k for k in pk.REVIEW_DAYS if row["reviews"][str(k)]]
+        self.assertEqual(filled, [1], f"第 1 轮应只补 T+1，实际 {filled}")
+        self.assertEqual(row["reviews"]["1"]["span"], 1)
+
+        # 第 2 轮（T+3 到期日 09-16）：只补 T+3
+        pk.score_pending(rows, self._d("2026-09-16"), 4010.0)
+        filled = [k for k in pk.REVIEW_DAYS if row["reviews"][str(k)]]
+        self.assertEqual(filled, [1, 3], f"第 2 轮应只补 T+3，实际 {filled}")
+        self.assertEqual(row["reviews"]["3"]["span"], 3)
+
+        # 第 3 轮（T+5 到期日 09-18）：补齐
+        pk.score_pending(rows, self._d("2026-09-18"), 4020.0)
+        filled = [k for k in pk.REVIEW_DAYS if row["reviews"][str(k)]]
+        self.assertEqual(filled, [1, 3, 5], f"第 3 轮应补齐，实际 {filled}")
+        # 三档 done 必须落在三个不同日期（旧实现会三条同一天）
+        dones = {row["reviews"][str(k)]["done"] for k in pk.REVIEW_DAYS}
+        self.assertEqual(len(dones), 3, f"三档补录日期应互不相同：{dones}")
+        # span 单调递增，且恰好等于 k（说明真的按交易日补上）
+        spans = [row["reviews"][str(k)]["span"] for k in pk.REVIEW_DAYS]
+        self.assertEqual(spans, [1, 3, 5], spans)
+        # 账本 schema：due 仍是日期字符串
+        self.assertRegex(row["reviews"]["1"]["due"], r"^\d{4}-\d{2}-\d{2}$")
+
+    def test_all_due_at_once_still_fills_one_per_run(self):
+        """三档都已到期（例如中间几天没跑）时，仍然一轮只补一档。"""
+        pk = self.pk
+        row = self._row()
+        pk.fetch_any = lambda secid: ({"price": 11.0, "prev_close": 10.0}, "stub")
+        rows = [row]
+        for i in range(3):
+            before = sum(1 for k in pk.REVIEW_DAYS if row["reviews"][str(k)])
+            pk.score_pending(rows, self._d("2026-09-18"), 4000.0 + i * 10)
+            after = sum(1 for k in pk.REVIEW_DAYS if row["reviews"][str(k)])
+            self.assertEqual(after - before, 1, "一轮只应新增一档")
+        self.assertTrue(all(row["reviews"][str(k)] for k in pk.REVIEW_DAYS))
+
+
+class ConfirmedSourceList(unittest.TestCase):
+    """`已确认` 要附**来源清单**，不再只给一个二值标记（2026-10-04 用户决定）。
+
+    背景：这个标记此前长期只有 0~4% 且全是假阳性（详见 CHANGELOG）。修好之后
+    它的含义是"至少两家独立出版方刊发了同一事件"，所以要把是哪几家显示出来，
+    让读者自己判断印证强度 —— 一个孤零零的「已确认」没法体现这一点。
+    """
+
+    def setUp(self):
+        self.agg = load("m9_aggregate", "modules/m9_web/aggregate.py")
+        self.rep = load("m5_report", "modules/m5_report/report.py")
+        self.psh = load("m6_push", "modules/m6_push/push.py")
+
+    def _news(self, sources, verified):
+        n = {"time": "2026-10-04 10:00:00", "source": sources[0] if sources else "未知源",
+             "category": "stock", "url": "", "text": "某条新闻正文内容足够长用于渲染",
+             "board": [], "stocks": [], "sentiment": "neutral", "keep": True,
+             "verified": verified}
+        if sources is not None:
+            n["sources"] = sources
+        return n
+
+    def test_m5_badge_shows_sources(self):
+        # render_news 收的是整个 structured 字典（内部 .get("news")），不是列表
+        html = self.rep.render_news({"news": [self._news(["新浪财经", "东方财富"], "confirmed")]})
+        self.assertIn("来源：新浪财经、东方财富", html, html[:400])
+
+    def test_m5_unverified_has_no_source_list(self):
+        html = self.rep.render_news({"news": [self._news(["36氪"], "unverified")]})
+        self.assertNotIn("来源：", html)
+
+    def test_m5_truncates_long_source_lists(self):
+        html = self.rep.render_news({"news": [
+            self._news(["A媒体", "B媒体", "C媒体", "D媒体", "E媒体", "F媒体"], "confirmed")]})
+        self.assertIn("等 6 家", html)
+        self.assertNotIn("E媒体", html, "超过 4 家时不应全部展开")
+
+    def test_m6_push_note(self):
+        note = self.psh.push_verified_note(self._news(["新浪财经", "东方财富"], "confirmed"))
+        self.assertIn("2 源", note)
+        self.assertIn("新浪财经", note)
+        self.assertEqual(self.psh.push_verified_note(self._news(["36氪"], "unverified")), "待核实")
+
+    def test_m9_labels(self):
+        agg = self.agg
+        n = self._news(["新浪财经", "东方财富"], "confirmed")
+        self.assertIn("来源：新浪财经、东方财富", agg.sources_label(n, 4))
+        self.assertEqual(agg.confirmed_sources(self._news(["36氪"], "unverified"), 4), "")
+
+    def test_missing_sources_field_does_not_crash(self):
+        """线上历史数据（M1 加 sources 之前）没有这个字段，不能因此报错。"""
+        n = self._news(None, "confirmed")
+        n.pop("sources", None)
+        self.assertIn("已确认", self.rep.render_news({"news": [n]}))
+        self.assertIn("1 源", self.psh.push_verified_note(n))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

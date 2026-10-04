@@ -382,6 +382,211 @@ def fetch_people(days, max_items):
     return _parse_rss(_get_xml(PEOPLE_RSS), "人民网", "official", days, max_items)
 
 
+# ── 2026-10-04 第三阶段：新华网 / 人民网「栏目页 HTML」取数（RSS 保留为兜底）────
+# 为什么是「换取数方式」而不是「换源」：用户明确要求**保留这两家媒体**，且希望它们
+# 真的有内容。而两家的 RSS 层已整体停更（实测）：
+#   · 新华网 RSS  整体冻结在 2022-12-09~14，item 还没有 <pubDate>（时间写在 </link>
+#     之后的裸文本里，已由 _rss_item_ts_text 兼容）；
+#   · 人民网 RSS 停在 2025-06-05；该站 politics/finance/world/society/it 五个频道的
+#     RSS 路径**返回同一份 2025-06 的冻结内容** ⇒ 是 RSS 层停更，不是单频道问题。
+# 所以新函数改为直接抓**栏目页 HTML**，从文章永久链接里的日期目录取时间。
+#
+# 候选端点探活结论（2026-10-04 实测，逐条见汇报）：
+#   · https://qc.wa.news.cn/nodeart/list?nid=... —— 服务活着、返回 JSON（含 PubTime），
+#     但①证书主机名不匹配（qc.wa.news.cn 的证书对不上域名，stdlib SSL 直接
+#     CERTIFICATE_VERIFY_FAILED）；②已知 nid=11147664 内容停在 2021-07-23；
+#     ③新版 news.cn 全站改成了 `data="datasource:<uuid>"` 的 CMS 预渲染，栏目页/文章页
+#     HTML 里**搜不到任何 nid**，无法可靠枚举当前频道 ⇒ 放弃。
+#   · https://so.news.cn/getNews —— GET/POST、换路径一律 405（CDN 错误页），放弃。
+#   · 人民网 http://search.people.cn/api-search/elasticsearch/search —— https 下被 SPA
+#     首页 HTML 顶掉（不是 JSON），http 下 405 Not Allowed，放弃。
+#   · 栏目页 HTML —— **当日内容充足**，两家都走这一路：
+#     新华网 m.news.cn 88 条当日链接（62 条带标题）、时政联播 45、world 28、
+#     fortune 14、depthobserve 8；人民网 www.people.com.cn 133、world 104、
+#     finance 60、滚动/今日头条页 34。
+#
+# 时间口径（重要）：栏目页 HTML 只在文章永久链接里带**日期**（`/20261004/`、
+# `/n1/2026/1004/`），没有时分秒 ⇒ 这类条目的 time 记为「当日 00:00:00」。这与巨潮
+# announcementTime「只有日期就照抄 00:00」的既有先例一致：**只照抄源给的精度，不编造
+# 时刻**。人民网「滚动/今日头条」页额外带 `[10月04日16:59]`，这种条目用**真实分钟**。
+# 过滤口径：有真实分钟的按 cutoff = now - days*86400 精确比较；只有日期的按**日历日**
+# 比较（dt.date() >= 本地 cutoff 的日期）。否则 days=1 会把「昨天发布的新闻」整天误杀
+# —— 日期精度下这是必要的放宽，且不引入任何虚构时间。
+XINHUA_COLUMNS = (
+    # (栏目页 URL, category 提示) —— 顺序即抓取顺序；每个栏目页有独立配额（见 _fetch_columns）
+    ("https://www.news.cn/politics/szlb/index.html", "official"),    # 时政联播
+    ("https://www.news.cn/fortune/index.htm", "finance"),            # 财经
+    ("https://www.news.cn/world/", "international"),                 # 国际
+    ("https://www.news.cn/depthobserve/", "official"),               # 深度观察
+    ("https://m.news.cn/", "official"),                              # 移动端首页（兜量最大）
+)
+PEOPLE_COLUMNS = (
+    # 顺序有意为之：GB/59476 是人民网「滚动新闻 / 今日头条一览」，条目自带
+    # [10月04日16:59] 分钟级真实时间，排第一；财经/国际/社会三个频道页排在首页**之前**
+    # —— 首页会把财经/国际的文章也列一遍，首页放前面会把它们的 path 先占掉，跨页去重后
+    # 财经/国际频道就一条都进不来（实测：首页优先时全源只剩 30 条）。首页作为兜底最后抓。
+    ("http://www.people.com.cn/GB/59476/index.html", "official"),
+    ("http://finance.people.com.cn/", "finance"),
+    ("http://world.people.com.cn/", "international"),
+    ("http://society.people.com.cn/", "official"),
+    ("http://www.people.com.cn/", "official"),
+)
+
+# 新华网文章永久链接：<栏目>/<YYYYMMDD>/<32位hex>/c.html（href 可能是相对路径，也会是单引号）
+# 注意 `[^'"]*?` 用 * 而不是 +：人民网/新华网的 href 常常**以 / 开头**（如 `/n1/2026/1004/...`、
+# `/20261004/<hash>/c.html`），用 `+?` 要求斜杠前至少有一个字符，会把这类相对链接整批漏掉
+# （离线用例就是这么抓到的：绝对 URL 能过、站内相对 URL 全丢）。
+_XH_ANCHOR_RE = re.compile(
+    r"""<a\b[^>]*?href=['"]([^'"]*?/(\d{8})/[0-9a-fA-F]{16,}/c\.html)['"][^>]*>(.*?)</a>""",
+    re.S)
+# 人民网文章永久链接：/n1/<YYYY>/<MMDD>/c<栏目>-<id>.html，锚点后可能跟 [MM月DD日HH:MM]
+_PPL_ANCHOR_RE = re.compile(
+    r"""<a\b[^>]*?href=['"]([^'"]*?/n1/(\d{4})/(\d{4})/c\d+-\d+\.html)['"][^>]*>(.*?)</a>"""
+    r"""(?:[^\n\[]{0,10}\[(\d{1,2})月(\d{1,2})日(\d{1,2}):(\d{2})\])?""",
+    re.S)
+
+
+def _get_html(url, timeout=20):
+    """GET 一个 HTML 页面并解码：显式 try utf-8 → gb18030。
+
+    先用 <meta charset> 声明判断（新华网/人民网历史上都用过 gb2312），声明里写了
+    gb* 就先按 gb18030 解；否则先 utf-8、UnicodeDecodeError 再退 gb18030。
+    最后兜底 errors="replace"，保证返回 str 而不是把解码异常抛给分页循环。
+    """
+    req = urllib.request.Request(url, headers=UA)
+    with _urlopen(req, timeout) as r:
+        raw = r.read()
+    head = raw[:2048].decode("ascii", errors="ignore").lower()
+    m = re.search(r'charset=["\']?\s*([\w-]+)', head)
+    declared = (m.group(1) if m else "").lower()
+    order = ("gb18030", "utf-8") if declared.startswith("gb") else ("utf-8", "gb18030")
+    for enc in order:
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def _iter_xinhua_links(html):
+    """新华网栏目页 → (url, 日期串, 标题, 精确时刻 or None)。日期取自永久链接目录。"""
+    for m in _XH_ANCHOR_RE.finditer(html):
+        href, d8, title = m.group(1).strip(), m.group(2), _clean(m.group(3))
+        yield href, f"{d8[:4]}-{d8[4:6]}-{d8[6:]}", title, None
+
+
+def _iter_people_links(html):
+    """人民网栏目页 → 同上；锚点后的 [10月04日16:59] 给出分钟级真实时间。"""
+    for m in _PPL_ANCHOR_RE.finditer(html):
+        href = m.group(1).strip()
+        year, mmdd, title = m.group(2), m.group(3), _clean(m.group(4))
+        bmon, bday, bhh, bmi = m.group(5), m.group(6), m.group(7), m.group(8)
+        hhmm = None
+        # 括号里的月日与链接目录里的月日一致才敢用来当精确时刻（跨零点可能不一致）
+        if bmon and bmon.zfill(2) == mmdd[:2] and bday.zfill(2) == mmdd[2:]:
+            hhmm = f"{bhh.zfill(2)}:{bmi}"
+        yield href, f"{year}-{mmdd[:2]}-{mmdd[2:]}", title, hhmm
+
+
+def _fetch_columns(pages, source, days, max_items, iterator):
+    """抓一组栏目页 HTML 并归一化成统一新闻条目。
+
+    · 每页独立 try/except：单页失败只标记 `partial`，**已抓内容不丢**；
+    · 每页有独立配额（max_items // 页数，下限 8），避免第一个页面吃满 cap 把
+      其它频道（财经/国际）挤掉；
+    · **所有页都失败才 raise** —— 让 collect() 记失败、让 live 函数回退 RSS，
+      绝不「静默返回空」把故障伪装成 0 条。
+    """
+    out, seen_url, seen_title = _NewsList(), set(), set()
+    cutoff = time.time() - days * 86400
+    cutoff_date = datetime.fromtimestamp(cutoff).date()
+    per_page = max(8, max_items // max(len(pages), 1))
+    bad_ts = stale = failed = 0
+    for page_url, category in pages:
+        if len(out) >= max_items:
+            break
+        try:
+            html = _get_html(page_url)
+        except Exception as e:
+            failed += 1
+            out.partial = True
+            print(f"[warn] {source} 栏目页 {page_url} 抓取失败，保留已抓 {len(out)} 条：{str(e)[:80]}")
+            continue
+        taken = 0
+        for href, date_s, title, hhmm in iterator(html):
+            if len(out) >= max_items or taken >= per_page:
+                break
+            if not title:
+                continue
+            ts = _parse_ts(f"{date_s} {hhmm}:00" if hhmm else f"{date_s} 00:00:00")
+            if not ts:
+                bad_ts += 1
+                continue
+            link = urllib.parse.urljoin(page_url, href)
+            path = urllib.parse.urlsplit(link).path
+            if path in seen_url or title in seen_title:
+                continue
+            # 精确到分钟的按 cutoff 精确比；只有日期的按日历日比（见上方时间口径注释）
+            dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+            if hhmm:
+                if time.mktime(dt.timetuple()) < cutoff:
+                    stale += 1
+                    continue
+            elif dt.date() < cutoff_date:
+                stale += 1
+                continue
+            seen_url.add(path)
+            seen_title.add(title)
+            out.append({"time": ts, "source": source, "category": category,
+                        "url": link, "text": title[:500]})
+            taken += 1
+        time.sleep(0.6)
+    if pages and failed == len(pages):
+        raise RuntimeError(f"{source} 栏目页全部抓取失败（{failed}/{len(pages)}）")
+    if bad_ts:
+        print(f"[warn] {source} 栏目页：{bad_ts} 条发布时间无法解析，已丢弃")
+    if stale:
+        print(f"[warn] {source} 栏目页：{stale} 条早于 cutoff（{days} 天）已过滤")
+    return out
+
+
+def fetch_xinhua_live(days, max_items):
+    """新华网 live 取数：栏目页 HTML（见上方 XINHUA_COLUMNS 注释）。
+
+    回退逻辑（兜底，保证「保留新华网」最坏也不比现在差）：
+      新端点异常 **或** 抓到 0 条 → print 原因并回退 `fetch_xinhua`（原 RSS）。
+    若 RSS 也失败，异常继续上抛给 collect() 记为该源失败（不吞异常返回空）。
+    """
+    try:
+        items = _fetch_columns(XINHUA_COLUMNS, "新华网", days, max_items, _iter_xinhua_links)
+    except Exception as e:
+        print(f"[warn] 新华网 live 栏目页全部失败（{str(e)[:80]}），回退 RSS：{XINHUA_RSS}")
+        return fetch_xinhua(days, max_items)
+    if not items:
+        print(f"[warn] 新华网 live 栏目页 0 条，回退 RSS：{XINHUA_RSS}"
+              f"（该 RSS 自 2022-12 起冻结，days=1 下预计仍为 0）")
+        return fetch_xinhua(days, max_items)
+    return items
+
+
+def fetch_people_live(days, max_items):
+    """人民网 live 取数：栏目页 HTML（见上方 PEOPLE_COLUMNS 注释）。
+
+    回退逻辑同 fetch_xinhua_live：新端点异常或 0 条 → 回退 `fetch_people`（原 RSS，
+    实测停在 2025-06-05，因此回退后的 0 条会如实反映为 0 条而不是编造）。
+    """
+    try:
+        items = _fetch_columns(PEOPLE_COLUMNS, "人民网", days, max_items, _iter_people_links)
+    except Exception as e:
+        print(f"[warn] 人民网 live 栏目页全部失败（{str(e)[:80]}），回退 RSS：{PEOPLE_RSS}")
+        return fetch_people(days, max_items)
+    if not items:
+        print(f"[warn] 人民网 live 栏目页 0 条，回退 RSS：{PEOPLE_RSS}"
+              f"（该 RSS 自 2025-06 起冻结，days=1 下预计仍为 0）")
+        return fetch_people(days, max_items)
+    return items
+
+
 def fetch_chinanews_roll(days, max_items):
     """中新网 滚动（国内/综合）—— 官方通讯社口径的通用新闻源。"""
     return _parse_rss(_get_xml(CN_CHINANEWS_ROLL), "中新网滚动", "official", days, max_items)
@@ -633,8 +838,19 @@ SOURCES = [
     #   ⚠️ **用户明确要求保留这两家**（宁可留着等它们复活，也不移除），所以它们留在
     #   列表里；但通用新闻的供给交给下面新增的活源，别指望这两条。
     ("36氪", fetch_36kr, 30),
-    ("新华网", fetch_xinhua, 100),
-    ("人民网", fetch_people, 60),
+    # 新华网 / 人民网（2026-10-04 第三阶段，第三次改动）：**源名与媒体不变**，只把
+    # 取数方式从「停更的 RSS」换成「栏目页 HTML」：
+    #   · 新端点：XINHUA_COLUMNS（新华网时政联播/财经/国际/深度观察/m.news.cn）与
+    #     PEOPLE_COLUMNS（人民网滚动新闻/首页/财经/国际/社会）—— 端点清单、实测数据
+    #     （2026-10-04 当日链接数）、RSS 为何停更、时间口径，全部写在两个常量上方的注释里。
+    #   · 回退：fetch_xinhua_live / fetch_people_live 内先试新端点，**异常或 0 条**时
+    #     print 原因并回退到原 fetch_xinhua / fetch_people（RSS）；两者都失败才上抛给
+    #     collect() 记为该源失败。原 RSS 函数**一行未动**，所以最坏情况不比改动前差。
+    #   · cap：实测栏目页当日供给 新华网 ~74 条（5 页各自独立配额）、人民网 ~60 条，
+    #     故 100 / 60 是「够用不虚高」的取值；两者仍按 days=1（24 小时窗）过滤。
+    #   ⚠️ 注意：第 4 项是「该源最小时间窗」，这两个源**不设**第 4 项，即跟随 collect(days)。
+    ("新华网", fetch_xinhua_live, 100),
+    ("人民网", fetch_people_live, 60),
     # 通用新闻（2026-10-04 新增）——用户要求「包括所有相关新闻，而不是只有股票相关的」。
     # 只吃财经快讯 + 个股公告会让分析面变窄：宏观、政策、国际形势、产业动向本身就是判断依据。
     # 实测（当日 18:35 仍在更新）：中新网三个频道各 30 条；新浪滚动 lid=2509 当日有效。

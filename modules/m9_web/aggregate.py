@@ -548,6 +548,84 @@ class Bundle:
 
 
 # ---------------------------------------------------------------------------
+# 来源清单：confirmed 条目的徽章要带上"是谁刊发的"
+#
+# confirmed = 至少两个**独立出版方**刊发过同一事件（M2 判据），依据是 M1 跨源
+# 去重时聚合进 `sources` 的全部报道方（已排序，至少含自身 source）。只给二值
+# 徽章等于替读者下结论；列出来源，印证强度由读者自己判断。
+#
+# 与 M5 日报（report.py::sources_label）、M6 推送（push.py::push_verified_note）
+# 同一套判据，三处各有一份实现 —— 与 conclusion() 的三份副本同理：这三个模块
+# 是各自独立运行的入口，不为一句文案互相 import（少一个可以静默炸掉的依赖）。
+# 改动任何一处时，另两处必须同步。
+#
+# 列表徽章截断到 4 家、详情弹层不截断（SOURCES_FULL=0 表示不限）。
+# ---------------------------------------------------------------------------
+SOURCES_IN_LIST = 4
+SOURCES_FULL = 0
+
+
+def news_sources(n):
+    """该新闻的全部报道来源：优先 sources，缺字段时退回自身 source。
+
+    去重、保持原顺序（M1 已按名称排好），过滤空值。旧数据没有 sources 字段，
+    退化成只显示自己那一家；两者都取不到时返回 []。
+    """
+    raw = n.get("sources") or []
+    if not raw:
+        raw = [n.get("source")]
+    out = []
+    for s in raw:
+        s = s.strip() if isinstance(s, str) else ""
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
+def sources_label(n, max_sources=SOURCES_IN_LIST):
+    """「来源：新浪财经、东方财富」；来源过多时「来源：A、B、C、D 等 6 家」。
+
+    max_sources=0（SOURCES_FULL）表示不截断。没有可取来源时返回 ""。
+    """
+    srcs = news_sources(n)
+    if not srcs:
+        return ""
+    if max_sources and len(srcs) > max_sources:
+        return "来源：" + "、".join(srcs[:max_sources]) + f" 等 {len(srcs)} 家"
+    return "来源：" + "、".join(srcs)
+
+
+def verified_label(n, max_sources=SOURCES_IN_LIST):
+    """列表徽章的整句文案：「已确认 · 来源：A、B、C、D 等 6 家」/「待核实」。
+
+    单源条目保持原样 —— 来源就是它自己那一家，元信息里已经显示了。
+    """
+    if n.get("verified") != "confirmed":
+        return "待核实"
+    lab = sources_label(n, max_sources)
+    return f"已确认 · {lab}" if lab else "已确认"
+
+
+def verified_detail_label(n):
+    """详情弹层的整句文案：来源**完整列出**、不截断（弹层里有的是空间）。"""
+    if n.get("verified") != "confirmed":
+        return "待核实（单源）"
+    lab = sources_label(n, SOURCES_FULL)
+    return f"已确认（多源） · {lab}" if lab else "已确认（多源）"
+
+
+def confirmed_sources(n, max_sources=SOURCES_IN_LIST):
+    """confirmed 条目裸的来源清单（「来源：A、B 等 6 家」），其余一律返回 ""。
+
+    字段名带 confirmed 是故意的：前端拿到就能直接塞进元信息，不必再判一次
+    verified，也不会把单源条目自己那一家当成"来源清单"渲染出来。
+    """
+    if n.get("verified") != "confirmed":
+        return ""
+    return sources_label(n, max_sources)
+
+
+# ---------------------------------------------------------------------------
 # 检索
 # ---------------------------------------------------------------------------
 def query_news(bundle, q="", cat="", senti="", verified="", source="",
@@ -555,6 +633,12 @@ def query_news(bundle, q="", cat="", senti="", verified="", source="",
     """按条件筛选新闻。返回 (总数, 当前页条目)。
 
     q 支持空格分隔的多关键词，全部命中才算匹配（AND）。
+
+    条目原样带上 sources（列表）与下面几个**展示用**字段，前端不必自己知道
+    截断规则：
+      - verified_label  / verified_detail    整句徽章文案（列表截断 / 详情完整）
+      - confirmed_sources / confirmed_sources_full  裸「来源：…」清单（非
+        confirmed 为空串，可直接判断要不要渲染）
     """
     items = []
     terms = [t.lower() for t in (q or "").split() if t.strip()]
@@ -576,7 +660,17 @@ def query_news(bundle, q="", cat="", senti="", verified="", source="",
                    + " " + " ".join(n.get("board") or [])).lower()
             if not all(t in hay for t in terms):
                 continue
-        items.append({"id": i, **n})
+        item = {"id": i, **n}
+        # 前端只负责把这几句放进徽章/元信息：截断规则只在这里定义一份。
+        # verified_label / verified_detail：整句（徽章文案直接替换）
+        # confirmed_sources / confirmed_sources_full：裸清单（另起一个 span，
+        #   与 M5 日报「徽章 + 来源清单」的版式一致；非 confirmed 为空串）
+        # 注意 sources（原始列表）必须原样带出去 —— 静态导出走的就是本函数。
+        item["verified_label"] = verified_label(n)
+        item["verified_detail"] = verified_detail_label(n)
+        item["confirmed_sources"] = confirmed_sources(n)
+        item["confirmed_sources_full"] = confirmed_sources(n, SOURCES_FULL)
+        items.append(item)
 
     if sort == "source":
         items.sort(key=lambda x: (x.get("source") or "", x.get("time") or ""), reverse=True)

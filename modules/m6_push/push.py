@@ -229,6 +229,37 @@ def _stem(s):
     return s[:12]
 
 
+# ---------------------------------------------------------------------------
+# 重点新闻的「已确认」标记要带上来源清单
+#
+# 微信正文长度敏感（Server酱单条上限、手机屏幕都吃紧），所以最多列 3 家，
+# 超出追加「等N家」（N 是来源总数）。与 M5 日报、M9 网页同一套判据 ——
+# confirmed 表示至少两个独立出版方刊发过，列出来源读者才能自己看印证强度。
+# 标题逻辑（32 字符上限）不在这里，也不受影响。
+# ---------------------------------------------------------------------------
+SOURCES_IN_PUSH = 3
+
+
+def push_verified_note(n):
+    """「已确认 2 源：新浪财经、东方财富」/「待核实」——推送里的一句话形式。
+
+    没有 sources 字段（旧数据）时退回「已确认」，绝不渲染成「已确认 0 源：」。
+    """
+    if n.get("verified") != "confirmed":
+        return "待核实"
+    srcs = []
+    for s in (n.get("sources") or [n.get("source")]):
+        s = s.strip() if isinstance(s, str) else ""
+        if s and s not in srcs:
+            srcs.append(s)
+    if not srcs:
+        return "已确认"
+    note = f"已确认 {len(srcs)} 源：" + "、".join(srcs[:SOURCES_IN_PUSH])
+    if len(srcs) > SOURCES_IN_PUSH:
+        note += f"等{len(srcs)}家"
+    return note
+
+
 def select_top_news(news, k=3):
     """按 确认优先 > 类别权重 > 情绪显著性 排序，去重后取前 k 条"""
     def score(n):
@@ -464,7 +495,7 @@ def build_digest(date_str, slot, sentiment, market_view, top_news, delay=None, p
         title = extract_title(n.get("text", ""))
         cat = CAT_CN.get(n.get("category"), n.get("category"))
         senti = SENTI_CN.get(n.get("sentiment"), "")
-        verified = "已确认" if n.get("verified") == "confirmed" else "待核实"
+        verified = push_verified_note(n)
         parts.append(f"{i}. [{cat}] {title}（{senti}·{verified}）")
 
     return "\n".join(parts)

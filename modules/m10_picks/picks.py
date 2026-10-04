@@ -17,9 +17,13 @@ M10 候选清单与事后复盘模块 — 把 M3 的判断变成可检验的记�
    「盘前 08:10」与「延迟到 12:46 的盘前」，也认不出国庆节的周一，报价时刻可以。
    fail-closed：判定不了就不写，延后一天由「到期即补」自动吸收
 4. 记录当天锁下基准价 —— M4 只有实时行情、没有历史行情，事后补不了
-5. 到期即补：target = 记录日 + k 天，today >= target 且该档未填就填，
-   记**实际**打分日（周末/停牌会让它晚几天，如实反映）。
+5. 到期即补：target = 记录日**之后的第 k 个交易日**（日历口径见下），
+   today >= target 且该档未填就填，记**实际**打分日（停牌会让它晚几天，如实反映）。
    各档独立判超期，不拿最早那档统一作废
+5b. **一轮只补最早的那一档**：T+1/T+3/T+5 分三轮补，天然落在不同交易日、不同价格上。
+   早期版本一轮把所有到期档位一次性补齐（同一轮只抓一次行情灌给所有档），跨长假时
+   T+3 与 T+5 会挤在同一天、用同一个价格，实际只有约 2 个交易日跨度，却按两个样本
+   各自计入均值（report.py / push.py 都是逐档独立统计）
 6. 账本放 reports/picks/ —— 该目录随 gh-pages 自动跨天留存
    （daily.yml 部署 publish_dir 为 ./reports，开头 git archive 还原整棵树），
    无需 git commit 步骤、无需 artifact、无需改 .gitignore
@@ -30,6 +34,10 @@ M10 候选清单与事后复盘模块 — 把 M3 的判断变成可检验的记�
 9. secid 为空的候选在 EXPIRE_AFTER_DAYS 宽限期内每轮重试解析（当日 quotes.json
    的 name 索引 → M4 内存缓存 → 与行情交叉核对过的 code_hint），超期才 no_quote
 10. 账本坏行只在内存里隔离，save_ledger 按原位置原样写回 —— 不因一次重写而抹掉证据
+11. 交易日历（trading_days）：东财沪深300日K线的日期序列 = 真实交易日序列（腾讯
+    日K兜底），落缓存 reports/picks/trading_days.json；取不到则退化为「周一~周五
+    − 内置 2026 休市表」的近似日历并打醒目 warn。due(k) 与 reviews[k]["span"] 都走
+    这个日历 —— 「自然日 +1 天」在周末/长假上是错的（周五记录 T+1 会算成周六）
 
 密钥来源: 环境变量 DEEPSEEK_API_KEY
 """
@@ -42,7 +50,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 try:
@@ -55,6 +63,9 @@ DATA_DIR = BASE / "data"
 PICKS_DIR = BASE / "reports" / "picks"          # 账本 / 板块缓存 / 机器可读状态文件
 LEDGER_PATH = PICKS_DIR / "ledger.jsonl"
 BOARD_CACHE_PATH = PICKS_DIR / "boards.json"    # 板块代码表缓存
+# 交易日历缓存（与 boards.json 同目录，随 gh-pages 一起跨天留存）。
+# 自检: probe() 会打印它的来源与最近几个交易日。
+TRADING_DAYS_CACHE_PATH = PICKS_DIR / "trading_days.json"
 RAW_DUMP_PATH = DATA_DIR / "llm_candidates_raw.txt"   # LLM 候选原文快照（诊断用）
 
 CST = timezone(timedelta(hours=8))
@@ -72,6 +83,35 @@ BOARD_LIST_API = ("https://push2.eastmoney.com/api/qt/clist/get"
 # M4._get_json 不打备用域名（那层循环在 fetch_quote 自己身上），故这里自己走一遍
 BOARD_LIST_MIRROR = BOARD_LIST_API.replace("//push2.eastmoney.com", "//push2delay.eastmoney.com")
 BOARD_TYPES = ("2", "3")      # 2=行业板块 3=概念板块
+
+# ---------------------------------------------------------------- 交易日历常量
+# 交易日历取数端点（东方财富沪深300日K线）：
+#   https://push2his.eastmoney.com/api/qt/stock/kline/get
+#     ?secid=1.000300&klt=101&fqt=1&beg=YYYYMMDD&end=YYYYMMDD
+#     &fields1=f1,f2,f3&fields2=f51,f52
+# 响应 data.klines 是 ["2026-09-30,4356.80", ...]，每行第一个字段即该交易日。
+# 沪深300 每个交易日都有成交，所以它的 K 线日期序列就是 A 股交易日序列（实测
+# 2026-09-15~10-04 返回 11 个日期，缺 09-25/10-01~10-02 等休市日，与交易所
+# 2026 休市通知一致）。**只用 M4._get_json**，不新写 HTTP 客户端。
+KLINE_API = ("https://push2his.eastmoney.com/api/qt/stock/kline/get"
+             "?secid={secid}&klt=101&fqt=1&beg={beg}&end={end}"
+             "&fields1=f1,f2,f3&fields2=f51,f52")
+# 备用源：腾讯日K。与 fetch_any 的「东财优先、腾讯兜底」同一思路 —— 东财 push2his
+# 会按 IP 限流（2026-10-04 本机连续几次取数后就开始 RemoteDisconnected，而腾讯源
+# 同时完全正常），只有一条腿时日历会整块降级。
+# 依据（2026-10-04 本机实测）：
+#   GET 该 URL(param=sh000300,day,2026-09-01,2026-10-04,320,qfq)
+#   → data.sh000300.day = [["2026-09-01","4618.730",...], ...]，21 个交易日，
+#     与东财序列逐个相同（都缺 09-25 中秋）。整段休市/未来区间返回 day: []
+#     （空列表 = "这几天没有交易日"，是有效答案，不是失败）。
+#   **count 是"最多返回几根"，超出时从最早那段截断**（实测 2025-01-01 起、
+#   count=300 只回到 2025-07-10），故 count 必须 ≥ 窗口自然日数，否则会留下缺口。
+KLINE_API_TENCENT = ("https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+                     "?param={code},day,{beg},{end},{count},qfq")
+TENCENT_BENCH_CODE = "sh000300"      # 与 BENCH_SECID=1.000300 同一个标的
+TRADING_DAYS_PAD_DAYS = 45    # 每次联网向前多取的自然日天数（减少请求次数）
+DUE_HORIZON_DAYS = 70         # due(k) 向后找交易日的自然日窗口（够 T+5 跨两个长假）
+CAL_NET_MAX = 3               # 每进程最多联网几次（窗口不同才需要第二次；防失控重试）
 
 REVIEW_DAYS = (1, 3, 5)       # 复盘周期
 # 到期后仍取不到行情，放弃重试（防无限重试）。取 15 天而非 7：打分只在
@@ -258,6 +298,385 @@ def close_ready(bench_q, day):
     if qhm < "1500":
         return False, f"最新报价停在 {hhmm}，今日尚未收盘（盘中价不是收盘价）"
     return True, f"{qdate} {hhmm} 已收盘"
+
+
+# ---------------------------------------------------------------- 交易日历
+#
+# 为什么不用「记录日 + k 天」：那是自然日。周五记录、T+1 会算成周六；国庆连休时
+# T+3 与 T+5 会落在同一天、用同一个收盘价，实际只有约 2 个交易日跨度，却按两个
+# 样本各自计入均值。故一切到期日都改走**真实交易日序列**。
+
+# 内置的 A 股休市日表 —— **仅作降级用**（网络失败且无缓存时），且**只覆盖 2026 年**。
+# 来源：上海/深圳/北京证券交易所 2026 年部分节假日休市安排通知（2025-12-22 发布）。
+#   证券时报网 https://stcn.com/article/detail/3551896.html
+#   新浪财经/中证网 https://finance.sina.com.cn/roll/2025-12-22/doc-inhcsrnz4424581.shtml
+# 原文（A 股，非港股通）：
+#   元旦 1/1(四)~1/3(六) 休市，1/4(日) 周末休市，1/5(一) 开市
+#   春节 2/15(日)~2/23(一) 休市，2/14(六)、2/28(六) 周末休市，2/24(二) 开市
+#   清明 4/4(六)~4/6(一) 休市，4/7(二) 开市
+#   劳动 5/1(五)~5/5(二) 休市，5/9(六) 周末休市，5/6(三) 开市
+#   端午 6/19(五)~6/21(日) 休市，6/22(一) 开市
+#   中秋 9/25(五)~9/27(日) 休市，9/28(一) 开市
+#   国庆 10/1(四)~10/7(三) 休市，9/20(日)、10/10(六) 周末休市，10/8(四) 开市
+# 下面把整段休市区间逐个列出（含落在周末的日期 —— 近似日历本来就先跳周末，多列
+# 无害；列全是为了这份表单看也是对的）。年份写死在日期里，故 2027 及以后不适用。
+FALLBACK_HOLIDAYS = frozenset(
+    d.strftime("%Y-%m-%d")
+    for a, b in (
+        ("2026-01-01", "2026-01-04"),
+        ("2026-02-14", "2026-02-23"),
+        ("2026-04-04", "2026-04-06"),
+        ("2026-05-01", "2026-05-05"),
+        ("2026-06-19", "2026-06-21"),
+        ("2026-09-25", "2026-09-27"),
+        ("2026-10-01", "2026-10-07"),
+    )
+    for d in [datetime.strptime(a, "%Y-%m-%d") + timedelta(days=i)
+              for i in range((datetime.strptime(b, "%Y-%m-%d")
+                              - datetime.strptime(a, "%Y-%m-%d")).days + 1)]
+)
+FALLBACK_HOLIDAY_YEARS = (2026,)   # 上表核实过的年份；其它年份只跳周末
+
+# 进程内日历状态。
+#   days    已取得的真实交易日（date 集合）
+#   beg/end **已经查询过的自然日窗口**（不是"最后一个交易日"）—— 周末/节假日当天
+#           没有 K 线，但那天确实查过了，用窗口判覆盖才不会天天重复联网
+#   source  人类可读的来源说明（--probe 打印）
+#   approx  已降级（本次进程内不再联网）
+#   warned  降级 warn 只打一次
+#   net_ok  已尝试联网的次数（每进程最多 CAL_NET_MAX；窗口不同才需要第二次）
+#   dead    本次进程内已失败的取数源（东财限流时就别再等它第二次超时）
+#   api     本次日历数据实际来自哪个源（写进缓存文件的 source 字段）
+#   override 离线测试注入的假交易日序列（见 _inject_trading_days）
+_CAL = {"days": set(), "beg": None, "end": None, "source": "", "api": "",
+        "approx": False, "warned": False, "year_warned": False, "net_ok": 0,
+        "dead": set(), "disk_loaded": False, "override": None}
+
+
+def _plain_date(v):
+    """date / datetime / "YYYY-MM-DD" → datetime.date（无时区）。"""
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, date):
+        return v
+    return datetime.strptime(str(v), "%Y-%m-%d").date()
+
+
+def _midnight(d):
+    """date → CST 零点的 datetime（与 _date() 同类型，便于与 today 相减）。"""
+    return datetime(d.year, d.month, d.day, tzinfo=CST)
+
+
+def _today():
+    return now_cst().date()
+
+
+def _inject_trading_days(days):
+    """**离线测试钩子**：注入假交易日序列（date/str 列表）后，所有日历查询只认它。
+
+    传 None 恢复真实取数。注入被视为"真实日历可用"，故 due()/span 都按交易日口径走。
+    """
+    _CAL["override"] = None if days is None else sorted(_plain_date(d) for d in days)
+    _CAL["approx"] = False
+    _CAL["warned"] = False
+
+
+def _cal_reset():
+    """**离线测试钩子**：清空进程内日历状态（含注入与降级标记）。
+
+    不动磁盘缓存；测试要避开真实缓存时自行把 TRADING_DAYS_CACHE_PATH 指到临时目录。
+    """
+    _CAL.update(days=set(), beg=None, end=None, source="", api="", approx=False,
+                warned=False, year_warned=False, net_ok=0, dead=set(),
+                disk_loaded=False, override=None)
+
+
+def _cal_covers(lo, hi):
+    """已查询过的自然日窗口是否覆盖 [lo, hi]（含端点）。"""
+    return (_CAL["beg"] is not None and _CAL["end"] is not None
+            and _CAL["beg"] <= lo and _CAL["end"] >= hi)
+
+
+def _cal_load_disk():
+    """读 TRADING_DAYS_CACHE_PATH。文件缺失/坏掉一律当作无缓存，不抛异常。
+
+    days 为空也当作无缓存（宁可重取一次）：45 天窗口内必有交易日，空的 days 只可能
+    来自损坏的文件，而"已覆盖却没数据"会让 due(k) 悄悄走近似口径。
+    """
+    _CAL["disk_loaded"] = True
+    try:
+        d = json.loads(TRADING_DAYS_CACHE_PATH.read_text(encoding="utf-8"))
+        days = [_plain_date(s) for s in (d.get("days") or [])]
+        beg, end = d.get("beg"), d.get("end")
+        if not days or not beg or not end:
+            return False
+        _CAL["days"].update(days)
+        _CAL["beg"], _CAL["end"] = _plain_date(beg), _plain_date(end)
+        _CAL["api"] = str(d.get("source") or "")
+        _CAL["source"] = (f"磁盘缓存 {TRADING_DAYS_CACHE_PATH}"
+                          f"（updated_at={d.get('updated_at') or '?'}，"
+                          f"源={_CAL['api'] or '?'}）")
+        return True
+    except Exception:
+        return False
+
+
+def _cal_save_disk():
+    """写缓存（先 .tmp 再 replace）。失败只 warn —— 缓存是加速器，不是前提。"""
+    try:
+        TRADING_DAYS_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "updated_at": now_cst().strftime("%Y-%m-%d %H:%M:%S"),
+            "source": _CAL["api"] or "unknown",
+            "beg": _CAL["beg"].strftime("%Y-%m-%d"),
+            "end": _CAL["end"].strftime("%Y-%m-%d"),
+            "last_trading_day": (max(_CAL["days"]).strftime("%Y-%m-%d")
+                                 if _CAL["days"] else None),
+            "days": [d.strftime("%Y-%m-%d") for d in sorted(_CAL["days"])],
+        }
+        tmp = TRADING_DAYS_CACHE_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1),
+                       encoding="utf-8")
+        tmp.replace(TRADING_DAYS_CACHE_PATH)
+    except Exception as e:
+        print(f"[warn] 交易日历缓存写入失败: {type(e).__name__}: {str(e)[:60]}")
+
+
+def _cal_parse_eastmoney(d):
+    """东财 kline 响应 → date 列表；结构不符返回 None（区别于"有效空窗口"的 []）。"""
+    data = d.get("data") if isinstance(d, dict) else None
+    if not isinstance(data, dict):
+        return None
+    out = []
+    for line in (data.get("klines") or []):
+        try:
+            out.append(_plain_date(str(line).split(",", 1)[0].strip()))
+        except Exception:
+            continue
+    return out
+
+
+def _cal_parse_tencent(d):
+    """腾讯 fqkline 响应 → date 列表；结构不符返回 None。
+
+    data.sh000300.day / qfqday 是 [[日期, 开, 收, 高, 低, 量, ...], ...]，日期在 [0]。
+    整段休市或全在未来的窗口会返回 day: []，那是有效答案（返回 []）。
+    """
+    data = d.get("data") if isinstance(d, dict) else None
+    node = data.get(TENCENT_BENCH_CODE) if isinstance(data, dict) else None
+    if not isinstance(node, dict):
+        return None
+    for key in ("qfqday", "day"):
+        rows = node.get(key)
+        if isinstance(rows, list):
+            out = []
+            for row in rows:
+                try:
+                    out.append(_plain_date(str(row[0]).strip()))
+                except Exception:
+                    continue
+            return out
+    return None
+
+
+def _cal_fetch(beg, end):
+    """联网取 [beg, end] 的沪深300日K → 更新内存与磁盘缓存。成功返回 True。
+
+    东财优先、腾讯兜底（两家的响应结构不同，各有一个解析器）。空窗口（整段休市，
+    日期列表为空）也算**成功**：那正是"这几天没有交易日"的正确答案，必须把它记进
+    已查询窗口，否则每个进程都会为这几天反复联网。
+    与旧窗口重叠时取窗口并集并保留旧数据（接口万一截断也不丢历史）；不重叠（中间
+    有空档）则丢弃旧数据，避免把没查过的空档当成"已覆盖"。
+    """
+    if end < beg:
+        return False
+    span = (end - beg).days + 10          # 自然日数是交易日的上界，保证不会被截断
+    attempts = (
+        ("eastmoney push2his kline",
+         KLINE_API.format(secid=BENCH_SECID, beg=beg.strftime("%Y%m%d"),
+                          end=end.strftime("%Y%m%d")),
+         _cal_parse_eastmoney),
+        ("tencent fqkline",
+         KLINE_API_TENCENT.format(code=TENCENT_BENCH_CODE, beg=beg.strftime("%Y-%m-%d"),
+                                  end=end.strftime("%Y-%m-%d"), count=span),
+         _cal_parse_tencent),
+    )
+    days, api = None, ""
+    for name, url, parse in attempts:
+        if name in _CAL["dead"]:        # 本进程里已经失败过，不再白等一次超时
+            continue
+        try:
+            d = M4._get_json(url)
+        except Exception as e:
+            _CAL["dead"].add(name)
+            print(f"[warn] 交易日历取数失败（{name}）: {type(e).__name__}: {str(e)[:50]}")
+            continue
+        days = parse(d)
+        if days is None:
+            _CAL["dead"].add(name)
+            print(f"[warn] 交易日历响应结构不符（{name}），换下一个源")
+            continue
+        api = name
+        break
+    if days is None:
+        print("[warn] 交易日历所有取数源都失败")
+        return False
+
+    old_beg, old_end = _CAL["beg"], _CAL["end"]
+    if old_beg is not None and old_end is not None and beg <= old_end and old_beg <= end:
+        new_beg, new_end = min(old_beg, beg), max(old_end, end)
+        keep = {x for x in _CAL["days"] if new_beg <= x <= new_end}
+    else:
+        new_beg, new_end, keep = beg, end, set()
+    _CAL["days"] = keep | set(days)
+    _CAL["beg"], _CAL["end"] = new_beg, new_end
+    _CAL["api"] = api
+    _CAL["source"] = (f"{api} 查询窗口 {new_beg}~{new_end}，本次 {len(days)} 个交易日")
+    print(f"[OK] 交易日历取数 {beg}~{end} → {len(days)} 个交易日（源 {api}，"
+          f"缓存窗口 {new_beg}~{new_end}）")
+    _cal_save_disk()
+    return True
+
+
+def _cal_ensure(start, end):
+    """确保真实日历覆盖自然日区间 [start, min(end, today)]；返回是否可用真实日历。
+
+    顺序：内存 → 磁盘缓存 → 联网（每进程最多 CAL_NET_MAX 次）→ 降级。覆盖以
+    **已查询窗口**为准，见 _CAL 注释。联网端点只到今天（K 线没有未来），故 end
+    先与今天取小。
+
+    联网成功一次必然覆盖本次请求（窗口就是按请求算出来的），因此不会为同一个区间
+    反复请求；窗口不同（例如先算今天的 due，再补一条三个月前的老账本）才需要第二次。
+    **取数失败即降级**，不做多次重试 —— 网络不通时等三次超时会把整轮拖垮。
+    """
+    if _CAL["override"] is not None:
+        return True
+    if _CAL["approx"]:
+        return False
+    capped = min(end, _today())
+    lo = min(start, capped)
+    if _cal_covers(lo, capped):
+        return True
+    if not _CAL["disk_loaded"]:
+        _cal_load_disk()
+        if _cal_covers(lo, capped):
+            return True
+    if _CAL["net_ok"] < CAL_NET_MAX:
+        _CAL["net_ok"] += 1
+        beg = lo - timedelta(days=TRADING_DAYS_PAD_DAYS)
+        if _CAL["beg"] is not None:
+            beg = min(beg, _CAL["beg"])
+        if _cal_fetch(beg, capped):
+            if _cal_covers(lo, capped):
+                return True
+            print(f"[warn] 交易日历覆盖不足：需要 {lo}~{capped}，"
+                  f"实际 {_CAL['beg']}~{_CAL['end']}")
+    _CAL["approx"] = True
+    if not _CAL["warned"]:
+        _CAL["warned"] = True
+        print("[warn] ===== 交易日历不可用（联网失败且无可用缓存）→ 已降级为近似日历 =====")
+        print("[warn] 近似规则：周一~周五，再减去内置的 A 股休市日表；"
+              f"该表只核实过 {FALLBACK_HOLIDAY_YEARS[0]} 年（来源：沪深北交易所 "
+              "2026 年休市通知），其它年份只跳周末。")
+        print("[warn] 影响：due(k) 与 reviews[k]['span'] 可能与真实交易日不符，"
+              "请优先修复网络/缓存。")
+    return False
+
+
+def _approx_days(start, end):
+    """近似交易日：周一~周五 − FALLBACK_HOLIDAYS（仅 2026 年核实过）。
+
+    两处用它：①真实日历整体不可用时的降级；②真实日历只到"今天"、而 due(k) 落在
+    未来时的**接续**。②必须带上节假日表 —— 否则 2026-09-30 之后的 T+3 会被算成
+    10-02（真值 10-09），等于把刚修掉的 bug 从后门放回来。
+    """
+    out, cur = [], start
+    while cur <= end:
+        if cur.weekday() < 5 and cur.strftime("%Y-%m-%d") not in FALLBACK_HOLIDAYS:
+            out.append(cur)
+        cur += timedelta(days=1)
+    if not _CAL["year_warned"] and any(
+            y not in FALLBACK_HOLIDAY_YEARS for y in range(start.year, end.year + 1)):
+        _CAL["year_warned"] = True
+        print(f"[warn] 近似日历的节假日表只到 {max(FALLBACK_HOLIDAY_YEARS)} 年，"
+              f"{max(FALLBACK_HOLIDAY_YEARS) + 1} 年起的日期只跳周末、不跳节假日")
+    return out
+
+
+def _trading_days_ex(start, end):
+    """(区间内交易日列表, 来源)，来源 ∈ {"real", "fallback"}。
+
+    "real" = 真实 K 线（或测试注入）；"fallback" = 近似日历。span 需要区分这两者。
+    """
+    start, end = _plain_date(start), _plain_date(end)
+    if end < start:
+        return [], ("fallback" if _CAL["approx"] else "real")
+    if _CAL["override"] is not None:
+        return [d for d in _CAL["override"] if start <= d <= end], "real"
+    if _cal_ensure(start, end):
+        return [d for d in sorted(_CAL["days"]) if start <= d <= end], "real"
+    return _approx_days(start, end), "fallback"
+
+
+def trading_days(start_date, end_date):
+    """区间 [start_date, end_date] 内的 A 股交易日，升序 datetime.date 列表。
+
+    入参接受 date / datetime / "YYYY-MM-DD"（含端点）；end < start 返回 []。
+
+    取数: 东方财富沪深300日K线（见 KLINE_API 的注释），只用 M4._get_json。
+    缓存: TRADING_DAYS_CACHE_PATH = reports/picks/trading_days.json
+          （与 boards.json 同目录；含 updated_at / source / beg / end / days）
+          命中缓存且覆盖所请求区间时**不再联网**；--probe 会打印来源与最近交易日。
+    降级: 联网失败且无可用缓存 → 周一~周五 − FALLBACK_HOLIDAYS（仅 2026 年核实），
+          并打醒目 warn。降级只发生在"一个真实交易日都拿不到"时；真实日历可用但
+          只到今天时，未来那段由 _approx_days 接续（due() 内部处理）。
+    """
+    return _trading_days_ex(start_date, end_date)[0]
+
+
+def _span_of(base, done):
+    """基准日 → 补录日的跨度：真实日历可用时为**交易日数**，否则自然日数。
+
+    口径：不含 base、含 done（记录日之后的第 k 个交易日补上 → span == k）。
+    返回 (int, "trading"/"natural")；"natural" 表示日历不可用已退化，展示层据此说明。
+
+    生产路径里 done 恒为 today（补录只发生在今天）。若调用方传了**未来**的 done，
+    真实 K 线不可能有那段数据，此时不谎报"交易日"口径，退回自然日跨度。
+    """
+    base, done = _plain_date(base), _plain_date(done)
+    days, kind = _trading_days_ex(base + timedelta(days=1), done)
+    if kind == "real" and (done <= _today() or _CAL["override"] is not None):
+        return len(days), "trading"
+    return max((done - base).days, 0), "natural"
+
+
+def due(k, base=None):
+    """基准日**之后的第 k 个交易日** → CST 零点 datetime（k 为 T+1/T+3/T+5 的 1/3/5）。
+
+    基准日 base 默认取今天；调用方（打分/复盘）显式传记录日 d0，因此
+    「第 1 个交易日」通常就是记录的次日 —— 记录发生在当日收盘后，当天不算。
+    返回 datetime 而非 date：与 today 同类型，(today - due).days 的既有用法不变；
+    _review 再把它格式化成 "YYYY-MM-DD" 写进账本的 due 字段（schema 不变）。
+
+    K 线只有已发生的交易日，base 之后的已知交易日不足 k 个时，未来那段用
+    _approx_days（周一~周五 − 2026 休市表）接续 —— 这是跨长假时"该等到哪天"的判据。
+    真实日历整体不可用则全程走 _approx_days（_cal_ensure 已打过 warn）。
+    """
+    base_d = _plain_date(base) if base is not None else _today()
+    lo = base_d + timedelta(days=1)
+    hi = base_d + timedelta(days=DUE_HORIZON_DAYS)
+    days, kind = _trading_days_ex(lo, hi)
+    if kind == "fallback":
+        days = _approx_days(lo, hi)
+    if len(days) >= k:
+        return _midnight(days[k - 1])
+    anchor = days[-1] if days else base_d
+    ext = _approx_days(anchor + timedelta(days=1), hi)
+    need = k - len(days)
+    if len(ext) >= need:
+        return _midnight(ext[need - 1])
+    # 理论上到不了（hi 留了 70 天）；真到了就按自然日硬推，绝不抛异常
+    return _midnight((ext[-1] if ext else anchor) + timedelta(days=need - len(ext)))
 
 
 def _load_board_cache():
@@ -915,9 +1334,12 @@ def _resolve_offline(row, by_name, by_code, cache=None):
 
 
 def score_pending(rows, today, bench_now, by_name=None, by_code=None, cache=None):
-    """到期即补：today >= 记录日 + k 天 且该档未填 → 现在就打分。
+    """到期即补：today >= 记录日之后的第 k 个交易日 且该档未填 → 现在就打分。
 
-    同一候选同一天只抓一次行情，供多个到期的 k 共用。
+    **一轮每行只补最早的那一档**（`min(未填且未作废的 k)`）。早期版本会把所有到期
+    档位一次性补齐，跨长假时 T+3 与 T+5 会落到同一天、用同一个收盘价，实际只有约
+    2 个交易日跨度，却在均值里各算一个样本。改成一档一轮后，T+1/T+3/T+5 自然落在
+    不同交易日、不同价格上。因此同一候选一轮也只抓一次行情（只剩一个 k）。
 
     secid 为空的条目在 EXPIRE_AFTER_DAYS 宽限期内**每轮都重试解析**（见
     _resolve_offline），超过宽限才写 status="no_quote"。早期版本首个到期日就
@@ -940,14 +1362,15 @@ def score_pending(rows, today, bench_now, by_name=None, by_code=None, cache=None
             print(f"[warn] 「{row.get('name')}」日期无法解析（{row.get('date')!r}），跳过")
             continue
 
-        due_ks = []
-        for k in REVIEW_DAYS:
-            if rv.get(str(k)) is not None:
-                continue
-            due = d0 + timedelta(days=k)
-            if today >= due:
-                due_ks.append((k, due))
-        if not due_ks:
+        unfilled = [k for k in REVIEW_DAYS if rv.get(str(k)) is None]
+        if not unfilled:
+            continue
+
+        # ① 先筛出"已经到期"的档位（due(k) = 记录日之后的第 k 个交易日）。
+        # 都没到期就整行跳过 —— 连 secid 兜底解析都不做，与旧行为一致。
+        due_now = [(k, due(k, d0)) for k in unfilled]
+        due_now = [(k, k_due) for k, k_due in due_now if today >= k_due]
+        if not due_now:
             continue
 
         if not row.get("secid"):
@@ -959,33 +1382,33 @@ def score_pending(rows, today, bench_now, by_name=None, by_code=None, cache=None
                 if not row.get("market"):
                     row["market"] = market
                 print(f"[OK] {row['name']} 复盘兜底解析出 secid={secid}（来源 {src}）")
+        has_secid = bool(row.get("secid"))
 
-        # 仍解析不到 secid：宽限期内留待下次运行重试，只有逾期才认输写 no_quote
-        if not row.get("secid"):
-            waiting = []
-            for k, due in due_ks:
-                if (today - due).days > EXPIRE_AFTER_DAYS:
-                    rv[str(k)] = _review(due, today, status="no_quote")
-                    print(f"[warn] {row['name']} T+{k} 无 secid 且逾期，标记 no_quote")
-                else:
-                    waiting.append(f"T+{k}")
-            if waiting:
-                print(f"[warn] {row['name']} 未解析到 secid，宽限期内继续重试"
-                      f"（{','.join(waiting)}）")
+        # ② 逐档独立判逾期。**不能拿最早那档统一作废**：T+1 逾期 15 天以上时，
+        # T+3/T+5 可能刚到到期窗口，一并作废等于白丢一条本可以打的分。
+        # 状态语义与旧版一致：解析不到 secid 的写 no_quote，有 secid 写 expired。
+        alive = []
+        for k, k_due in due_now:
+            if (today - k_due).days > EXPIRE_AFTER_DAYS:
+                span, kind = _span_of(d0, today)
+                rv[str(k)] = _review(k_due, today,
+                                     status="expired" if has_secid else "no_quote",
+                                     span=span, span_kind=kind)
+                print(f"[warn] {row['name']} T+{k} 逾期未补"
+                      f"（到期日 {k_due.strftime('%Y-%m-%d')}），标记 "
+                      f"{'expired' if has_secid else 'no_quote'}")
+            else:
+                alive.append((k, k_due))
+        if not alive:
             continue
 
-        # 超过放弃期仍未补上的，按档独立标记 expired。
-        # **不能拿最早那档统一判**：T+1 逾期 8 天时 T+5 可能刚到期，
-        # 一并作废等于白白丢掉一条本可以打的分。
-        alive = []
-        for k, due in due_ks:
-            if (today - due).days > EXPIRE_AFTER_DAYS:
-                rv[str(k)] = _review(due, today, status="expired")
-                print(f"[warn] {row['name']} T+{k} 逾期未补，标记 expired")
-            else:
-                alive.append((k, due))
-        due_ks = alive
-        if not due_ks:
+        # ③ **本轮只补最早的那一档**。其余活着的档保持 null，下一轮再看 ——
+        # 这样 T+1/T+3/T+5 会落在不同交易日、不同价格上（见 docstring）。
+        k, k_due = min(alive)
+
+        # 仍解析不到 secid：宽限期内留待下次运行重试，逾期才认输（②里已写过）
+        if not has_secid:
+            print(f"[warn] {row['name']} 未解析到 secid，宽限期内继续重试（T+{k}）")
             continue
 
         q, _src = fetch_any(row["secid"])
@@ -993,7 +1416,7 @@ def score_pending(rows, today, bench_now, by_name=None, by_code=None, cache=None
             time.sleep(1.0)
         price = q.get("price") if q else None
         if not price:
-            continue        # 停牌 / 限流：留待下次运行再补
+            continue        # 停牌 / 限流：留待下次运行再补（本档仍未填）
 
         base = row.get("base_price")
         ret = round((price - base) / base, 4) if base else None
@@ -1001,22 +1424,37 @@ def score_pending(rows, today, bench_now, by_name=None, by_code=None, cache=None
         bret = round((bench_now - b0) / b0, 4) if (b0 and bench_now) else None
         alpha = round(ret - bret, 4) if (ret is not None and bret is not None) else None
 
-        for k, due in due_ks:
-            rv[str(k)] = _review(
-                due, today, price=price, ret=ret, bench=bench_now,
-                bench_ret=bret, alpha=alpha,
-                status="ok" if alpha is not None else "no_bench")
-            scored += 1
-            a = f"{alpha:+.2%}" if alpha is not None else "—"
-            print(f"  ~ {row['name']} T+{k} 收 {price} 收益 {ret:+.2%} 超额 {a}")
+        span, kind = _span_of(d0, today)
+        rv[str(k)] = _review(
+            k_due, today, price=price, ret=ret, bench=bench_now,
+            bench_ret=bret, alpha=alpha,
+            status="ok" if alpha is not None else "no_bench",
+            span=span, span_kind=kind)
+        scored += 1
+        a = f"{alpha:+.2%}" if alpha is not None else "—"
+        print(f"  ~ {row['name']} T+{k} 收 {price} 收益 {ret:+.2%} 超额 {a}"
+              f"（实际跨度 {span} 个{'交易日' if kind == 'trading' else '自然日'}）")
     return scored
 
 
-def _review(due, done, price=None, ret=None, bench=None, bench_ret=None,
-            alpha=None, status="ok"):
-    return {"due": due.strftime("%Y-%m-%d"), "done": done.strftime("%Y-%m-%d"),
+def _review(due_day, done, price=None, ret=None, bench=None, bench_ret=None,
+            alpha=None, status="ok", span=None, span_kind=None):
+    """一档复盘记录。**已有字段名/类型一律不变**（账本 schema 只允许新增）。
+
+    参数 due_day 就是模块级 due() 的返回值（CST 零点 datetime），写进账本时
+    格式化成 "YYYY-MM-DD" 存进 **due** 字段 —— 字段名与类型都没变。
+
+    新增（纯附加）：
+      span      基准日 → 本次判定日之间的**实际交易日数**（int）；日历不可用时是
+                自然日天数，由 span_kind 指出
+      span_kind "trading"（真实交易日历）/ "natural"（降级为自然日）
+    展示层可据此说清"这条 T+3 其实是第 5 个交易日的价"。
+    注：expired / no_quote 的 span 是"基准日 → 判该档作废那天"，不是补录跨度（没有补录）。
+    """
+    return {"due": due_day.strftime("%Y-%m-%d"), "done": done.strftime("%Y-%m-%d"),
             "price": price, "ret": ret, "bench": bench, "bench_ret": bench_ret,
-            "alpha": alpha, "status": status}
+            "alpha": alpha, "status": status,
+            "span": span, "span_kind": span_kind}
 
 
 def _date(s):
@@ -1063,6 +1501,22 @@ def probe():
     for name in ("半导体", "AI算力", "算力", "不存在板块"):
         hit = match_board(name, bm)
         print(f"       匹配「{name}」→ {hit['secid'] if hit else '未匹配'}")
+
+    # 交易日历：来源 + 最近 10 个交易日（排查 due(k)/span 用）。
+    # 取不到不是 FAIL —— 有内置近似日历兜底，但要把来源打清楚。
+    print("-" * 52)
+    td = trading_days(_today() - timedelta(days=40), _today())
+    kind = "fallback" if _CAL["approx"] else "real"
+    tag = "[OK]  " if kind == "real" else "[warn]"
+    print(f"{tag} 交易日历来源={_CAL['source'] or '（未取到，用内置近似日历）'}")
+    print(f"       查询窗口 {_CAL['beg']}~{_CAL['end']}"
+          f"　口径={'真实交易日' if kind == 'real' else '近似（周一~周五−2026休市表）'}")
+    print(f"       最近 10 个交易日: "
+          + (" ".join(d.strftime('%Y-%m-%d') for d in td[-10:]) or "（无）"))
+    print(f"       缓存文件: {TRADING_DAYS_CACHE_PATH}"
+          f"（存在={TRADING_DAYS_CACHE_PATH.exists()}）")
+    for k in REVIEW_DAYS:
+        print(f"       T+{k}: 若今日记录 → 到期 {due(k).strftime('%Y-%m-%d')}")
 
     print("=" * 52)
     print("[OK] 自检通过" if ok else "[FAIL] 自检未通过")
@@ -1246,13 +1700,22 @@ def main():
 
 
 def _has_due(row, today):
+    """本轮是否有到期/可判逾期的档 → main 据此决定要不要进打分。
+
+    与 score_pending 同口径：只看**最早未填**的那一档（due 随 k 单调递增，故最早
+    未填档就是最早到期的档，一旦它没到期，后面几档更没到期）。日历取不到时
+    due() 内部已降级为近似日历，不抛异常。
+    """
     try:
         d0 = _date(row["date"])
     except Exception:
         return False
-    return any(row["reviews"].get(str(k)) is None
-               and today >= d0 + timedelta(days=k)
-               for k in REVIEW_DAYS)
+    rv = row.get("reviews")
+    unfilled = [k for k in REVIEW_DAYS
+                if not isinstance(rv, dict) or rv.get(str(k)) is None]
+    if not unfilled:
+        return False
+    return today >= due(min(unfilled), d0)
 
 
 if __name__ == "__main__":
