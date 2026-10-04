@@ -152,6 +152,38 @@ def apply_cross_verification(rows):
 # 模型判定）——它的原始时间戳恒为 00:00，不进优先组就会被时间截断整批挤掉。
 PRIORITY_CATEGORIES = ("policy", "announcement")
 
+# ---- 覆盖面（2026-10-04 新增）------------------------------------------------
+# 用户要求：**新闻要包括所有相关的，而不是只有股票相关的** ——
+# 只吃「提到个股的新闻」会让分析面变窄，宏观/政策/国际/产业动向本身就是判断依据。
+#
+# 此前只有 policy / announcement 受保护，其余类别一律被 614 条财经快讯按时间倒序
+# 挤出 150 个名额：实测 2026-10-04 的 official 存活 **0 条**、tech 3 条。
+# 现在给通用类别设**保底名额**，超预算时先按类别保底、再按时间补满。
+CATEGORY_FLOOR = {"official": 25, "international": 25, "tech": 10}
+
+# 与市场判断无关的内容直接丢（纯娱乐/体育/彩票/刑案八卦）：不送 LLM，省额度也降噪。
+# 注意刻意保持"窄"：只要沾到经济、政策、产业、国际、科技、民生就留，交给 LLM 判 keep。
+IRRELEVANT_PAT = re.compile(
+    r"明星|艺人|综艺|演唱会|电影票房|剧组|恋情|绯闻|选秀|"
+    r"足球|篮球|中超|NBA|世界杯|奥运|网球|高尔夫|夺冠|国足|"
+    r"彩票|殡葬|寻人|失联|绑架|凶杀|判刑|入狱")
+# 相关性词（旧实现只有 ~20 个财经词，导致国际/产业类整条被丢）：
+# 命中即视为「与市场判断可能相关」，**不要求提到股票**。
+RELEVANT_PAT = re.compile(
+    r"政策|规划|国务院|发改委|商务部|财政部|央行|证监会|工信部|能源局|药监|海关|"
+    r"关税|贸易|出口|进口|制裁|管制|谈判|峰会|论坛|法案|监管|改革|试点|"
+    r"经济|GDP|CPI|PPI|PMI|通胀|通缩|就业|失业|消费|零售|投资|财政|货币|"
+    r"汇率|人民币|美元|利率|降息|加息|降准|债券|贷款|银行|保险|"
+    r"能源|原油|石油|天然气|煤炭|电力|光伏|风电|储能|锂|稀土|黄金|白银|铜|铝|钢|化工|水泥|"
+    r"芯片|半导体|人工智能|算力|机器人|自动驾驶|新能源|汽车|电池|医药|创新药|疫苗|医疗|"
+    r"地产|楼市|房价|基建|铁路|机场|港口|航运|航空|物流|农业|粮食|生猪|"
+    r"美国|欧盟|日本|韩国|俄罗斯|乌克兰|中东|以色列|伊朗|北约|全球|国际|海外|"
+    r"股|市|基金|证券")
+
+# 送进 GLM 的批量大小：20 → 30（每批 30 条 × 300 字符仍在 Flash 的舒适区，
+# 批次从 8 降到 6，串行耗时与最坏情况的总超时预算都下降）
+LLM_BATCH_SIZE = 30
+
 
 def normalize_cat(c):
     """模型可能输出 'finance' 等近义值，映射到合法分类"""
@@ -335,43 +367,100 @@ def batch_filter(news_items, batch_size=20):
 "board":["半导体设备"],"stocks":["盛美上海"],"sentiment":"bullish|bearish|neutral",
 "keep":true/false}}]
 上面的"半导体设备""盛美上海"只是字段格式示意，不是固定答案，更不要原样照抄到结果里。
-keep=false 表示纯社会新闻与股市无关应丢弃。"""
+
+**keep 的判据（2026-10-04 放宽）**：宁可多留，不要因为"没提到个股"就丢。
+- keep=true：只要与经济、政策、产业、国际形势、科技、民生相关都保留 ——
+  包括**没有提到任何公司**的宏观/国际/产业新闻（它们是判断市场环境的依据）。
+- keep=false：**仅限**纯娱乐八卦、体育赛事结果、彩票/生活服务信息、
+  与市场无关的地方社会琐事或刑案通报。"""
     content = glm_chat([{"role": "user", "content": prompt}], max_tokens=4000)
     if content is None:
         return None
     return _extract_json(content)
 
 
-def prefilter_local(news_items, max_for_llm=150):
-    """本地预筛：控制送进 LLM 的量。
+def prefilter_local(news_items, max_for_llm=180):
+    """本地预筛：控制送进 LLM 的量，同时**保证新闻覆盖面**。
 
-    策略（**优先组先占位，其余按时间倒序补满**）：
-    - `policy`（政府文件原文）与 `announcement`（上市公司公告）优先保留 ——
-      两者条数有界、信号密度高，且**不能被「按时间倒序」的截断挤掉**；
-    - `finance` 全部进候选；`official` / `tech` 走关键字过滤。
+    策略（2026-10-04 改）：
+    1. **负向词先丢**：纯娱乐/体育/彩票/刑案八卦，与市场判断无关，不送 LLM；
+    2. `finance`（财经快讯）、`policy`、`announcement` 整体保留（这三类本身即相关）；
+       其余类别（official / international / tech / other）走**相关性词**判断 ——
+       旧实现只认 ~20 个财经词，导致「北约在日本设联络处」这类国际新闻整条被丢；
+    3. 超预算时：优先组（policy+announcement）先占位 → **通用类别按保底名额** →
+       剩余额度按时间倒序补满。这样财经快讯的条数再多，也挤不掉通用/国际/科技类。
 
+    为什么要有保底：实测 2026-10-04，150 个名额里 official 存活 **0**、tech 3，
+    而财经快讯有 614 条可竞争 —— 用户要的是「所有相关新闻」，不是「只有股票相关」。
     为什么公告必须进优先组（2026-09-25 实测）：巨潮的 `announcementTime`
-    **只有日期、时刻恒为 00:00**，于是按时间倒序排时，全部 32 条公告落在当日
-    快讯之后 —— 截断线当天在 11:02，**0/32 存活**。不给优先级等于白抓。
+    **只有日期、时刻恒为 00:00**，按时间倒序时全部 32 条公告落在当日快讯之后，
+    截断线当天在 11:02，**0/32 存活**。不给优先级等于白抓。
     """
-    keep, dropped = [], 0
-    kw_fin = re.compile(r"股|市|基金|证券|央行|人民币|利[率率]|GDP|CPI|PMI|美联储|降准|降息|上市|发行|回购|并购|重组|营收|净利")
-    for n in news_items:
+    keep, taken = [], set()
+
+    def _take(n):
+        keep.append(n)
+        taken.add(id(n))
+
+    # ⓿ 负向词**最优先**：纯娱乐/体育/彩票/刑案通报一律不进场。
+    #    必须在保底名额之前 —— 否则某个通用类别恰好是体育新闻时，保底会把它们
+    #    "保护"进来（负向词表刻意很窄，误杀风险低；而"术语没被正向词表覆盖"
+    #    是另一回事，那种情况由下面的保底兜住）。
+    clean = [n for n in news_items if not IRRELEVANT_PAT.search(n.get("text") or "")]
+
+    # 按类别分桶（保持 M1 的时间倒序）
+    buckets = {}
+    for n in clean:
+        buckets.setdefault(n.get("category", ""), []).append(n)
+
+    # ① 优先组：政策文件原文与上市公司公告整体保留（条数有界、信号密度高）
+    for cat in PRIORITY_CATEGORIES:
+        for n in buckets.get(cat, []):
+            _take(n)
+
+    # ② 通用类别保底：**在关键词判定之前**先各取最新的若干条。
+    #    为什么必须前置：术语没被词表覆盖 ≠ 不相关。"国产大模型在工业质检场景落地"
+    #    这类条目在 2026-10-04 之前会被关键词分支直接丢掉 —— 词表总有盲区，
+    #    而保底名额是"全覆盖"的兜底。
+    for cat, floor in CATEGORY_FLOOR.items():
+        for n in buckets.get(cat, [])[:floor]:
+            if id(n) not in taken:
+                _take(n)
+
+    # ③ 其余条目：财经类直接留；其它类别看是否命中相关性词
+    for n in clean:
+        if id(n) in taken:
+            continue
         c = n.get("category", "")
-        if c in ("finance", "policy", "announcement"):
-            keep.append(n)
-        elif kw_fin.search(n["text"]):
-            keep.append(n)
-        else:
-            dropped += 1
+        if c in ("finance", "policy", "announcement") or RELEVANT_PAT.search(n.get("text") or ""):
+            _take(n)
+    # 此时已丢弃 = 负向词命中的条目 + 既不相关也未命中相关性词的条目
+    dropped = len(news_items) - len(keep)
+    # （下面若因超上限截断，继续在 dropped 上累加）
+
     if len(keep) > max_for_llm:
         priority = [n for n in keep if n["category"] in PRIORITY_CATEGORIES]
-        rest = [n for n in keep if n["category"] not in PRIORITY_CATEGORIES]
         # 优先组自身也可能超预算（公告被大量抓入时），此时它内部按原序
         # （即时间倒序）截断，不会反过来吃掉全部额度
         priority = priority[:max_for_llm]
-        rest = rest[:max(0, max_for_llm - len(priority))]
-        kept = priority + rest
+        rest = [n for n in keep if n["category"] not in PRIORITY_CATEGORIES]
+        budget = max(0, max_for_llm - len(priority))
+
+        # 通用类别保底（取各类别里最新的若干条 —— rest 保持时间倒序）
+        picked, picked_ids = [], set()
+        for cat, floor in CATEGORY_FLOOR.items():
+            got = [n for n in rest if n.get("category") == cat][:floor]
+            picked.extend(got)
+            picked_ids.update(id(n) for n in got)
+        # 剩余额度按时间倒序补满（通常是财经快讯）
+        for n in rest:
+            if len(picked) >= budget:
+                break
+            if id(n) not in picked_ids:
+                picked.append(n)
+                picked_ids.add(id(n))
+
+        kept = priority + picked[:budget]
         dropped += len(keep) - len(kept)
         keep = kept
     return keep, dropped
@@ -420,15 +509,22 @@ def main():
     print(f"原始新闻: {len(news)} 条")
 
     keep, dropped = prefilter_local(news)
-    print(f"本地预筛: 保留 {len(keep)} 条，丢弃 {dropped} 条纯无关内容")
+    # 把「留下来的都是什么」打出来：用户明确要求覆盖面（所有相关新闻，而不是只有
+    # 股票相关），而这正是以前看不见的地方 —— 10-04 的 official 存活 0 条、tech 3 条，
+    # 日志里却只显示"保留 150 条"。现在按类别分列，覆盖面退化了当场可见。
+    cat_mix = {}
+    for n in keep:
+        cat_mix[n.get("category", "?")] = cat_mix.get(n.get("category", "?"), 0) + 1
+    print(f"本地预筛: 保留 {len(keep)} 条，丢弃 {dropped} 条（含纯娱乐/体育 {sum(1 for n in news if IRRELEVANT_PAT.search(n.get('text') or ''))} 条）")
+    print(f"  类别分布: {dict(sorted(cat_mix.items(), key=lambda kv: -kv[1]))}")
 
     structured = []
     llm_batches = 0            # 实际发出的批次数
     llm_failed_batches = 0     # batch_filter 返回 None，或未匹配比例超阈值的批次
     unmatched_rows = 0         # 单条未匹配（i 缺失/越界/重复）的总数
-    for bs in range(0, len(keep), 20):
-        batch = keep[bs:bs + 20]
-        batch_no = bs // 20
+    for bs in range(0, len(keep), LLM_BATCH_SIZE):
+        batch = keep[bs:bs + LLM_BATCH_SIZE]
+        batch_no = bs // LLM_BATCH_SIZE
         llm_batches += 1
         result = batch_filter(batch)
         if result is None or not isinstance(result, list):

@@ -532,5 +532,68 @@ class PicksRobustness(unittest.TestCase):
         self.assertEqual(payload["reason"], "gate_closed")
 
 
+class CoverageBreadth(unittest.TestCase):
+    """覆盖面：新闻要包括**所有相关的**，而不是只有股票相关的（2026-10-04 用户要求）。
+
+    改造前的实测：150 个名额里 official 存活 **0 条**、tech 3 条 —— 因为
+    只有 policy/announcement 受保护，614 条财经快讯按时间倒序把整类通用新闻挤掉了。
+    """
+
+    def setUp(self):
+        self.f = load("m2_filter", "modules/m2_filter/filter.py")
+
+    def _news(self, cat, text, i):
+        return {"time": f"2026-10-04 10:00:{i % 60:02d}", "source": f"源{i % 5}",
+                "category": cat, "url": "", "text": text}
+
+    def test_general_news_survives_finance_flood(self):
+        """核心断言：财经快讯的数量再多，也挤不掉通用/国际/科技类的保底名额。"""
+        news = [self._news("finance", f"某公司发布公告第{i}条，营收同比增长", i)
+                for i in range(600)]
+        news += [self._news("official", f"国务院部署第{i}项重点工作", 1000 + i) for i in range(40)]
+        news += [self._news("international", f"美国与欧盟就第{i}项议题谈判", 2000 + i) for i in range(40)]
+        news += [self._news("tech", f"某机构发布第{i}项算力技术进展", 3000 + i) for i in range(30)]
+        keep, dropped = self.f.prefilter_local(news)
+        mix = {}
+        for n in keep:
+            mix[n["category"]] = mix.get(n["category"], 0) + 1
+        self.assertLessEqual(len(keep), 180, "预筛总量不应超过上限")
+        self.assertGreaterEqual(mix.get("official", 0), 20,
+                                f"通用新闻被挤掉了：{mix}")
+        self.assertGreaterEqual(mix.get("international", 0), 20, f"国际新闻被挤掉了：{mix}")
+        self.assertGreaterEqual(mix.get("tech", 0), 8, f"科技新闻被挤掉了：{mix}")
+        self.assertGreater(mix.get("finance", 0), 50, f"财经快讯不该被压得太狠：{mix}")
+        self.assertGreater(dropped, 0, "超出上限时应有丢弃计数")
+
+    def test_pure_entertainment_and_sports_dropped(self):
+        news = [self._news("finance", "某某明星演唱会门票开售", 0),
+                self._news("finance", "中超联赛第18轮战报", 1),
+                self._news("official", "NBA总决赛第三场结束", 2),
+                self._news("finance", "央行开展5000亿元逆回购操作", 3),
+                self._news("official", "国家发改委批复新建铁路项目", 4)]
+        keep, dropped = self.f.prefilter_local(news)
+        texts = " ".join(n["text"] for n in keep)
+        self.assertNotIn("明星", texts)
+        self.assertNotIn("中超", texts)
+        self.assertNotIn("NBA", texts)
+        self.assertEqual(dropped, 3)
+        self.assertEqual(len(keep), 2)
+
+    def test_non_stock_but_relevant_news_kept(self):
+        """关键行为变更：**不提到任何股票/公司**的国际、产业新闻也要留下。"""
+        news = [self._news("international", "北约拟在日本开设联络处，细节还未定", 0),
+                self._news("official", "多地出台措施促进消费复苏", 1),
+                self._news("tech", "国产大模型在工业质检场景落地", 2)]
+        keep, dropped = self.f.prefilter_local(news)
+        self.assertEqual(len(keep), 3, f"相关但非股票的新闻被丢了：{dropped}")
+        self.assertEqual(dropped, 0)
+
+    def test_prompt_no_longer_says_stock_irrelevant(self):
+        """prompt 里必须写明「没提到个股也要保留」，否则 LLM 会把宏观/国际新闻整批丢。"""
+        src = (ROOT / "modules/m2_filter/filter.py").read_text(encoding="utf-8")
+        self.assertIn("没有提到任何公司", src)
+        self.assertNotIn("keep=false 表示纯社会新闻与股市无关应丢弃", src)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

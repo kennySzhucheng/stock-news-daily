@@ -26,6 +26,17 @@ EM_7X24 = ("https://np-weblist.eastmoney.com/comm/web/getFastNewsList"
 RK_RSS = "https://www.36kr.com/feed"
 XINHUA_RSS = "http://www.xinhuanet.com/politics/news_politics.xml"
 PEOPLE_RSS = "http://www.people.com.cn/rss/politics.xml"
+# 中新网（2026-10-04 新增）：新华网/人民网的 RSS 内容已冻结（新华网停在 2022-12、
+# 人民网停在 2025-06，详见 docs/sources.md 第八节），但**用户明确要求保留这两家**，
+# 所以它们留在列表里；同时补上中新网作为**通用新闻**的活源 —— 实测三个频道
+# 都是当日内容（`Sun, 4 Oct 2026 18:35:00 +0800`），30 条/次。
+#
+# 为什么需要通用源：项目定位虽然是"股市情报助手"，但只吃「提到个股的新闻」会让
+# 分析面变窄 —— 宏观、政策、国际形势、产业动向本来就是判断依据。这里补的是
+# 「与经济/社会相关的综合新闻」，不是娱乐体育（后者由 M2 的负向词挡掉）。
+CN_CHINANEWS_ROLL = "https://www.chinanews.com.cn/rss/scroll-news.xml"
+CN_CHINANEWS_FIN = "https://www.chinanews.com.cn/rss/finance.xml"
+CN_CHINANEWS_WORLD = "https://www.chinanews.com.cn/rss/world.xml"
 GOV_API = ("https://sousuo.www.gov.cn/search-gov/data?t=zhengcelibrary_gw"
            "&timetype=timeqb&mintime=&maxtime=&sort=publictime&sortType=-1"
            "&searchfield=title&p={page}&n=20")
@@ -371,6 +382,19 @@ def fetch_people(days, max_items):
     return _parse_rss(_get_xml(PEOPLE_RSS), "人民网", "official", days, max_items)
 
 
+def fetch_chinanews_roll(days, max_items):
+    """中新网 滚动（国内/综合）—— 官方通讯社口径的通用新闻源。"""
+    return _parse_rss(_get_xml(CN_CHINANEWS_ROLL), "中新网滚动", "official", days, max_items)
+
+
+def fetch_chinanews_fin(days, max_items):
+    return _parse_rss(_get_xml(CN_CHINANEWS_FIN), "中新网财经", "finance", days, max_items)
+
+
+def fetch_chinanews_world(days, max_items):
+    return _parse_rss(_get_xml(CN_CHINANEWS_WORLD), "中新网国际", "international", days, max_items)
+
+
 def fetch_gov(days, max_items):
     """中国政府网政策库：官方政策最高权重源
 
@@ -420,6 +444,17 @@ def fetch_gov(days, max_items):
     return out
 
 
+def fetch_sina_domestic(days, max_items):
+    """新浪滚动「国内」（lid=2509）—— 2026-10-04 实测为当日内容。
+
+    复用已验证的新浪滚动端点族补**通用新闻**：这一路是时政/社会/民生类，
+    填 M2 的 official 桶，避免"只吃财经快讯 + 个股公告"把分析面收窄。
+    （体育 lid=2512、娱乐 lid=2513 不接：与市场判断无关，接了也只是噪声。）
+    """
+    return fetch_sina_roll(days, max_items, lid=2509, source_name="新浪滚动-国内",
+                           category="official")
+
+
 def fetch_em_policy(days, max_items):
     """东方财富宏观政策栏（column=345）。
 
@@ -454,17 +489,21 @@ def fetch_em_policy(days, max_items):
     return out
 
 
-def fetch_sina_roll(days, max_items):
-    """新浪财经滚动新闻（lid=2516）—— 实测内容以港股/海外券商评级为主。
+def fetch_sina_roll(days, max_items, lid=2516, source_name="新浪财经-滚动",
+                    category="finance"):
+    """新浪滚动新闻。lid=2516 实测内容以港股/海外券商评级为主。
 
-    这是 M1 唯一的境外视角来源，填 M2 的 `international` 类目（此前一直空着）。
-    注意 lid=2510（"要闻"）2026-09-25 实测返回的是**几个月前的旧闻**，已弃用。
+    这是 M1 的境外视角来源，填 M2 的 `international` 类目（此前一直空着）。
+    注意 lid=2510（"要闻"）、2514 实测返回的是**几个月/几年前的旧闻**，已弃用。
     category 提示用 finance：这些标题多无「股/市/证券」等关键词，
     走 prefilter 的关键词分支会被整条丢掉。
+
+    2026-10-04：加 `lid` 参数以便复用同一端点族补齐**通用新闻**（见
+    `fetch_sina_domestic` 与 SOURCES 注释）。
     """
     out, seen = [], set()
     cutoff = time.time() - days * 86400
-    url = SINA_ROLL_API.format(lid=2516, size=max_items)
+    url = SINA_ROLL_API.format(lid=lid, size=max_items)
     d = _get_json(url)
     for it in (d.get("result") or {}).get("data") or []:
         ctime = it.get("ctime") or ""
@@ -481,7 +520,7 @@ def fetch_sina_roll(days, max_items):
         if not title or title in seen:
             continue
         seen.add(title)
-        out.append({"time": ts, "source": "新浪财经-滚动", "category": "finance",
+        out.append({"time": ts, "source": source_name, "category": category,
                     "url": (it.get("url") or "").strip(), "text": title[:500]})
         if len(out) >= max_items:
             break
@@ -516,10 +555,17 @@ def fetch_cninfo(days, max_items):
     end = datetime.now()
     se_date = f"{end - timedelta(days=max(days, 1)):%Y-%m-%d}~{end:%Y-%m-%d}"
 
-    baseline = (_cninfo_query(se_date, "", 1) or {}).get("totalRecordNum") or 0
+    q = _cninfo_query(se_date, "", 1)
+    if not isinstance(q, dict) or not q:
+        # 连响应体都拿不到 = 接口真不通，让上层按失败记录，别拿空类目充数
+        raise RuntimeError(f"巨潮基线查询无有效响应（seDate={se_date}）")
+    baseline = q.get("totalRecordNum") or 0
     if not baseline:
-        # 基线取不到说明接口整体不通，直接让上层按失败记录，别拿空类目充数
-        raise RuntimeError(f"巨潮基线查询为空（seDate={se_date}）")
+        # **区间内本来就没有公告 ≠ 接口故障**（2026-10-04 修）。
+        # 旧实现一律 raise，于是每个周末与长假都报「巨潮基线查询为空」——
+        # 与真故障长同一张脸，日志噪声大了就没人再当真。
+        print(f"[warn] 巨潮 {se_date} 区间内没有公告（周末/长假属正常），本源于 0 条")
+        return _NewsList()
 
     out, seen = _NewsList(), set()
     for code, label, share in CNINFO_CATEGORIES:
@@ -584,11 +630,19 @@ SOURCES = [
     #   · 新华网 RSS **整体冻结在 2022-12-09~14**，且 item 没有 <pubDate>（时间写在
     #     </link> 之后的裸文本里，已兼容解析）；在 days=1 下必然 0 条。
     #   · 人民网 RSS 停在 **2025-06-05**（item 只有纯日期），同样必然 0 条。
-    #   两者保留在列表里（万一源复活就能自动吃回来），但**不要指望它们供给内容**；
-    #   时间过滤会把它们判为过期并打 warn（以前是静默抓 400 条再全部被截掉）。
+    #   ⚠️ **用户明确要求保留这两家**（宁可留着等它们复活，也不移除），所以它们留在
+    #   列表里；但通用新闻的供给交给下面新增的活源，别指望这两条。
     ("36氪", fetch_36kr, 30),
     ("新华网", fetch_xinhua, 100),
     ("人民网", fetch_people, 60),
+    # 通用新闻（2026-10-04 新增）——用户要求「包括所有相关新闻，而不是只有股票相关的」。
+    # 只吃财经快讯 + 个股公告会让分析面变窄：宏观、政策、国际形势、产业动向本身就是判断依据。
+    # 实测（当日 18:35 仍在更新）：中新网三个频道各 30 条；新浪滚动 lid=2509 当日有效。
+    # 娱乐（lid=2513）与体育（lid=2512）刻意不接 —— 与市场判断无关，接了只是噪声。
+    ("中新网滚动", fetch_chinanews_roll, 30),
+    ("中新网财经", fetch_chinanews_fin, 30),
+    ("中新网国际", fetch_chinanews_world, 30),
+    ("新浪滚动-国内", fetch_sina_domestic, 25),
     # 政策文件不是每天都有：2026-10-04 实测政策库两页 40 条全部落在
     # 2026-05-29 ~ 2026-09-30，**没有任何 10-01~10-04 发布的内容**。若也按 24 小时
     # 过滤，这个源在绝大多数日子都是 0 条 —— 那等于把「政府发布」这个类目砍掉。
