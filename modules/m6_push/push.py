@@ -521,7 +521,8 @@ def load_analysis_status():
 
 
 def write_push_status(date_str, slot, ok, detail, sentiment_ok=False, warn="",
-                      analysis_status=None, news_count=None, quotes_count=None):
+                      analysis_status=None, news_count=None, quotes_count=None,
+                      llm_batches=None, llm_failed_batches=None):
     """把推送结果落成 reports/status-<date>-<slot>.json，随日报一起上线。
 
     为什么需要：**推送失败是静默的** —— 日报照常生成、网页照常上线，只有微信
@@ -562,6 +563,8 @@ def write_push_status(date_str, slot, ok, detail, sentiment_ok=False, warn="",
                                     else "、".join(analysis_status.get("violations") or [])),
             "news_count": news_count,
             "quotes_count": quotes_count,
+            "llm_batches": llm_batches,
+            "llm_failed_batches": llm_failed_batches,
             "run_number": os.environ.get("GITHUB_RUN_NUMBER", ""),
             "event": os.environ.get("GITHUB_EVENT_NAME", ""),
             "generated_at": datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S"),
@@ -604,6 +607,11 @@ def main():
     # 老体检只看"日报到没到"，这两类故障它一个都发现不了）
     analysis_status = load_analysis_status()
     news_count = len(structured.get("news") or [])
+    # M2 的批次统计：`llm_failed_batches > 0` 表示"有一部分新闻没有结构化字段"
+    # （GLM 失败，或 M2 的墙钟预算耗尽而跳过了剩余批次）。体检据此提醒，
+    # 免得这种降级被读成"今天没什么新闻"。
+    llm_batches = structured.get("llm_batches")
+    llm_failed_batches = structured.get("llm_failed_batches")
     quotes_count = None
     try:
         _q = json.loads((DATA_DIR / "quotes.json").read_text(encoding="utf-8"))
@@ -659,7 +667,8 @@ def main():
     write_push_status(date_str, slot, ok, msg, sentiment_ok=sentiment_ok,
                       warn="" if sentiment_ok else "sentiment_unresolved",
                       analysis_status=analysis_status,
-                      news_count=news_count, quotes_count=quotes_count)
+                      news_count=news_count, quotes_count=quotes_count,
+                      llm_batches=llm_batches, llm_failed_batches=llm_failed_batches)
     # 成功与否都打印内容，便于核对
     print(f"     时段: {slot} / 关注板块 {len(market_view)} 个 / "
           f"候选 {len((picks or {}).get('today') or [])} 条 / "

@@ -180,9 +180,12 @@ RELEVANT_PAT = re.compile(
     r"美国|欧盟|日本|韩国|俄罗斯|乌克兰|中东|以色列|伊朗|北约|全球|国际|海外|"
     r"股|市|基金|证券")
 
-# 送进 GLM 的批量大小：20 → 30（每批 30 条 × 300 字符仍在 Flash 的舒适区，
-# 批次从 8 降到 6，串行耗时与最坏情况的总超时预算都下降）
-LLM_BATCH_SIZE = 30
+# 送进 GLM 的批量大小：20 条/批。
+# 2026-10-04 一度改成 30（想减少批次数），实测当天两次运行的 M2 耗时是
+# **批 20 时 295~316s / 批 30 时 888s** —— 每次请求的输出更长，在 API 变慢时被放大，
+# 逼近 job 的 30 分钟上限。现在配合 M2_BUDGET_SEC 兜底，批大小回到 20：
+# 单次生成更短、更可预测，预算检查的粒度也更细。
+LLM_BATCH_SIZE = 20
 
 
 def normalize_cat(c):
@@ -502,8 +505,19 @@ UNMATCHED_FAIL_RATIO = 0.10
 # 全批次失败率超过此值 → 额外打一行醒目 warn（"今天新闻很少"的假象源头）
 FAILED_BATCH_ALERT_RATIO = 0.30
 
+# 整个 M2 步骤的**墙钟预算**（秒）。超过就不再调 LLM，剩下的批次直接走"全保留"兜底。
+#
+# 为什么需要（2026-10-04 实测）：M2 的耗时完全由 GLM 服务端速度决定，同样的代码
+# 同一天两次运行分别是 **295s / 316s**（批 20 条）与 **888s**（批 30 条），而 job 的
+# `timeout-minutes` 是 30 分钟 —— 一旦 API 变慢，硬超时会**整条流水线失败、当天没有日报**，
+# 比"部分新闻没结构化"糟糕得多。有了预算，最坏情况是"后面的批次退化为原样保留"，
+# 报告照出，而且 `llm_failed_batches` 会把这件事如实暴露给体检。
+M2_BUDGET_SEC = 900
+
 
 def main():
+    import time as _time
+    t_start = _time.monotonic()
     raw = json.loads((DATA_DIR / "raw_news.json").read_text(encoding="utf-8"))
     news = raw["news"]
     print(f"原始新闻: {len(news)} 条")
@@ -520,12 +534,28 @@ def main():
 
     structured = []
     llm_batches = 0            # 实际发出的批次数
-    llm_failed_batches = 0     # batch_filter 返回 None，或未匹配比例超阈值的批次
+    llm_failed_batches = 0     # batch_filter 返回 None、未匹配超阈值、或**预算耗尽**的批次
+    budget_skipped = 0         # 其中"因 M2_BUDGET_SEC 预算耗尽而根本没跑"的批次数
     unmatched_rows = 0         # 单条未匹配（i 缺失/越界/重复）的总数
+    budget_hit = False
     for bs in range(0, len(keep), LLM_BATCH_SIZE):
         batch = keep[bs:bs + LLM_BATCH_SIZE]
         batch_no = bs // LLM_BATCH_SIZE
+        elapsed = _time.monotonic() - t_start
+        if elapsed > M2_BUDGET_SEC:
+            # 预算耗尽：不再调 LLM。剩下的批次全部走"全保留"兜底并计数，
+            # 让报告照出、让体检看得见（见 M2_BUDGET_SEC 的注释）。
+            if not budget_hit:
+                budget_hit = True
+                print(f"  [WARN] 已用 {elapsed:.0f}s，超过 M2 预算 {M2_BUDGET_SEC}s —— "
+                      f"从 batch {batch_no} 起的剩余批次不再调用 GLM，按全保留兜底"
+                      f"（报告照出，但后面的新闻没有结构化字段）")
+            llm_failed_batches += 1
+            budget_skipped += 1
+            structured.extend(fallback_row(n.get("category")) for n in batch)
+            continue
         llm_batches += 1
+        t_batch = _time.monotonic()
         result = batch_filter(batch)
         if result is None or not isinstance(result, list):
             # 任务 3：LLM 失败时本批全保留（保守策略，宁多勿漏），但**必须计数**——
@@ -575,7 +605,11 @@ def main():
                   f"按全保留兜底")
             continue
         time.sleep(1)
-        print(f"  batch {batch_no}: done ({bs+len(batch)}/{len(keep)})")
+        # 打印本批耗时：M2 是整条流水线里最慢的一步，而它的耗时完全由 GLM 服务端
+        # 决定（实测同一份代码 295s ~ 888s）。没有逐批耗时，事后无法判断"是整体变慢
+        # 还是某几批卡住"，只能像 2026-10-04 那样靠人工猜。
+        print(f"  batch {batch_no}: done ({bs+len(batch)}/{len(keep)}, "
+              f"{_time.monotonic() - t_batch:.0f}s)")
 
     # board 清洗：先汇总全局个股名，再逐条剔除被误当成板块的公司名
     all_stocks = collect_stock_names(structured)
@@ -608,17 +642,22 @@ def main():
         # 零结构化但全保留"看起来就像"今天没什么新闻"，报表层面完全看不出异常。
         "llm_batches": llm_batches,
         "llm_failed_batches": llm_failed_batches,
+        "llm_skipped_by_budget": budget_skipped,
         "unmatched_rows": unmatched_rows,
         "verify_stats": verify_stats,
         "news": out,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    if llm_batches and llm_failed_batches / llm_batches > FAILED_BATCH_ALERT_RATIO:
+    # 分母用「应跑的批次数」（含因预算没跑的），否则预算一触发只会得到 llm_batches=1
+    # 这种失真比例。体检也读 llm_failed_batches（见 healthcheck.py 的内容面检查）。
+    total_batches = llm_batches + budget_skipped
+    if total_batches and llm_failed_batches / total_batches > FAILED_BATCH_ALERT_RATIO:
         print("!" * 72)
-        print(f"[WARN] LLM 失败率过高：{llm_failed_batches}/{llm_batches} 批失败"
-              f"（> {FAILED_BATCH_ALERT_RATIO:.0%}）。本日 structured_news.json 中"
-              f"大量条目**只有类别、无板块/个股/情绪**——这不是'今天新闻少'，"
-              f"是模型没跑通。请检查 ZAI_API_KEY / 额度 / 网络后重跑 M2。")
+        print(f"[WARN] LLM 失败/未跑率过高：{llm_failed_batches}/{total_batches} 批"
+              f"（> {FAILED_BATCH_ALERT_RATIO:.0%}，其中因 {M2_BUDGET_SEC}s 预算跳过的"
+              f"{budget_skipped} 批）。本日 structured_news.json 中大量条目"
+              f"**只有类别、无板块/个股/情绪**——这不是'今天新闻少'，是模型没跑通。"
+              f"请检查 ZAI_API_KEY / 额度 / 网络后重跑 M2。")
         print("!" * 72)
 
     cats, ver = {}, {}

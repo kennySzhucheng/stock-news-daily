@@ -405,6 +405,18 @@ def check_date(repo, pages_base, date_str):
                 problems.append((WARN, f"{SLOT_CN[slot]}行情条数为 0"
                                        f"—— M4 可能整体失败，个股行情版块会是空的"))
                 out.append(f"  {SLOT_CN[slot]}  ⚠ 行情 0 条")
+            # M2 的批次统计：有失败的批次 ⇒ 那部分新闻只有类别、没有板块/个股/情绪。
+            # 最典型的是 GLM 服务端变慢（实测同一份代码 M2 耗时 295s ~ 888s）触发了
+            # M2 的墙钟预算而跳过剩余批次 —— 报告照出，但内容悄悄降级了。
+            lfb, lb = st.get("llm_failed_batches"), st.get("llm_batches")
+            if isinstance(lfb, int) and lfb > 0:
+                total = (lfb + (lb if isinstance(lb, int) else 0)) or lfb
+                lv = SEVERE if lfb * 2 >= total else WARN
+                bad = True
+                problems.append((lv, f"{SLOT_CN[slot]}的 M2 有 {lfb} 个批次未结构化"
+                                     f"（GLM 失败或时间预算耗尽）—— 这部分新闻"
+                                     f"只有类别、没有板块/个股/情绪，不是「今天新闻少」"))
+                out.append(f"  {SLOT_CN[slot]}  ⚠ M2 未结构化批次 {lfb}")
             if not bad:
                 out.append(f"  {SLOT_CN[slot]}  ✓ 内容面正常"
                            f"（新闻 {nc if isinstance(nc, int) else '?'} 条）")

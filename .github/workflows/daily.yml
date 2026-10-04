@@ -39,7 +39,10 @@ concurrency:
 jobs:
   daily:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 30 → 45 分钟（2026-10-04）：M2 的耗时完全由 GLM 服务端决定，实测同一份代码
+    # 从 295s 到 888s 都有，而它是流水线里最慢的一步。M2 自己已有 900s 墙钟预算
+    # （超预算就跳过剩余批次并如实计数），这里的余量是给 M4 行情限流等其它抖动用。
+    timeout-minutes: 45
 
     steps:
       - name: 检出代码

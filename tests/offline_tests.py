@@ -749,5 +749,55 @@ class ConfirmedSourceList(unittest.TestCase):
         self.assertIn("1 源", self.psh.push_verified_note(n))
 
 
+class M2TimeBudget(unittest.TestCase):
+    """M2 的墙钟预算：GLM 变慢时必须**优雅降级**，而不是让整条流水线超时失败。
+
+    2026-10-04 实测：M2 的耗时完全由 GLM 服务端速度决定 —— 同一份代码，
+    批 20 条时两次运行是 295s / 316s，批 30 条那次是 **888s**，而 job 的
+    `timeout-minutes` 当时是 30 分钟。硬超时的后果是**当天没有日报**，
+    比"部分新闻没结构化"糟糕得多；所以超预算时改为跳过剩余批次、按原样保留并计数，
+    再由体检把这件事报出来。
+    """
+
+    def setUp(self):
+        self.f = load("m2_filter", "modules/m2_filter/filter.py")
+
+    def _raw(self, n):
+        return {"news": [{"time": "2026-10-04 10:00:%02d" % (i % 60), "source": "测试源",
+                          "category": "finance", "url": "",
+                          "text": f"第{i}条财经新闻：某公司披露经营数据，营收同比增长"}
+                         for i in range(n)]}
+
+    def test_budget_exhausted_skips_llm_but_still_produces(self):
+        import tempfile
+        tmp = pathlib.Path(tempfile.mkdtemp(prefix="snd-m2-"))
+        (tmp / "raw_news.json").write_text(json.dumps(self._raw(60), ensure_ascii=False),
+                                          encoding="utf-8")
+        old_data, old_budget = self.f.DATA_DIR, self.f.M2_BUDGET_SEC
+        self.f.DATA_DIR = tmp
+        self.f.M2_BUDGET_SEC = -1         # 保证第一批之前就超预算
+        calls = []
+        self.f.batch_filter = lambda batch: calls.append(batch) or []
+        try:
+            self.f.main()
+        finally:
+            self.f.DATA_DIR, self.f.M2_BUDGET_SEC = old_data, old_budget
+
+        d = json.loads((tmp / "structured_news.json").read_text(encoding="utf-8"))
+        self.assertEqual(calls, [], "超预算后不应再调用 GLM")
+        self.assertEqual(d["llm_batches"], 0)
+        # 60 条 / 20 条一批 = 3 批全部因预算跳过
+        self.assertEqual(d["llm_failed_batches"], 3)
+        self.assertEqual(d.get("llm_skipped_by_budget"), 3)
+        self.assertEqual(len(d["news"]), 60, "新闻一条都不能丢（按原样保留）")
+        self.assertTrue(all(n["keep"] for n in d["news"]))
+
+    def test_budget_counts_as_failed_batch_ratio(self):
+        """预算跳过的批次要算进「未结构化比例」，否则体检会以为一切正常。"""
+        src = (ROOT / "modules/m2_filter/filter.py").read_text(encoding="utf-8")
+        self.assertIn("llm_skipped_by_budget", src)
+        self.assertIn("total_batches = llm_batches + budget_skipped", src)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
