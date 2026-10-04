@@ -313,23 +313,61 @@
   }
 
   // ── 行情 ────────────────────────────────────────────────
+  /* 沪深 A 股与其它市场分开（2026-10-04）：新闻里提到的标的常含美股/港股
+     （实测 10-04 的 6 只里 5 只是美股），混在一张表里容易被当成"今天只有这些票"。
+     这个页面是给做 A 股的人看的 —— 主表只放能在 A 股账户交易的票，
+     海外行情另起一段并明确标注。 */
+  function isAShareMarket(m) {
+    m = m || '';
+    if (!m || m.indexOf('港') >= 0 || m.indexOf('美') >= 0 || m.indexOf('B股') >= 0) return false;
+    return m.indexOf('A') >= 0 || m.indexOf('科创') >= 0 ||
+           m.indexOf('创业') >= 0 || m.indexOf('北交') >= 0;
+  }
+
   function renderQuotes() {
-    $('#quoteCount').textContent = S.quotes.length + ' 只';
-    var list = S.quotes.slice().sort(function (a, b) {
+    var aShares = S.quotes.filter(function (q) { return isAShareMarket(q.market); });
+    var others = S.quotes.filter(function (q) { return !isAShareMarket(q.market); });
+    $('#quoteCount').textContent = S.quotes.length + ' 只' +
+      (others.length ? '（沪深 A 股 ' + aShares.length + ' / 其它市场 ' + others.length + '）'
+                     : '');
+
+    function rowsFor(list) {
+      return list.map(function (q) {
+        return '<tr><td><strong>' + esc(q.name) + '</strong><span class="muted small"> ' +
+          esc(q.code) + '</span></td>' +
+          '<td class="muted">' + esc(q.market || '') + '</td>' +
+          '<td class="num">' + (typeof q.price === 'number' ? q.price.toFixed(2) : '—') + '</td>' +
+          '<td class="num ' + dirCls(q.change_pct) + '">' + pct(q.change_pct) + '</td>' +
+          '<td class="muted small">' + esc(q.source || '') + '</td></tr>';
+      }).join('');
+    }
+
+    var list = aShares.slice().sort(function (a, b) {
       var k = S.sort.key, av = a[k], bv = b[k];
       if (typeof av === 'string' || typeof bv === 'string') {
         return String(av).localeCompare(String(bv), 'zh') * (S.sort.asc ? 1 : -1);
       }
       return ((av == null ? -Infinity : av) - (bv == null ? -Infinity : bv)) * (S.sort.asc ? 1 : -1);
     });
-    $('#quoteTable tbody').innerHTML = list.map(function (q) {
-      return '<tr><td><strong>' + esc(q.name) + '</strong><span class="muted small"> ' +
-        esc(q.code) + '</span></td>' +
-        '<td class="muted">' + esc(q.market || '') + '</td>' +
-        '<td class="num">' + (typeof q.price === 'number' ? q.price.toFixed(2) : '—') + '</td>' +
-        '<td class="num ' + dirCls(q.change_pct) + '">' + pct(q.change_pct) + '</td>' +
-        '<td class="muted small">' + esc(q.source || '') + '</td></tr>';
-    }).join('') || '<tr><td colspan="5" class="empty">暂无行情数据</td></tr>';
+    var html = rowsFor(list) ||
+      '<tr><td colspan="5" class="empty">今日新闻涉及的个股中没有沪深 A 股</td></tr>';
+    $('#quoteTable tbody').innerHTML = html;
+
+    // 其它市场：另起一段（同一张表下方），明确标注不能在本账户交易
+    var box = $('#quoteOther');
+    if (box) {
+      if (others.length) {
+        box.style.display = '';
+        box.innerHTML = '<div class="sec-label">其它市场（' + others.length +
+          ' 只）— 非沪深 A 股，一般不能在 A 股账户交易，仅作外围参考</div>' +
+          '<div class="table-wrap"><table class="tbl muted-table"><thead><tr>' +
+          '<th>个股</th><th>市场</th><th>现价</th><th>涨跌</th><th>来源</th>' +
+          '</tr></thead><tbody>' + rowsFor(others) + '</tbody></table></div>';
+      } else {
+        box.style.display = 'none';
+        box.innerHTML = '';
+      }
+    }
 
     $('#quoteFailed').textContent = S.failed.length
       ? '未取到行情：' + S.failed.map(function (f) { return f.name; }).join('、')

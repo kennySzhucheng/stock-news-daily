@@ -123,7 +123,7 @@
   <!-- ── 行情 ───────────────────────────────────────────── -->
   <section class="panel hidden" id="panel-quotes">
     <div class="card">
-      <h2>个股行情<span class="h-count" id="quoteCount"></span></h2>
+      <h2>个股行情（沪深 A 股）<span class="h-count" id="quoteCount"></span></h2>
       <div class="table-wrap">
         <table class="tbl" id="quoteTable">
           <thead><tr>
@@ -136,6 +136,10 @@
           <tbody></tbody>
         </table>
       </div>
+      <!-- 非沪深 A 股（美股/港股…）另起一段，由 app.js 填充；无内容时隐藏。
+           为什么要分：实测 10-04 的 6 只行情里 5 只是美股，混在一起容易被当成
+           "今天只有这些票"，也会淹掉真正能在 A 股账户交易的线索。 -->
+      <div id="quoteOther" style="display:none"></div>
       <div class="muted small" id="quoteFailed"></div>
     </div>
   </section>

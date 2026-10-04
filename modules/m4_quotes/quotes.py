@@ -281,14 +281,29 @@ def main():
         quotes.append(q)
         time.sleep(1.0)  # push2 限流敏感，间隔 1s
 
+    # 按市场分组统计（2026-10-04 新增，纯附加字段）。
+    # 为什么需要：新闻里提到的标的有相当比例是美股/港股（实测 10-04 的 6 只行情里
+    # **5 只是美股**），而这份日报是给做 A 股的人看的 —— 混在一张表里既容易误读，
+    # 也会让"今天行情很少"的错觉掩盖掉真正的 A 股线索。M5/M9 据此把沪深 A 股放主表、
+    # 其它市场单独一栏并标注"不可在 A 股账户交易"。
+    by_market = {}
+    for q in quotes:
+        m = q.get("market") or "未知"
+        by_market[m] = by_market.get(m, 0) + 1
+    is_a = lambda m: bool(m) and "A" in m and "港" not in m and "美" not in m
+    a_share = sum(1 for q in quotes if is_a(q.get("market") or ""))
+
     out = {"generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-           "count": len(quotes), "failed": failed, "quotes": quotes}
+           "count": len(quotes), "failed": failed, "quotes": quotes,
+           "by_market": by_market, "a_share_count": a_share,
+           "other_market_count": len(quotes) - a_share}
     out_path = DATA_DIR / "quotes.json"
     out_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
 
     a_cnt = sum(1 for q in quotes if q["market"] and "A" in q["market"] and "H" not in q["market"])
     hk = sum(1 for q in quotes if "港" in (q["market"] or ""))
     print(f"成功 {len(quotes)} 只 (A股 {a_cnt} / 港股 {hk}), 失败 {len(failed)}")
+    print(f"  按市场: {by_market}")
     for q in quotes[:5]:
         print(f"  {q['name']}({q['code']}) 现价 {q['price']} 涨跌 {q['change_pct']}%")
     print(f"输出 → {out_path}")

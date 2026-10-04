@@ -15,6 +15,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import re
 import sys
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -797,6 +798,57 @@ class M2TimeBudget(unittest.TestCase):
         src = (ROOT / "modules/m2_filter/filter.py").read_text(encoding="utf-8")
         self.assertIn("llm_skipped_by_budget", src)
         self.assertIn("total_batches = llm_batches + budget_skipped", src)
+
+
+class QuotesMarketSplit(unittest.TestCase):
+    """行情表按市场拆分：沪深 A 股放主表，美股/港股另起一栏并标注。
+
+    2026-10-04 实测：那天 6 只行情里 **5 只是美股**（AAPL/TSLA/GOOG/ACN/PONY）。
+    这份日报是给做 A 股的人看的，混在一张表里容易被读成"今天只有这些票"，
+    也会把真正能在 A 股账户交易的线索淹掉。
+    """
+
+    def setUp(self):
+        self.rep = load("m5_report", "modules/m5_report/report.py")
+
+    def _q(self, name, code, market, pct):
+        return {"name": name, "code": code, "market": market,
+                "price": 10.0, "change_pct": pct}
+
+    def test_market_predicate(self):
+        f = self.rep._is_a_share_market
+        for m in ("沪A", "深A", "科创板", "创业板", "北交所"):
+            self.assertTrue(f(m), m)
+        for m in ("美股", "港股", "沪B", "深B", "", None):
+            self.assertFalse(f(m), m)
+
+    def test_a_shares_first_others_labeled(self):
+        html = self.rep.render_quotes({"quotes": [
+            self._q("中国银行", "601988", "沪A", 1.2),
+            self._q("苹果", "AAPL", "美股", 1.02),
+            self._q("埃森哲", "ACN", "美股", -6.31),
+        ]})
+        plain = re.sub(r"<[^>]+>", " ", html)
+        self.assertLess(plain.find("中国银行"), plain.find("苹果"), "A 股必须在主表（前）")
+        self.assertIn("其它市场", plain)
+        self.assertIn("不能在 A 股账户交易", plain)
+        self.assertLess(plain.find("其它市场"), plain.find("苹果"))
+        # 其它栏内按涨跌幅绝对值倒序（埃森哲 -6.31% 在苹果 +1.02% 之前）
+        self.assertLess(plain.find("埃森哲"), plain.find("苹果"))
+
+    def test_all_us_shows_hint(self):
+        html = self.rep.render_quotes({"quotes": [self._q("苹果", "AAPL", "美股", 1.0)]})
+        self.assertIn("没有沪深 A 股", re.sub(r"<[^>]+>", "", html))
+
+    def test_all_a_share_has_no_other_section(self):
+        html = self.rep.render_quotes({"quotes": [self._q("中国银行", "601988", "沪A", 1.0)]})
+        self.assertNotIn("其它市场", re.sub(r"<[^>]+>", "", html))
+
+    def test_m4_writes_market_breakdown(self):
+        """M4 输出新增 by_market / a_share_count（纯附加字段，M5/M9 据此分组）。"""
+        src = (ROOT / "modules/m4_quotes/quotes.py").read_text(encoding="utf-8")
+        self.assertIn('"by_market": by_market', src)
+        self.assertIn('"a_share_count": a_share', src)
 
 
 if __name__ == "__main__":

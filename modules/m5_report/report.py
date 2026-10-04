@@ -361,12 +361,19 @@ def md_to_html(md_text):
 # ---------------------------------------------------------------------------
 # 各版块渲染
 # ---------------------------------------------------------------------------
-def render_quotes(quotes):
-    """个股行情一览：按涨跌幅绝对值倒序，红涨绿跌"""
-    qs = quotes.get("quotes", [])
-    if not qs:
-        return '<p class="empty">今日无行情数据</p>'
+def _is_a_share_market(market):
+    """判断 M4 的 market 标签是不是沪深 A 股（可直接在 A 股账户交易）。
 
+    实测 M4 的取值有 `沪A` / `深A` / `科创板` / `创业板` / `美股` / `港股` 等；
+    这里刻意用"排除法 + 白名单"双重判据，避免新增标签被误判成 A 股。
+    """
+    m = market or ""
+    if not m or "港" in m or "美" in m or "B股" in m:
+        return False
+    return ("A" in m) or ("科创" in m) or ("创业" in m) or ("北交" in m)
+
+
+def _quote_rows(qs):
     rows = []
     for q in sorted(qs, key=lambda x: abs(x.get("change_pct") or 0), reverse=True):
         pct = q.get("change_pct")
@@ -384,17 +391,57 @@ def render_quotes(quotes):
             f"<td class='{cls}'>{pct_str}</td>"
             f"</tr>"
         )
+    return "".join(rows)
+
+
+_QUOTE_THEAD = ("<thead><tr><th>个股</th><th>市场</th><th>现价</th>"
+                "<th>涨跌</th></tr></thead>")
+
+
+def render_quotes(quotes):
+    """个股行情一览：**沪深 A 股放主表，其它市场单独一栏并标注**。
+
+    为什么分开（2026-10-04）：新闻里提到的标的有相当比例是美股/港股 ——
+    实测 10-04 那天的 6 只行情里 **5 只是美股**。这份日报是给做 A 股的人看的，
+    混在一张表里既容易误读成"今天只有这些票"，也会把真正的 A 股线索淹掉。
+    分开后主表就是"今天新闻里出现的、你能买的票"，海外行情降级为参考。
+    """
+    qs = quotes.get("quotes", [])
+    if not qs:
+        return '<p class="empty">今日无行情数据</p>'
+
+    a_share = [q for q in qs if _is_a_share_market(q.get("market"))]
+    others = [q for q in qs if not _is_a_share_market(q.get("market"))]
+
+    parts = []
+    # ① 主表：沪深 A 股
+    if a_share:
+        parts.append(
+            '<div class="table-wrap"><table class="quote-table">'
+            f"{_QUOTE_THEAD}<tbody>{_quote_rows(a_share)}</tbody></table></div>"
+        )
+    else:
+        parts.append('<p class="empty">今日新闻涉及的个股中没有沪深 A 股'
+                     '（提到的都是海外/港股标的，见下）。</p>')
+
+    # ② 其它市场：单独一栏 + 明确说明不能在本账户交易
+    if others:
+        parts.append(
+            '<p class="q-sub-title">其它市场（'
+            f'{len(others)} 只）'
+            '<span class="q-sub-note">非沪深 A 股，一般不能在 A 股账户交易，'
+            '仅作外围参考</span></p>'
+        )
+        parts.append(
+            '<div class="table-wrap"><table class="quote-table muted-table">'
+            f"{_QUOTE_THEAD}<tbody>{_quote_rows(others)}</tbody></table></div>"
+        )
+
     failed = quotes.get("failed", [])
-    fail_note = ""
     if failed:
         names = "、".join(esc(f["name"]) for f in failed)
-        fail_note = f'<p class="muted small">未取到行情：{names}</p>'
-
-    return (
-        '<div class="table-wrap"><table class="quote-table">'
-        "<thead><tr><th>个股</th><th>市场</th><th>现价</th><th>涨跌</th></tr></thead>"
-        f"<tbody>{''.join(rows)}</tbody></table></div>{fail_note}"
-    )
+        parts.append(f'<p class="muted small">未取到行情：{names}</p>')
+    return "".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -817,6 +864,13 @@ table.quote-table thead th{
 .q-name{font-weight:600;}
 .q-code{display:block; font-size:12px; color:var(--muted); font-weight:400;}
 .q-mkt{color:var(--muted); font-size:13px;}
+/* 非沪深 A 股单独一栏（2026-10-04）：降饱和 + 子标题说明，避免与主表混为一谈 */
+.muted-table{opacity:.72;}
+.q-sub-title{
+  margin:14px 0 8px; font-size:13px; font-weight:600; color:var(--muted);
+  border-top:1px solid var(--line); padding-top:10px;
+}
+.q-sub-note{font-weight:400; margin-left:8px;}
 .up{color:var(--up);} .down{color:var(--down);} .flat{color:var(--flat);}
 /* 市场分析正文：去卡片化，靠排版层次立结构 */
 .analysis{
@@ -982,6 +1036,16 @@ def build_page(data, date_str, slot, delay=None):
     slot_cn = SLOT_CN.get(slot, "")
     news_count = len(data["structured"].get("news", []))
     quote_count = data["quotes"].get("count", 0)
+    # 标题里分出「沪深 A 股 / 其它市场」：一眼看出今天新闻涉及的、你能买的有几只。
+    # 优先用 M4 写下的 by_market/a_share_count（纯附加字段），缺失时按 market 标签现算，
+    # 这样旧数据（M4 还没写这两个字段时）也能正确显示。
+    _a_cnt = data["quotes"].get("a_share_count")
+    if not isinstance(_a_cnt, int):
+        _a_cnt = sum(1 for q in data["quotes"].get("quotes", [])
+                     if _is_a_share_market(q.get("market")))
+    _other = quote_count - _a_cnt
+    quote_breakdown = (f"（沪深 A 股 {_a_cnt} 只"
+                       + (f" / 其它市场 {_other} 只）" if _other else "）")) if quote_count else ""
 
     # M10 是可选产出：账本不存在（首次运行）就整个版块不出现，导航也不加锚点
     picks_html = render_picks(data.get("picks") or [], date_str)
@@ -1030,7 +1094,7 @@ def build_page(data, date_str, slot, delay=None):
 
   {picks_html}
   <section class="block" id="quotes">
-    <h2>个股行情一览<span class="h2-count">{quote_count} 只</span></h2>
+    <h2>个股行情一览<span class="h2-count">{quote_count} 只{quote_breakdown}</span></h2>
     {quotes_html}
   </section>
 
