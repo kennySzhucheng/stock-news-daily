@@ -492,6 +492,14 @@ class Bundle:
 
         「今日」取账本里最新的日期而不是墙上时钟：盘前运行时当日还没有候选，
         此时把昨天的候选标成「今日」是错的；标成日期本身（`latest_date`）才如实。
+
+        批次与字段（2026-10-04 盘前通道）：
+          - rows 仍是**扁平列表**（server.py / check.py / export.py 都按列表读），
+            但排序改成「日期倒序 → 同日盘前在前 → id 倒序」，并给每行补
+            `slot_label`（盘前/盘后中文名），前端据此插入分组小标题即可；
+          - `entry_zone` / `trigger` 原样透传（缺失补空串），前端判空后渲染，
+            export.py 不需要改 —— 它把 rows 整个序列化，不做字段白名单；
+          - `groups` 是纯附加的分组摘要（盘前在前），行数仍以 rows 为准。
         """
         rows = []
         for r in (self.picks or []):
@@ -501,17 +509,31 @@ class Bundle:
             r = dict(r)
             r["basis_ids"] = [self.citation_map[b] for b in (r.get("basis_refs") or [])
                               if b in self.citation_map]
+            # 盘前通道的两个字段**原样透传**（只把缺失/None 归一成空串，值本身不动）：
+            # 前端判空即可决定渲不渲染，不必知道账本里旧行没有这两个键
+            r["entry_zone"] = r.get("entry_zone") or ""
+            r["trigger"] = r.get("trigger") or ""
+            r["slot_label"] = SLOT_GROUP_CN[pick_slot(r)]
             rows.append(r)
         if days is not None:      # 注意用 is not None：days=0 是「只要今天」，不是「不筛选」
             cutoff = (datetime.now(CST) - timedelta(days=days)).strftime("%Y-%m-%d")
             rows = [r for r in rows if (r.get("date") or "") >= cutoff]
-        rows.sort(key=lambda r: (r.get("date") or "", r.get("id") or ""), reverse=True)
+        # 日期倒序 → 同日盘前在前 → id 倒序。用 -rank 配合 reverse=True：元组整体
+        # 取反序，于是日期仍是倒序、rank 变成升序（am=0 在 pm=1 之前）。
+        rows.sort(key=lambda r: (r.get("date") or "", -SLOT_ORDER[pick_slot(r)],
+                                 r.get("id") or ""), reverse=True)
 
         latest = max((r.get("date") or "" for r in rows), default="")
         # 均值与样本数由 M5 同一份实现算出，保证日报与网页版不会各算各的
         stats = self.m5.picks_stats(rows)
+        groups = []
+        for s in ("am", "pm"):
+            grp = [r for r in rows if pick_slot(r) == s]
+            if grp:
+                groups.append({"slot": s, "label": SLOT_GROUP_CN[s], "count": len(grp)})
         return {
             "rows": rows,
+            "groups": groups,
             "latest_date": latest,
             "stats": {str(k): v for k, v in stats.items()},
             "total": len(rows),
@@ -623,6 +645,29 @@ def confirmed_sources(n, max_sources=SOURCES_IN_LIST):
     if n.get("verified") != "confirmed":
         return ""
     return sources_label(n, max_sources)
+
+
+# ---------------------------------------------------------------------------
+# M10 候选账本的批次（与 M5 日报 / M6 推送同一口径，2026-10-04 盘前通道）
+#
+#   am = 08:10 盘前那轮生成的「今日可执行观察清单」，基准是**昨收**，
+#        条目多带 entry_zone（关注区间）与 trigger（触发条件）；
+#   pm = 收盘后那轮记录，基准是当日收盘价。
+#
+# 盘前组一律排在前。
+# ---------------------------------------------------------------------------
+SLOT_ORDER = {"am": 0, "pm": 1}
+SLOT_GROUP_CN = {"am": "盘前（今日可执行）", "pm": "盘后（收盘复盘后记录）"}
+
+
+def pick_slot(row):
+    """账本行的批次：只有显式 am 才算盘前，其余（旧数据没 slot / 写坏）一律按盘后。
+
+    盘后是账本的历史默认值 —— 盘前通道是后加的，把缺失值当盘前会把整批老账本
+    误标成「今日可执行」。
+    """
+    s = (row.get("slot") or "").strip().lower()
+    return s if s in SLOT_ORDER else "pm"
 
 
 # ---------------------------------------------------------------------------

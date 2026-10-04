@@ -696,12 +696,17 @@
         }).join(' ') + '</span>'
       : '';
     var base = (typeof r.base_price === 'number')
-      ? '<span class="pick-base">记录时价 ' + r.base_price + '</span>' : '';
+      ? '<span class="pick-base">' +
+        // 盘前行（slot=am）的基准价是**昨收**，不写清会被当成"记录时的现价"
+        (r.slot === 'am' ? '基准 昨收 ' : '记录时价 ') + r.base_price + '</span>' : '';
     return '<div class="pick-card">' +
       '<div class="pick-head"><b>' + esc(r.name) + '</b>' +
       '<span class="pick-kind">' + esc(KIND_CN[r.kind] || r.kind) + '</span>' +
       board + conf + '</div>' +
       (r.logic ? '<p class="pick-logic">' + esc(r.logic) + '</p>' : '') +
+      // 盘前清单的可执行信息（2026-10-04 新增字段；空则不渲染该项）
+      (r.entry_zone ? '<p class="pick-plan"><b>关注区间</b>' + esc(r.entry_zone) + '</p>' : '') +
+      (r.trigger ? '<p class="pick-plan"><b>触发条件</b>' + esc(r.trigger) + '</p>' : '') +
       (r.invalidation
         ? '<p class="pick-inval"><b>推翻条件</b>' + esc(r.invalidation) + '</p>' : '') +
       '<div class="pick-foot">' + base + ref + '</div></div>';
@@ -739,11 +744,22 @@
 
     var today = (p.latest_date || '').trim();
     var todayRows = rows.filter(function (r) { return r.date === today; });
+    // 同一天可能有两批：盘前（今日可执行清单，基准=昨收）与盘后（收盘后记录）。
+    // 盘前在前 —— 那才是"今天要看的东西"。只有一批时不加分组标题。
+    var ORDER = [['am', '盘前（今日可执行）'], ['pm', '盘后（收盘复盘后记录）']];
+    var groups = ORDER.map(function (g) {
+      return { label: g[1],
+               rows: todayRows.filter(function (r) { return (r.slot || 'pm') === g[0]; }) };
+    }).filter(function (g) { return g.rows.length; });
     // 盘前那次运行时当日还没有候选，此时 latest_date 是上一交易日 —— 如实标日期，
     // 不把它说成「今日」
     var cards = todayRows.length
       ? '<h3 class="pick-sub">' + esc(today) + ' 记录的候选（' + todayRows.length + ' 条）</h3>' +
-        '<div class="pick-cards">' + todayRows.map(pickCard).join('') + '</div>'
+        groups.map(function (g) {
+          return (groups.length > 1
+            ? '<h3 class="pick-sub">' + g.label + '（' + g.rows.length + ' 条）</h3>' : '') +
+            '<div class="pick-cards">' + g.rows.map(pickCard).join('') + '</div>';
+        }).join('')
       : '<p class="pick-empty">这次运行时还没有新的候选记录。</p>';
 
     $('#picksBody').innerHTML =

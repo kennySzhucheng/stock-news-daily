@@ -441,6 +441,15 @@ def check_date(repo, pages_base, date_str):
                 out.append(f"  {SLOT_CN[slot]}候选  ✓ 新增 {rec} 条（{reason or 'ok'}）")
             else:
                 out.append(f"  {SLOT_CN[slot]}候选  — 闸门未开（{reason or '非交易时段'}），本轮不记录")
+            # 盘前通道的日历口径：进入未核实年份后 is_trading_day 会 fail-closed
+            # 一律返回"非交易日"，于是盘前「今日可执行清单」**每天静默停摆**
+            # （状态文件看着正常：reason=non_trading_day）。这一条必须在体检里喊出来。
+            if slot == "am" and ps.get("calendar") == "approx-unverified-year":
+                problems.append((SEVERE,
+                                 "盘前候选的交易日历**未覆盖该年份**（内置休市表只核实过已有年份）"
+                                 "—— 盘前「今日可执行清单」会每天被判成休市而静默停摆；"
+                                 "请把下一年的 A 股休市安排补进 picks.py 的 FALLBACK_HOLIDAYS"))
+                out.append("  盘前候选  ✗ 交易日历未覆盖该年份（清单会一直不产出）")
 
     return out, problems
 

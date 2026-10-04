@@ -851,5 +851,72 @@ class QuotesMarketSplit(unittest.TestCase):
         self.assertIn('"a_share_count": a_share', src)
 
 
+class PremarketChannel(unittest.TestCase):
+    """盘前通道（2026-10-04 用户决定 A 方案）。
+
+    用户要的是"盘前告诉我今天可能看哪几只"。设计：
+      · 08:10 生成「今日可执行观察清单」，每条给**关注区间 entry_zone** 与
+        **触发条件 trigger**（加上原有的推翻条件）；
+      · 基准价用**昨日收盘价**（盘前只有这个价是结算过的），`base_date` = 上一交易日；
+      · 记入**同一个账本**（`slot=am`），因此盘前的判断**同样会被 T+1/3/5 公开回填**；
+      · T+1 观察日 = 记录日**当天**（基准是昨收）→ 当天 15:40 那次运行就补上。
+    这里钉住最容易错的三件事：记账字段齐不齐、休市/盘中快照必须拒绝、复盘基准日。
+    """
+
+    def setUp(self):
+        self.pk = load("m10_picks", "modules/m10_picks/picks.py")
+
+    def test_calendar_kind_marks_unverified_year(self):
+        """未核实年份必须能被机器读出来（否则盘前清单会静默停摆）。"""
+        self.assertEqual(self.pk.calendar_kind("2026-10-09"), "approx")  # 未来 → 近似但已核实
+        self.assertEqual(self.pk.calendar_kind("2027-03-01"), "approx-unverified-year")
+        src = (ROOT / "modules/m10_picks/picks.py").read_text(encoding="utf-8")
+        self.assertIn('state["calendar"] = calendar_kind(today)', src)
+        hc_src = (ROOT / "modules/m8_e2e/healthcheck.py").read_text(encoding="utf-8")
+        self.assertIn("approx-unverified-year", hc_src, "体检必须能发现日历失效")
+
+    def test_status_file_has_calendar_only_when_set(self):
+        """`calendar` 是追加的第 8 个字段：pm 不写、am 写；原 7 字段契约不变。"""
+        import tempfile
+        tmp = pathlib.Path(tempfile.mkdtemp(prefix="snd-am-"))
+        old = self.pk.PICKS_DIR
+        self.pk.PICKS_DIR = tmp
+        try:
+            pm = self.pk.write_status("2026-10-09", "pm", {
+                "gate_open": True, "recorded": 1, "reason": "ok", "detail": ""})
+            am = self.pk.write_status("2026-10-09", "am", {
+                "gate_open": True, "recorded": 1, "reason": "ok", "detail": "",
+                "calendar": "approx"})
+        finally:
+            self.pk.PICKS_DIR = old
+        base = {"date", "slot", "generated_at", "gate_open", "recorded", "reason", "detail"}
+        self.assertTrue(base.issubset(set(pm)), "pm 的 7 字段不能少")
+        self.assertNotIn("calendar", pm, "pm 不必写 calendar")
+        self.assertEqual(am["calendar"], "approx")
+
+    def test_is_trading_day_fail_closed_on_unverified_year(self):
+        """判不出来就按"不是交易日"处理（fail-closed）：宁可不记，也不能在休市日
+        产出一份"今天可以买这些"的清单。"""
+        self.assertFalse(self.pk.is_trading_day("2027-03-01"),
+                         "未核实年份必须 fail-closed")
+
+    def test_premarket_reason_enum_is_covered_by_push_wording(self):
+        """盘前新增的两个 reason 必须在推送文案里有对应说法，不能落回"盘前不记录"。"""
+        src = (ROOT / "modules/m6_push/push.py").read_text(encoding="utf-8")
+        self.assertIn("non_trading_day", src)
+        self.assertIn("not_premarket", src)
+        self.assertNotIn('return "盘前不记录新候选', src,
+                         "盘前现在会记账，这句话会掩盖真实故障")
+
+    def test_ledger_row_schema_for_premarket(self):
+        """am 行必须带 base_date / entry_zone / trigger；复盘要以 base_date 为基准日。"""
+        src = (ROOT / "modules/m10_picks/picks.py").read_text(encoding="utf-8")
+        for key in ("base_date", "entry_zone", "trigger"):
+            self.assertIn(key, src, f"账本 schema 缺少 {key}")
+        # 复盘基准日：am 行用 base_date（昨收所在交易日），pm 行回落到 date
+        self.assertIn('row.get("base_date") or row["date"]', src,
+                      "score_pending 必须用 base_date 作基准日，否则 am 行的 T+1 会差一天")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

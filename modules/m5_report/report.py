@@ -564,6 +564,24 @@ PICK_MIN_SAMPLE = 3           # 样本少于此数不给均值（百分比在小
 
 _STATUS_CN = {"no_quote": "未匹配到行情", "no_bench": "基准缺失", "expired": "未取到行情"}
 
+# 盘前/盘后两个批次分开显示（2026-10-04 盘前通道）：
+#   am = 08:10 那轮生成的「今日可执行观察清单」，基准是**昨收**，当天即可对照执行；
+#   pm = 收盘后那轮记录，基准是当日收盘价，属于事后判断。
+# 盘前组一律排在前面；**两组都有时才给小标题** —— 只有一组时没有可对比的另一组，
+# 标题纯属多占一屏。
+SLOT_ORDER = ("am", "pm")
+SLOT_GROUP_CN = {"am": "盘前（今日可执行）", "pm": "盘后（收盘复盘后记录）"}
+
+
+def pick_slot(row):
+    """账本行的批次：只有显式 am 才算盘前，其余（旧数据没 slot / 写坏）一律按盘后。
+
+    盘后是账本的**历史默认值**：盘前通道是后加的，把缺失值当盘前会把整批老账本
+    误标成「今日可执行」。
+    """
+    s = (row.get("slot") or "").strip().lower()
+    return s if s in SLOT_ORDER else "pm"
+
 
 def load_picks():
     """reports/picks/ledger.jsonl → list[dict]。
@@ -629,8 +647,51 @@ def picks_stats(rows):
     return out
 
 
+def _pick_card(r):
+    """一条今日候选卡：逻辑链 + 推翻条件是主体，价格只是脚注。
+
+    盘前行（slot=am）额外给出**关注区间**与**触发条件** —— 这两个字段是
+    「今日可执行」的全部依据。任一字段为空串/缺失就整行不渲染，绝不出现
+    「关注区间：」后面空着一串（那会让读者以为有区间、只是没写出来）。
+    """
+    tag = '<span class="pick-tag">板块</span>' if r.get("kind") == "board" else ""
+    refs = "".join(f'<span class="pick-ref">[{n}]</span>'
+                   for n in (r.get("basis_refs") or [])[:8])
+    is_am = pick_slot(r) == "am"
+    plan = ""
+    if is_am:
+        zone = (r.get("entry_zone") or "").strip()
+        trig = (r.get("trigger") or "").strip()
+        if zone:
+            plan += f'<p class="pick-plan"><b>关注区间</b>：{esc(zone)}</p>'
+        if trig:
+            plan += f'<p class="pick-plan"><b>触发条件</b>：{esc(trig)}</p>'
+    # 盘前行的基准价是**昨收**，与盘后行的当日收盘价不是一个口径，故标出来；
+    # 取不到价位时不标（否则会写成像「昨收 未匹配到行情」那样的病句）
+    price = r.get("base_price")
+    if not price:
+        base = "未匹配到行情"
+    elif is_am:
+        base = f"昨收 {esc(price)}"
+    else:
+        base = esc(price)
+    return f"""<div class="pick-card">
+  <div class="pick-head"><b>{esc(r.get("name"))}</b>{tag}
+    <span class="pick-conf">置信度 {esc(r.get("confidence") or "—")}</span></div>
+  <p class="pick-logic">{esc(r.get("logic"))}</p>
+  {plan}<p class="pick-inval"><b>推翻条件</b>：{esc(r.get("invalidation"))}</p>
+  <div class="pick-foot">基准 {base}
+    {("· 所属板块 " + esc(r["board"])) if r.get("board") and r.get("kind") == "stock" else ""}
+    {("· 新闻依据 " + refs) if refs else ""}</div>
+</div>"""
+
+
 def render_picks(picks, date_str):
-    """候选观察清单版块。没有任何账本数据时返回空串（不显示空版块）。"""
+    """候选观察清单版块。没有任何账本数据时返回空串（不显示空版块）。
+
+    今日候选按批次分组：**盘前（今日可执行）在前、盘后（收盘复盘后记录）在后**；
+    两组都有时才给组标题。往期回填明细与均值口径不受分组影响（照旧整段统计）。
+    """
     if not picks:
         return ""
     today_rows = [r for r in picks if r.get("date") == date_str]
@@ -640,27 +701,26 @@ def render_picks(picks, date_str):
                    and r.get("date", "") >= cutoff],
                   key=lambda r: (r.get("date", ""), r.get("id", "")), reverse=True)
 
-    # 今日候选卡：逻辑链 + 推翻条件是主体，价格只是脚注
-    cards = []
-    for r in today_rows:
-        tag = '<span class="pick-tag">板块</span>' if r.get("kind") == "board" else ""
-        refs = "".join(f'<span class="pick-ref">[{n}]</span>'
-                       for n in (r.get("basis_refs") or [])[:8])
-        cards.append(f"""<div class="pick-card">
-  <div class="pick-head"><b>{esc(r.get("name"))}</b>{tag}
-    <span class="pick-conf">置信度 {esc(r.get("confidence") or "—")}</span></div>
-  <p class="pick-logic">{esc(r.get("logic"))}</p>
-  <p class="pick-inval"><b>推翻条件</b>：{esc(r.get("invalidation"))}</p>
-  <div class="pick-foot">基准 {esc(r.get("base_price") or "未匹配到行情")}
-    {("· 所属板块 " + esc(r["board"])) if r.get("board") and r.get("kind") == "stock" else ""}
-    {("· 新闻依据 " + refs) if refs else ""}</div>
-</div>""")
-
-    if today_rows:
-        today_html = "".join(cards)
+    # 今日候选卡按批次分组（盘前在前），组内保持账本原有顺序
+    groups = [(s, [r for r in today_rows if pick_slot(r) == s]) for s in SLOT_ORDER]
+    groups = [(s, rs) for s, rs in groups if rs]
+    if len(groups) > 1:
+        today_html = "".join(
+            f'<div class="pick-group">'
+            f'<h3 class="pick-group-title">{SLOT_GROUP_CN[s]}'
+            f'<span class="h2-count">{len(rs)} 条</span></h3>'
+            f'{"".join(_pick_card(r) for r in rs)}</div>'
+            for s, rs in groups
+        )
+        count_breakdown = "（" + " · ".join(f"{SLOT_CN[s]} {len(rs)}" for s, rs in groups) + "）"
     else:
-        today_html = ('<p class="pick-empty">本时段不记录新候选（新候选只在收盘后记录，'
-                      '以保证基准价就是当日收盘价）。以下是跟踪中候选的表现。</p>')
+        today_html = "".join(_pick_card(r) for _, rs in groups for r in rs)
+        count_breakdown = ""
+
+    if not today_rows:
+        today_html = ('<p class="pick-empty">本时段没有新记录的候选：盘前 08:10 记入'
+                      '「今日可执行」清单（基准为昨收），盘后收盘后记入当日候选'
+                      '（基准为当日收盘价）。以下是跟踪中候选的表现。</p>')
 
     # 历史回填：逐条明细，每条自带 T+1/T+3/T+5 与同期基准
     rows_html = []
@@ -702,9 +762,11 @@ def render_picks(picks, date_str):
 
     n_today = len(today_rows)
     return f"""<section class="block" id="picks">
-  <h2>候选观察清单<span class="h2-count">今日 {n_today} 条</span></h2>
+  <h2>候选观察清单<span class="h2-count">今日 {n_today} 条{count_breakdown}</span></h2>
   <p class="pick-note">每条候选都带<b>推翻条件</b>与新闻依据，其后续表现按 T+1/T+3/T+5
-  原样回填，<b>含跑输的</b>。超额相对沪深300。<b>不是买入指令</b>，决策权归您本人。</p>
+  原样回填，<b>含跑输的</b>。超额相对沪深300。盘前条目另给<b>关注区间</b>与
+  <b>触发条件</b>——到了该位置、出现该信号才值得进一步观察，<b>不是买入指令</b>，
+  决策权归您本人。</p>
   {today_html}
   {stats_html}
   {hist_html}
@@ -997,6 +1059,19 @@ section.block > details > summary > h3{
   border-radius:2px; padding:0 5px; margin-left:4px;}
 .pick-stats{font-size:13px; background:var(--bg2); border:0;
   border-radius:0; padding:8px 12px; margin:0 0 10px; line-height:1.7;}
+/* 候选分组（2026-10-04 盘前通道）：盘前（今日可执行）在前、盘后（收盘复盘后记录）
+   在后；两组都有时才渲染标题（只有一组时没有可比对象）。沿用版块标题的衬线字号
+   与细线，不引入新颜色。 */
+.pick-group{margin-top:14px;}
+.pick-group-title{
+  font-family:var(--serif); font-size:15.5px; font-weight:700; color:var(--ink);
+  margin:14px 0 8px; padding-bottom:6px; border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:8px;
+}
+/* 盘前条目独有的两行：关注区间 / 触发条件。字段为空串时整行不渲染，
+   不会留下「关注区间：」后面空着的一行。 */
+.pick-plan{font-size:13px; line-height:1.65; margin:0 0 4px;}
+.pick-plan b{color:var(--text);}
 
 /* 索引页：按日期分组 */
 .day-group{

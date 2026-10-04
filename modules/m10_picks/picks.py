@@ -16,7 +16,19 @@ M10 候选清单与事后复盘模块 — 把 M3 的判断变成可检验的记�
    把 T+1 写成 0%，而账本一写就不再改 —— 周六周日、节假日同理。看钟表分不出
    「盘前 08:10」与「延迟到 12:46 的盘前」，也认不出国庆节的周一，报价时刻可以。
    fail-closed：判定不了就不写，延后一天由「到期即补」自动吸收
+3b. **盘前通道（am，2026-10-04 新增）**：盘前 08:10 那次运行产出「今日可执行观察
+    清单」，基准价用**上一交易日收盘价**（新字段 base_date 记下基准日），
+    因此它的 T+1 就是**记录日当天收盘** —— 当天 15:40 的 pm 运行正好补上
+    （score_pending 的 d0 = base_date or date）。pm 通道一行未改。
+    三条闸门全满足才记：① is_trading_day(今天)（**fail-closed**：判不出来按休市
+    处理）；② 最新报价时刻停在上一交易日且 ≥15:00（报价日期=今天 → 这不是盘前
+    快照，reason=not_premarket）；③ 材料齐（analysis.md + **当日** quotes.json，
+    盘前的「现价」就是昨收）。盘前每条候选另有 entry_zone（基于昨收的观察区间）与
+    trigger（今天看盘即可验证的触发条件），与 invalidation 一样在代码里逐条校验；
+    解析不出区间的只清空该字段（区间是辅助），trigger 缺失或 invalidation <8 字
+    则整条丢弃。**盘前清单只收沪深 A 股个股**（板块指数没有可比的昨收与触发条件）。
 4. 记录当天锁下基准价 —— M4 只有实时行情、没有历史行情，事后补不了
+   （盘前通道同理：它锁的是上一交易日收盘价，并写进 base_date 留痕）
 5. 到期即补：target = 记录日**之后的第 k 个交易日**（日历口径见下），
    today >= target 且该档未填就填，记**实际**打分日（停牌会让它晚几天，如实反映）。
    各档独立判超期，不拿最早那档统一作废
@@ -122,6 +134,18 @@ EXPIRE_AFTER_DAYS = 15
 MAX_STOCKS = 4                # 候选数量上限（prompt 里也写了 2-4）
 MAX_BOARDS = 2
 MAX_CAND_TOKENS = 4000        # 与 M3 一致；2000 会在 JSON 中途截断，切出半截样本
+
+# 盘前通道（am）：
+PREV_DAY_LOOKBACK_DAYS = 30   # 求「上一交易日」时向前回看的自然日数（够跨春节/国庆）
+# entry_zone 的合法形态：「两个数字 + 分隔符」。
+# 分隔符取 ~ ～ - － – — 至 到（中英文/全半角都认，模型两种都会写）；
+# 允许「约」前缀与「元」后缀（它们不影响"两个数字"这个信息量）。
+ENTRY_ZONE_RE = re.compile(
+    r"^([0-9]+(?:\.[0-9]+)?)\s*[~～\-－–—至到]\s*([0-9]+(?:\.[0-9]+)?)$")
+# 盘前候选额外的禁用词（**只在 am 生效**，pm 的措辞检查保持原样）。
+# M3.postcheck 覆盖了「建议买入/卖出/可以抄底/应该止损/马上买入」这类指令，
+# 但没有覆盖承诺性措辞；这里补上，让「不得承诺」也有代码兜底而不是只有 prompt。
+AM_EXTRA_BANNED = (r"满仓", r"梭哈", r"必涨", r"必跌", r"稳赚", r"包赚", r"无风险套利")
 
 
 def _load(name, rel):
@@ -298,6 +322,72 @@ def close_ready(bench_q, day):
     if qhm < "1500":
         return False, f"最新报价停在 {hhmm}，今日尚未收盘（盘中价不是收盘价）"
     return True, f"{qdate} {hhmm} 已收盘"
+
+
+def premarket_ready(bench_q, day, prev_day):
+    """是否处于「昨收已结算」的盘前快照 → (bool, 说明, reason)。
+
+    **这是盘前通道（am）的总闸门**，与 close_ready 互补：close_ready 判「今天该
+    不该在盘后记账」，本函数判「现在能不能拿上一交易日收盘价当基准记账」。
+
+    判据同样是**行情自带的报价时刻**（只认形态：报价日期 == 上一交易日 且 ≥15:00）：
+      · 报价日期 = 今天     → 已有盘中成交，这不是盘前快照（reason=not_premarket）
+      · 报价日期 != 上一交易日 → 与交易日历对不上（数据停在更早的某天），同样不记
+      · 上一交易日报价 <15:00 → 那天还没收盘，昨收还不存在（not_premarket）
+    报不出准确形态就不记：写错的基准价会把 T+1/T+3/T+5 全部污染，而延后一天的
+    代价只是「今天没有清单」（到期即补的复盘口径不受影响）。
+
+    reason 只在返回 False 时有意义，取值 ∈ {"not_premarket", "gate_closed"}：
+    判不出来（缺时刻字段/取不到基准行情）归 gate_closed，判出来"不是盘前"归
+    not_premarket —— 后者是"这份文档今天不该产出"，前者是"证据不足"。
+    """
+    if not bench_q:
+        return (False, "基准行情取不到，无法确认最新报价是否停在上一交易日（宁可不写）",
+                "gate_closed")
+    t = (bench_q.get("time") or "").strip()
+    if not re.fullmatch(r"\d{12,14}", t):
+        return False, f"行情源未给报价时刻（{t or '空'}），无法确认这是盘前快照", "gate_closed"
+    qdate, qhm = t[:8], t[8:12]
+    hhmm = f"{qhm[:2]}:{qhm[2:]}"
+    today8, prev8 = day.strftime("%Y%m%d"), prev_day.strftime("%Y%m%d")
+    if qdate == today8:
+        return (False, f"最新报价已是今日 {hhmm}（盘中价，不是昨收）——本轮不是盘前快照",
+                "not_premarket")
+    if qdate != prev8:
+        return (False, f"最新报价停在 {qdate} {hhmm}，不是上一交易日（{prev8}）的收盘",
+                "not_premarket")
+    if qhm < "1500":
+        return (False, f"上一交易日（{prev8}）的报价停在 {hhmm}，那天尚未收盘",
+                "not_premarket")
+    return True, f"最新报价 {qdate} {hhmm} = 上一交易日（{prev8}）收盘，昨收已结算", ""
+
+
+def am_gate(bench_q, day):
+    """盘前通道（am）总闸门 → (ok, 说明, reason, base_date)。
+
+    三条判据（全满足才 ok=true，也就是状态文件里的 gate_open=true=「能记录」）：
+      ① is_trading_day(day)：今天开市才谈得上"今天可购入" —— fail-closed，
+         判不出来按休市处理（reason=non_trading_day）
+      ② 上一交易日可求：它就是 base_date（基准价所在的交易日，**用日历求，
+         不是自然日 -1**）；求不出来 reason=gate_closed
+      ③ premarket_ready：最新报价时刻正好停在上一交易日且 ≥15:00（昨收已结算）。
+         报价日期=今天 → 已有盘中成交，这不是盘前快照（reason=not_premarket）；
+         取不到报价时刻 → 判不出来（reason=gate_closed，fail-closed）
+
+    返回的 base_date 是 "YYYY-MM-DD" 字符串（账本里就是这个类型）；它同时是 am 行
+    复盘用的 d0，所以错了 T+1/T+3/T+5 全错，故宁可 ok=False 也不猜。
+    """
+    d = _plain_date(day)
+    if not is_trading_day(d):
+        return (False,
+                f"{d} 是休市日（非交易日）—— 今天不能买入，不该产出「今日可购入清单」",
+                "non_trading_day", None)
+    prev = prev_trading_day(d)
+    if prev is None:
+        return (False, "上一交易日求不出来（交易日历不可用），盘前基准价无从锁定",
+                "gate_closed", None)
+    ok, why, reason = premarket_ready(bench_q, d, prev)
+    return ok, why, (reason or ""), prev.strftime("%Y-%m-%d")
 
 
 # ---------------------------------------------------------------- 交易日历
@@ -634,6 +724,131 @@ def trading_days(start_date, end_date):
     return _trading_days_ex(start_date, end_date)[0]
 
 
+def is_trading_day(day=None):
+    """day（默认今天）是否**开市日**。**fail-closed**：判不出来就当作不是交易日。
+
+    为什么需要它：假期/周末的 08:10 运行不能产出「今日可购入清单」——那天根本不能
+    买。行情本身分不出这件事（上一交易日的收盘价在任何一天早上都长一个样），所以
+    必须问日历。
+
+    判定顺序：
+      1. 测试注入的序列（_inject_trading_days）→ 直接看成员关系
+      2. 真实交易日历（K 线）能回答该日 → 用真实答案
+         "能回答"= 该日 **早于今天** 且已被查询窗口覆盖：过去的日期不在 K 线里，
+         只可能是休市。**今天本身不算"能回答"** —— 盘前 08:10 时今天还没有 K 线，
+         "查不到"绝不等于"休市"，必须走第 3 步，否则每天盘前都会判成休市。
+      3. 今天 / 未来（K 线里没有）→ _approx_days（周一~周五 − 内置 2026 休市表）
+      4. 兜底再判不出来（年份不在已核实的休市表覆盖范围内，或日历/入参坏掉）
+         → False + 打印原因
+
+    第 4 条是刻意的保守：近似日历只核实过 FALLBACK_HOLIDAY_YEARS，"周一~周五"在
+    未核实年份会把春节/国庆算成交易日。**代价与处置**：进入未核实年份后，盘前
+    通道会退化成"每天都判成休市"（状态文件 reason=non_trading_day，日志有醒目
+    warn）—— 这是可见的、可修的，而按错误清单买入是不可修的。修法：把下一年度的
+    休市安排加进 FALLBACK_HOLIDAYS / FALLBACK_HOLIDAY_YEARS（每年 12 月一次），
+    或让交易日历缓存/联网可用。
+    """
+    if day is None:
+        d = _today()
+    else:
+        try:
+            d = _plain_date(day)
+        except Exception as e:
+            print(f"[warn] 交易日判定失败（入参 {day!r}）：{type(e).__name__}: "
+                  f"{str(e)[:60]} → 按非交易日处理（fail-closed）")
+            return False
+
+    if _CAL["override"] is not None:
+        ok = d in set(_CAL["override"])
+        print(f"{'[OK]' if ok else '[warn]'} {d} "
+              f"{'是' if ok else '不是'}交易日（测试注入的日历）")
+        return ok
+
+    if not _CAL["approx"]:
+        days, kind = _trading_days_ex(d, d)
+        if kind == "real":
+            if days:
+                print(f"[OK] {d} 是交易日（真实日历）")
+                return True
+            if d < _today():
+                # 真实日历覆盖了这个过去的日期、里面没有它 → 确实休市
+                print(f"[OK] {d} 不是交易日（真实日历：该日休市/周末）")
+                return False
+            print(f"[info] {d} 还没有 K 线（日历只到已发生的交易日），"
+                  "改用近似日历判定")
+
+    if d.year not in FALLBACK_HOLIDAY_YEARS:
+        print(f"[warn] {d} 的节假日表未核实（内置表只覆盖 "
+              f"{'/'.join(str(y) for y in FALLBACK_HOLIDAY_YEARS)} 年），"
+              "无法判断它是不是休市日 → 按非交易日处理（fail-closed，盘前不记录）")
+        return False
+
+    ok = bool(_approx_days(d, d))
+    if ok:
+        print(f"[warn] {d} 按近似日历判定为交易日（周一~周五且不在内置休市表里）")
+    else:
+        print(f"[warn] {d} 不是交易日（近似日历：周末或内置休市日）")
+    return ok
+
+
+def calendar_kind(day=None):
+    """这个日期是用**哪种口径**判定的？`real` / `approx` / `approx-unverified-year`。
+
+    只给状态文件与体检用（不改变判定结果）：
+      · `real`                   —— 真实交易日历（东财/腾讯日K）能回答该日；
+      · `approx`                 —— 近似日历（周一~周五 − 内置休市表），该年份已核实；
+      · `approx-unverified-year` —— 近似日历且**该年份未核实**：此时 is_trading_day
+                                    按 fail-closed 一律返回"非交易日"，盘前通道会
+                                    每天停摆。这是唯一会"静默失效"的地方，必须让
+                                    体检看得见（healthcheck.py 会因此报严重）。
+    """
+    d = _plain_date(day) if day is not None else _today()
+    if _CAL.get("override") is not None:
+        return "override"
+    try:
+        days, kind = _trading_days_ex(d, d)
+        if kind == "real" and d < _today():
+            return "real"
+    except Exception:
+        pass
+    if d.year not in FALLBACK_HOLIDAY_YEARS:
+        return "approx-unverified-year"
+    return "approx"
+
+
+def prev_trading_day(day=None, lookback=None):
+    """day **之前最近的一个交易日**（严格早于 day），没有则 None。
+
+    用交易日历求，**不能用自然日 -1**：10-09（周五）的上一交易日是 10-08，
+    而 10-12（周一）的上一交易日是 10-09（跨周末），长假后更是差好几天。
+    盘前行用它写 base_date（基准价所在的交易日），错了整条记录的 T+1 就错了。
+
+    回看窗口 lookback 个自然日（默认 PREV_DAY_LOOKBACK_DAYS=30，够跨春节/国庆）；
+    真实日历不可用时自动退化为近似日历（_trading_days_ex 内部处理，已打 warn）。
+
+    窗口里落在**未来**的那一段（day > 今天时必然存在）K 线还没有，必须用
+    _approx_days 接续 —— 否则 10-09 的"上一交易日"会答成 09-30（K 线的最后一根），
+    而正确答案是 10-08。生产路径只对"今天"调用本函数（窗口全在过去），这一条是为
+    --probe 与测试里的未来日期准备的。
+    """
+    d = _plain_date(day) if day is not None else _today()
+    lo = d - timedelta(days=lookback or PREV_DAY_LOOKBACK_DAYS)
+    hi = d - timedelta(days=1)
+    if hi < lo:
+        return None
+    days, kind = _trading_days_ex(lo, hi)
+    if kind == "real" and hi > _today() and _CAL["override"] is None:
+        # 未来那一段用近似日历接续（注入的日历不接续：它本身就是测试里的"全部真相"）
+        days = sorted(set(days)
+                      | set(_approx_days(max(lo, _today() + timedelta(days=1)), hi)))
+    if kind == "real" and not days:
+        # 真实日历把这一整段都判成休市（不可能有 30 天连休）：宁可退回近似日历，
+        # 也不要让 base_date 变成 None 把整条盘前通道掐掉
+        print(f"[warn] 真实日历在 {lo}~{hi} 内没有任何交易日（异常），改用近似日历求上一交易日")
+        days = _approx_days(lo, hi)
+    return days[-1] if days else None
+
+
 def _span_of(base, done):
     """基准日 → 补录日的跨度：真实日历可用时为**交易日数**，否则自然日数。
 
@@ -862,6 +1077,86 @@ def build_prompt(digest, digest_count, analysis_md, quotes):
         digest_count=digest_count, digest=digest)
 
 
+# 盘前版 prompt（2026-10-04 新增）。与 PROMPT_HEAD 同一骨架（同一份材料、同样的
+# 编号引用与禁用词约束），差别只有三处，都来自「盘前要能指导今天怎么做」：
+#   ① 只挑个股（板块指数给不出"昨收 → 观察区间 → 今日触发"这条链）
+#   ② 每条多两个可执行字段：entry_zone（基于昨收的观察区间）+ trigger（今天看盘
+#      即可验证的触发条件）；invalidation 仍必填
+#   ③ 明确告诉它"行情里的现价就是上一交易日收盘价"，否则它会拿昨收当"今日价"，
+#      entry_zone 会整整偏一天
+AM_PROMPT_HEAD = """你是 A 股研究助理。现在是**开盘前**。下面是今日新闻摘要、一份已完成的市场分析、以及相关个股的行情（**行情里的"昨收"就是上一交易日收盘价，今天还没有成交**）。
+
+请从中挑出 1-{max_stocks} 只个股，作为「今日观察清单」——每条都要让读者在**今天开盘后自己盯着盘面**判断这条逻辑还成不成立、值不值得继续跟。
+
+## 硬约束（违反即废稿）
+1. 【只能从给定材料里选】候选必须出自市场分析的「值得关注的板块」或「新闻涉及的个股」，
+   不得引入材料里没有的标的。**没有够格的标的时宁可比 1 只还少，也不要凑数。**
+2. 【只选沪深 A 股个股】必须是沪市 6 开头、深市 0 或 3 开头的 6 位数字代码。
+   港股、美股、北交所（4/8 开头）、B 股、板块指数一律不选（行情清单已按此过滤）。
+3. 【单一标的】name 必须是单一股票名：禁止 "A/B" 斜杠合称、禁止「等」、禁止并列。
+4. 【关注区间 entry_zone】以**上一交易日收盘价**为锚，给一个今天值得观察的价格区间，
+   格式固定为「低~高」（两个数字 + ~），例：`12.0~12.5`。这是"这个价位附近才值得看"，
+   不是目标价、不是止损价。
+5. 【触发条件 trigger】必填，必须是**今天看盘就能验证**的可观测信号
+   （如「开盘半小时站稳 12.5 且成交额较昨日同期放大」）。
+   「关注量能变化」「看盘面表现」这类没法验证的一律不合格。
+6. 【推翻条件 invalidation】必填，且必须是**可观测的证伪信号**
+   （如「若公司公告否认该传闻」「若板块成交额连续两日萎缩」）。
+   「注意风险」「谨慎参与」「关注后续」这类空话一律不合格。
+7. 【禁止投资指令与承诺】不得出现「建议买入」「建议卖出」「满仓」「梭哈」「必涨」
+   「稳赚」等表述。用「纳入观察」「值得跟踪」。
+8. 【置信度】每条标 高/中/低。单源待核实(unve)新闻支撑的最高只能给「中」。
+9. 【依据编号】basis_refs 列出支撑该候选的新闻编号（就是下面清单里的 [n]）。
+10. 【小资金偏好】用户资金规模小：依据强度相当时**优先单价更低的个股**
+    （一般 20 元以下优先）；单价高的只有依据明显更强时才入选。
+
+## 输出格式
+只输出 JSON，不要任何解释文字，不要 markdown 围栏：
+{{"candidates":[{{"kind":"stock","name":"","code_hint":"","logic":"一句话逻辑链",
+  "entry_zone":"12.0~12.5","trigger":"今天可观测的触发条件",
+  "invalidation":"可观测的证伪信号","confidence":"中","basis_refs":[1,2]}}]}}
+
+kind 固定填 "stock"；code_hint 只在你知道沪深 A 股 6 位代码时填，否则留空。
+
+## 已完成的市场分析
+{analysis}
+
+## 相关个股行情（昨收 = 上一交易日收盘价）
+{quotes}
+
+## 今日新闻（共 {digest_count} 条精选，编号@[]用于引用）
+{digest}"""
+
+
+def build_am_prompt(digest, digest_count, analysis_md, quotes):
+    """盘前版 prompt。行情清单同样只给沪深 A 股（与 build_prompt 同一条理由）。"""
+    a_quotes = [q for q in quotes if is_sh_sz_a(str(q.get("code") or ""))]
+    q_lines = "\n".join(
+        f"- {q['name']}({q.get('code','')}) 昨收 {q.get('price')}"
+        f"（上一交易日涨跌 {q.get('change_pct')}%）"
+        for q in a_quotes[:60]) or "（今日未取到行情）"
+    return AM_PROMPT_HEAD.format(
+        max_stocks=MAX_STOCKS,
+        analysis=analysis_md[:12000], quotes=q_lines,
+        digest_count=digest_count, digest=digest)
+
+
+def clean_entry_zone(raw):
+    """entry_zone 字符串 → 合法则原样返回（去空白），否则返回 ""。
+
+    判据只有一条：**能解析出两个数字 + 分隔符**（见 ENTRY_ZONE_RE）。解析不出就
+    清空 —— 区间是辅助信息，为它丢掉整条候选（连同逻辑链与推翻条件）不划算。
+    不做"数字合理性"校验：模型给 12.0~12.5 还是 120~125 都可能是对的
+    （有的标的单价就是三位数），代码无从判断，只能校验形态。
+    """
+    s = str(raw or "").strip().strip("`")
+    if not s:
+        return ""
+    s = re.sub(r"^约\s*", "", s)
+    s = re.sub(r"\s*元$", "", s).strip()
+    return s if ENTRY_ZONE_RE.match(s) else ""
+
+
 _FW_STRUCT_PUNCT = {"，": ",", "：": ":", "【": "[", "】": "]",
                     "（": "(", "）": ")"}
 _FW_QUOTES = {"“": '"', "”": '"', "‘": "'", "’": "'"}
@@ -1002,16 +1297,18 @@ def _dump_raw(text, max_tokens=None, err=None, mode="w"):
         print(f"[warn] LLM 原文落盘失败: {type(e).__name__}: {str(e)[:60]}")
 
 
-def parse_candidates(text, max_tokens=None, dump_mode="w"):
-    """LLM 输出 → list[dict]。
+def _extract_items(text, max_tokens=None, dump_mode="w"):
+    """LLM 原文 → list[dict]：**只做「文本 → JSON 条目」**，不做业务校验。
 
     解析策略（修正后的真实语义）：
     1. 围栏与花括号**两步都做**：剥离围栏 → 全角结构标点归一 → 裁到 {...}
     2. 整体 json.loads 成功就用它；**整体失败则按花括号配平逐条抢救**，抢回来的
        条目照常进入后续校验 —— 一次字符级失误不再让整天样本归零
-    3. 逐条校验阶段仍然是「**不合格的逐条丢弃**」而不是整批失败；只有当整体解析
-       失败且一条都抢救不回来时才返回 []
-    4. 无论成败都落盘原始输出（见 _dump_raw）
+    3. 无论成败都落盘原始输出（见 _dump_raw）
+
+    抽成独立函数是为了让 pm/am 两条通道共用同一份抢救实现（2026-10-04）：09-30 那种
+    「一个字符失误 = 整天样本归零」的解药只能有一份，否则新通道会悄悄退化成整批丢弃。
+    同时更新 _PARSE_STATE 的 json_ok / extracted / error（kept 由 _validate_items 填）。
     """
     raw = text if isinstance(text, str) else ""
     _PARSE_STATE.update(json_ok=False, extracted=0, kept=0, error="")
@@ -1061,6 +1358,23 @@ def parse_candidates(text, max_tokens=None, dump_mode="w"):
             print(f"[warn] 候选 JSON 解析失败: {detail}")
 
     _PARSE_STATE["extracted"] = len(items)
+    return items
+
+
+def _validate_items(items, am=False):
+    """条目 → 通过校验的候选 dict 列表（**逐条**丢弃不合格的，不是整批失败）。
+
+    校验链（pm/am 共用，am 只多几条）：
+      · kind 合法（am 只收 stock —— 盘前通道要的是"昨收 → 区间 → 今日触发"这条链，
+        板块指数给不出这一套）；name 是单一标的（长度/「等」/「、」/个股斜杠）
+      · invalidation ≥8 字（空话硬闸，见模块 docstring 第 2 条）
+      · logic 非空
+      · **am 追加**：trigger 非空（今天看盘可验证的触发条件）、entry_zone 形态校验
+        （解析不出就清空该字段，**不丢整条**）
+      · code_hint 看得出 6 位数字却不是沪深 A 股 → 整条丢弃（北交所/B 股/港股）
+      · 投资指令/承诺禁用词（pm 只用 M3.postcheck；am 另加 AM_EXTRA_BANNED，且
+        trigger/entry_zone 一并入扫描）
+    """
     out, seen = [], set()
     for it in items:
         if not isinstance(it, dict):
@@ -1072,6 +1386,9 @@ def parse_candidates(text, max_tokens=None, dump_mode="w"):
 
         if kind not in ("stock", "board"):
             print(f"[warn] 丢弃「{name}」：kind 非法（{kind}）")
+            continue
+        if am and kind != "stock":
+            print(f"[warn] 丢弃「{name}」：盘前清单只收沪深 A 股个股（kind={kind}）")
             continue
         # 个股的 name 必须能被 resolve_stock 解析：斜杠合称（「零跑科技/零跑汽车」）
         # 与并列列表喂进去必然 not_found，一律丢弃。
@@ -1089,6 +1406,19 @@ def parse_candidates(text, max_tokens=None, dump_mode="w"):
         if not logic:
             print(f"[warn] 丢弃「{name}」：缺逻辑链")
             continue
+        # 盘前通道额外两个字段：trigger 必填（丢了它就只剩"一只票 + 一条逻辑"，
+        # 没法指导今天看什么）；entry_zone 只校验形态，不合法就清空**不丢整条**
+        trigger, entry_zone = "", ""
+        if am:
+            trigger = str(it.get("trigger") or "").strip()
+            if not trigger:
+                print(f"[warn] 丢弃「{name}」：盘前候选缺触发条件（trigger）")
+                continue
+            raw_zone = str(it.get("entry_zone") or "").strip()
+            entry_zone = clean_entry_zone(raw_zone)
+            if raw_zone and not entry_zone:
+                print(f"[warn] 「{name}」的关注区间无法解析（{raw_zone[:30]!r}），"
+                      "已清空该字段，候选仍入账")
         # 个股代码：看得出 6 位数字但不是沪深 A 股（北交所/B 股/港股带后缀等）
         # 直接丢弃；看不出 6 位代码则清空，交给 record()/复盘兜底按名解析后再判一次
         code_hint = str(it.get("code_hint") or "").strip()
@@ -1098,8 +1428,13 @@ def parse_candidates(text, max_tokens=None, dump_mode="w"):
                 print(f"[warn] 丢弃「{name}」：非沪深 A 股代码 {code_hint}")
                 continue
             code_hint = m.group(0) if m else ""
-        # 复用 M3 的禁用词扫描，让「禁止投资指令」由代码强制而非只靠措辞
-        bad, _ = M3.postcheck(logic + inval + name)
+        # 复用 M3 的禁用词扫描，让「禁止投资指令」由代码强制而非只靠措辞。
+        # am 额外：新字段（trigger/entry_zone）也要扫，且补一层承诺性措辞
+        # （满仓/梭哈/必涨…）—— M3.postcheck 只覆盖指令，不覆盖承诺。
+        scan = logic + inval + name + (trigger + entry_zone if am else "")
+        bad, _ = M3.postcheck(scan)
+        if not bad and am:
+            bad = [p for p in AM_EXTRA_BANNED if re.search(p, scan)]
         if bad:
             print(f"[warn] 丢弃「{name}」：命中投资指令禁用词 {bad}")
             continue
@@ -1117,9 +1452,28 @@ def parse_candidates(text, max_tokens=None, dump_mode="w"):
             "logic": logic, "invalidation": inval,
             "confidence": conf if conf in ("高", "中", "低") else "中",
             "basis_refs": [r for r in refs if isinstance(r, int)] if isinstance(refs, list) else [],
+            # 盘前新增字段（pm 时恒为空串）：record() 只在 am 行把它们写进账本，
+            # 所以 pm 账本行的字段集与改造前逐字相同
+            "entry_zone": entry_zone, "trigger": trigger,
         })
 
     _PARSE_STATE["kept"] = len(out)
+    return out
+
+
+def parse_candidates(text, max_tokens=None, dump_mode="w", am=False):
+    """LLM 输出 → list[dict]（供 record() 使用；顺序 = 模型给的顺序）。
+
+    逐条校验阶段是「**不合格的逐条丢弃**」而不是整批失败；只有当整体解析失败且
+    一条都抢救不回来时才返回 []。文本 → JSON 的抢救逻辑见 _extract_items，
+    业务闸门见 _validate_items。
+
+    am=True → 盘前通道：只收个股、每条必须带 trigger，entry_zone 形态不合法则
+    清空该字段；返回条数上限仍是 MAX_STOCKS。pm（默认）行为与改造前完全一致。
+    """
+    out = _validate_items(_extract_items(text, max_tokens, dump_mode), am=am)
+    if am:
+        return out[:MAX_STOCKS]
     stocks = [c for c in out if c["kind"] == "stock"][:MAX_STOCKS]
     boards = [c for c in out if c["kind"] == "board"][:MAX_BOARDS]
     return stocks + boards
@@ -1140,19 +1494,23 @@ def _pick_reason(llm):
     return "all_rejected", f"解析到 {llm['extracted']} 条候选，全部未通过校验"
 
 
-def ask_candidates(digest, digest_count, analysis_md, quotes):
+def ask_candidates(digest, digest_count, analysis_md, quotes, am=False):
     """调用一次 DeepSeek；解析出 0 条且原文非空时**带原文重问一次**。
 
     重问用的是同一 ds_chat、同一 max_tokens；重问本身失败（网络等）不算主流程
     失败，维持 0 条即可。状态写进模块级 LAST_LLM，供 main 分类 reason。
+
+    am=True 走盘前版 prompt 与盘前校验链（build_am_prompt / parse_candidates(am=True)），
+    其余（重问、LAST_LLM 状态归类）完全共用一条路径 —— 重问逻辑只该有一份实现。
     """
     LAST_LLM.update(parse_failed=False, extracted=0, kept=0, raw_len=0,
                     retry="", error="")
 
-    prompt = build_prompt(digest, digest_count, analysis_md, quotes)
-    print(f"候选 prompt {len(prompt)} 字符，调用 DeepSeek…")
+    prompt = (build_am_prompt if am else build_prompt)(digest, digest_count,
+                                                       analysis_md, quotes)
+    print(f"{'盘前' if am else '候选'} prompt {len(prompt)} 字符，调用 DeepSeek…")
     text = M3.ds_chat([{"role": "user", "content": prompt}], max_tokens=MAX_CAND_TOKENS)
-    cands = parse_candidates(text, max_tokens=MAX_CAND_TOKENS)
+    cands = parse_candidates(text, max_tokens=MAX_CAND_TOKENS, am=am)
     ok1, ex1, kp1 = (_PARSE_STATE["json_ok"], _PARSE_STATE["extracted"],
                      _PARSE_STATE["kept"])
     err1 = _PARSE_STATE["error"]
@@ -1164,10 +1522,22 @@ def ask_candidates(digest, digest_count, analysis_md, quotes):
     if cands or not (text or "").strip():
         return cands
 
-    print("[warn] 候选 JSON 解析失败，带原文重问一次…")
     LAST_LLM["retry"] = "asked"
-    fix = ("以下 JSON 有语法错误，请只输出修正后的 JSON，不要解释、不要 markdown 围栏：\n"
-           + text)
+    if am:
+        # 盘前的 0 条有两种成因：JSON 语法坏，或**语法没问题但字段没给全**
+        # （trigger/entry_zone 是新加的要求，模型第一遍漏掉是常事）。后者用
+        # 「修正语法」那句话重问等于什么都没说，所以这里把要求再点一遍。
+        # pm 的重问文案一字未改（见 else）。
+        print("[warn] 盘前候选一条都没通过校验（或 JSON 有语法错误），带原文重问一次…")
+        fix = ("以下盘前候选 JSON 不合格。每条候选都必须给出："
+               "非空的 trigger（今天开盘后即可验证的触发条件）、"
+               "形如 12.0~12.5 的 entry_zone（两个数字 + ~）、"
+               "以及 ≥8 字的 invalidation；且只选沪深 A 股个股（6 位代码）。"
+               "请只输出修正后的 JSON，不要解释、不要 markdown 围栏：\n" + text)
+    else:
+        print("[warn] 候选 JSON 解析失败，带原文重问一次…")
+        fix = ("以下 JSON 有语法错误，请只输出修正后的 JSON，不要解释、不要 markdown 围栏：\n"
+               + text)
     try:
         text2 = M3.ds_chat([{"role": "user", "content": fix}], max_tokens=MAX_CAND_TOKENS)
     except Exception as e:
@@ -1175,7 +1545,7 @@ def ask_candidates(digest, digest_count, analysis_md, quotes):
         print(f"[warn] 重问失败，维持 0 条: {type(e).__name__}: {str(e)[:60]}")
         return []
 
-    cands2 = parse_candidates(text2, max_tokens=MAX_CAND_TOKENS, dump_mode="a")
+    cands2 = parse_candidates(text2, max_tokens=MAX_CAND_TOKENS, dump_mode="a", am=am)
     ok2, ex2, kp2 = (_PARSE_STATE["json_ok"], _PARSE_STATE["extracted"],
                      _PARSE_STATE["kept"])
     LAST_LLM.update(parse_failed=not (ok1 or ok2), extracted=max(ex1, ex2),
@@ -1220,9 +1590,73 @@ def base_quote(secid, code, quotes_by_code):
     return None, None, None
 
 
-def record(rows, today, slot, cands, bench, board_map, cache, by_code, by_name):
-    """把今日候选追加进账本。已存在的 id 跳过 —— 幂等保险"""
+def am_base_quote(secid, code, quotes_by_code, prev_day):
+    """盘前基准价（= **上一交易日收盘价**）→ (price, prev_close, source) 或三个 None。
+
+    与 base_quote 的区别：这里锁的是**昨收**，来不得半点含糊 —— 来源必须能自证
+    "这是上一交易日收盘价"，否则宁可不记（调用方会把该条候选丢掉）。
+
+    ① 首选当日 quotes.json（M4 本轮刚抓的，盘前的"现价"就是昨收）。若该条行情
+       自带 `time`（腾讯源有、东财源没有），要求它的日期正好是 prev_day ——
+       带了时刻却对不上的，说明这不是昨收（例如延迟到上午十点才跑的 M4）。
+    ② quotes.json 里没有这只标的时才现抓一次（最多 MAX_STOCKS 次）。现抓要
+       **严格要求时刻字段存在且落在 prev_day ≥15:00**：东财源没有时刻字段，故这条
+       路等价于"腾讯源 + 时刻自证"，不会把无法验证的价格写进账本。
+
+    为什么允许 ②：候选是从 analysis/news 里挑的，未必都落在 M4 抓过的那批名字里；
+    没有它，"盘前清单"会因为 M4 的取样范围而整条整条地缩水。
+    """
+    q = quotes_by_code.get(code) if code else None
+    if q and q.get("price"):
+        t = str(q.get("time") or "").strip()
+        if t and not t.startswith(prev_day.strftime("%Y%m%d")):
+            print(f"[warn] quotes.json 里 {code} 的报价时刻 {t} 不是上一交易日"
+                  f"（{prev_day}）的收盘，不用于盘前基准价")
+        else:
+            return q["price"], q.get("prev_close"), "m4_quotes.json"
+    if not secid:
+        return None, None, None
+    q, src = fetch_any(secid)
+    if not q or not q.get("price"):
+        return None, None, None
+    time.sleep(1.0)             # push2 限流敏感，与 M4/base_quote 一致
+    t = str(q.get("time") or "").strip()
+    prev8 = prev_day.strftime("%Y%m%d")
+    if not (re.fullmatch(r"\d{12,14}", t) and t[:8] == prev8 and t[8:12] >= "1500"):
+        print(f"[warn] 现抓的 {secid} 行情时刻为 {t or '空'}，无法确认是上一交易日"
+              f"（{prev8}）收盘 → 不用作盘前基准价")
+        return None, None, None
+    return q["price"], q.get("prev_close"), src
+
+
+def _bump(stats, key):
+    """stats 计数（stats 为 None 时什么都不做 —— pm 通道不关心这些计数）。"""
+    if stats is not None:
+        stats[key] = stats.get(key, 0) + 1
+
+
+def record(rows, today, slot, cands, bench, board_map, cache, by_code, by_name,
+           am=False, base_date=None, stats=None):
+    """把今日候选追加进账本。已存在的 id 跳过 —— 幂等保险。
+
+    am=True 走盘前通道：基准价换成上一交易日收盘价（见 am_base_quote / base_date），
+    并新写 `base_date` / `entry_zone` / `trigger` 三个字段（**只增不改**已有字段名与
+    类型）；锁不到昨收的候选**整条丢弃** —— 盘前清单的价值就在于"以昨收为基准"，
+    一条没有基准的记录既指导不了今天，也永远打不了分。
+
+    stats（可选 dict）：回填 added/dup/no_market/no_base 计数，供 main 分类 reason
+    （am 通道 0 条时要能说清是"已在账本里（幂等）"还是"全被丢弃"）。
+    """
     existing = {r.get("id") for r in rows}
+    prev_d = None
+    if am:
+        try:
+            prev_d = _plain_date(base_date)
+        except Exception:
+            # base_date 缺了就没法证明基准价属于哪个交易日 —— 盘前通道 fail-closed，
+            # 一条都不记（调用方本应先算出来；这里只是不让它写成 base_date=null 的行）
+            print(f"[warn] 盘前基准日（base_date={base_date!r}）无效，本轮不入账")
+            return 0
     added = 0
     for cand in cands:
         # id 用内容寻址（日期+时段+类型+名称），不用序号：序号依赖列表位置，
@@ -1231,6 +1665,7 @@ def record(rows, today, slot, cands, bench, board_map, cache, by_code, by_name):
         cid = f"{today}-{slot}-{'s' if cand['kind'] == 'stock' else 'b'}-{cand['name']}"
         if cid in existing:
             print(f"[warn] {cid} 已存在，跳过（幂等）")
+            _bump(stats, "dup")
             continue
         secid, code, market = resolve_target(cand, board_map, cache, by_name)
         # 沪深 A 股硬闸（用户要求「主要为沪A和深A」）：解析出来发现是港股/美股/
@@ -1248,14 +1683,22 @@ def record(rows, today, slot, cands, bench, board_map, cache, by_code, by_name):
                     or "港" in mkt or "美" in mkt):
                 print(f"[warn] 丢弃「{cand['name']}」：非沪深 A 股"
                       f"（code={code} secid={secid} market={mkt}）")
+                _bump(stats, "no_market")
                 continue
         price = prev = src = None
-        if secid:
+        if am:
+            price, prev, src = am_base_quote(secid, code, by_code, prev_d)
+        elif secid:
             price, prev, src = base_quote(secid, code, by_code)
+        if am and not price:
+            print(f"[warn] 丢弃「{cand['name']}」：锁不到上一交易日收盘价"
+                  "（盘前清单每条都必须有昨收基准）")
+            _bump(stats, "no_base")
+            continue
         if not price:
             print(f"[warn] 「{cand['name']}」未匹配到行情，记账但不打分")
 
-        rows.append({
+        row = {
             "id": cid, "date": today, "slot": slot,
             "kind": cand["kind"], "name": cand["name"],
             "code": code, "secid": secid, "market": market,
@@ -1268,10 +1711,20 @@ def record(rows, today, slot, cands, bench, board_map, cache, by_code, by_name):
             "logic": cand["logic"], "invalidation": cand["invalidation"],
             "confidence": cand["confidence"], "basis_refs": cand["basis_refs"],
             "reviews": {str(k): None for k in REVIEW_DAYS},
-        })
+        }
+        if am:
+            # 盘前新增三字段（只增不改）：base_date = 基准价所在的交易日，
+            # entry_zone / trigger = 今天的可执行判据。复盘拿 base_date 当 d0，
+            # 于是 am 行的 T+1 正好落在**记录日当天**（见 score_pending）。
+            row["base_date"] = base_date
+            row["entry_zone"] = cand.get("entry_zone") or ""
+            row["trigger"] = cand.get("trigger") or ""
+        rows.append(row)
         added += 1
+        _bump(stats, "added")
         tag = "板块" if cand["kind"] == "board" else "个股"
-        print(f"  + [{tag}] {cand['name']} 基准 {price} ({cand['confidence']})")
+        zone = f"　区间 {row['entry_zone']}" if am and row.get("entry_zone") else ""
+        print(f"  + [{tag}] {cand['name']} 基准 {price}{zone} ({cand['confidence']})")
     return added
 
 
@@ -1334,12 +1787,19 @@ def _resolve_offline(row, by_name, by_code, cache=None):
 
 
 def score_pending(rows, today, bench_now, by_name=None, by_code=None, cache=None):
-    """到期即补：today >= 记录日之后的第 k 个交易日 且该档未填 → 现在就打分。
+    """到期即补：today >= 基准日之后的第 k 个交易日 且该档未填 → 现在就打分。
+
+    **基准日 d0 = row["base_date"] or row["date"]**（2026-10-04）：pm 行没有
+    base_date，仍用记录日（行为与改造前完全一致）；am 行的 base_date 是**上一交易日**，
+    于是它的 T+1 = 记录日当天 —— 当天 15:40 的 pm 运行正好把这一档补上
+    （盘前清单当天收盘就能看到第一次验证，这是"盘前清单值得记"的关键）。
+    同一条 am 行的 span 仍是"基准日 → 补录日的实际交易日数"，T+1 当天补上 → span=1。
 
     **一轮每行只补最早的那一档**（`min(未填且未作废的 k)`）。早期版本会把所有到期
     档位一次性补齐，跨长假时 T+3 与 T+5 会落到同一天、用同一个收盘价，实际只有约
     2 个交易日跨度，却在均值里各算一个样本。改成一档一轮后，T+1/T+3/T+5 自然落在
     不同交易日、不同价格上。因此同一候选一轮也只抓一次行情（只剩一个 k）。
+    **am 行不放宽 EXPIRE_AFTER_DAYS**：它的基准日更早，宽限期只会更紧、不会更松。
 
     secid 为空的条目在 EXPIRE_AFTER_DAYS 宽限期内**每轮都重试解析**（见
     _resolve_offline），超过宽限才写 status="no_quote"。早期版本首个到期日就
@@ -1357,7 +1817,7 @@ def score_pending(rows, today, bench_now, by_name=None, by_code=None, cache=None
         if not isinstance(rv, dict):        # 直接调用本函数时的兜底，load_ledger 已归一
             rv = row["reviews"] = {str(k): None for k in REVIEW_DAYS}
         try:
-            d0 = _date(row["date"])
+            d0 = _date(row.get("base_date") or row["date"])
         except Exception:
             print(f"[warn] 「{row.get('name')}」日期无法解析（{row.get('date')!r}），跳过")
             continue
@@ -1366,7 +1826,8 @@ def score_pending(rows, today, bench_now, by_name=None, by_code=None, cache=None
         if not unfilled:
             continue
 
-        # ① 先筛出"已经到期"的档位（due(k) = 记录日之后的第 k 个交易日）。
+        # ① 先筛出"已经到期"的档位（due(k) = **基准日**之后的第 k 个交易日；
+        # 基准日 = base_date（am 行）或 date（pm 行））。
         # 都没到期就整行跳过 —— 连 secid 兜底解析都不做，与旧行为一致。
         due_now = [(k, due(k, d0)) for k in unfilled]
         due_now = [(k, k_due) for k, k_due in due_now if today >= k_due]
@@ -1469,6 +1930,12 @@ def probe():
     print("=" * 52)
     ok = True
 
+    # 时段与「今天是不是交易日」：盘前通道的开关，且直接决定"若现在记录"走哪条路
+    slot = detect_slot()
+    today = _today()
+    print(f"       日期 {today}　时段 slot={slot}"
+          f"（REPORT_SLOT={os.environ.get('REPORT_SLOT') or '未设置'}）")
+
     bench, bench_q = fetch_bench()
     if bench_q:
         ready, why = close_ready(bench_q, now_cst())
@@ -1518,6 +1985,38 @@ def probe():
     for k in REVIEW_DAYS:
         print(f"       T+{k}: 若今日记录 → 到期 {due(k).strftime('%Y-%m-%d')}")
 
+    # 盘前通道（am）判据 + "若现在记录，基准价会取哪个报价时刻"（2026-10-04 新增）。
+    # 打印顺序刻意与 am_gate 的判定顺序一致：① 交易日 → ② 上一交易日 → ③ 报价时刻形态；
+    # 最后给一个**综合结论** —— 只看判据③ 会得出"昨收已结算"而在休市日显得自相矛盾。
+    print("-" * 52)
+    trading = is_trading_day(today)
+    print(f"{'[OK]  ' if trading else '[warn]'} 判据① 今日是否交易日：{trading}")
+    prev = prev_trading_day(today)
+    print(f"       判据② 上一交易日（基准日 base_date）：{prev or '（求不出来）'}")
+    if bench_q and prev:
+        am_ok, am_why, am_reason = premarket_ready(bench_q, today, prev)
+        print(f"{'[OK]  ' if am_ok else '[warn]'} 判据③ 报价时刻形态：{am_why}"
+              + (f"（reason={am_reason}）" if am_reason else ""))
+        total = bool(trading and am_ok)
+        print(f"       → 盘前通道综合结论：{'可记录（gate_open=true）' if total else '不记录'}"
+              + (f"，reason={am_reason or 'non_trading_day'}" if not total else ""))
+        # "若现在记录，基准价取哪个报价时刻"：am 优先用当日 quotes.json 里该标的的最新价
+        # （盘前就是昨收）。这里只报"取哪一刻/哪个来源"，不联网抓个股。
+        by_code, _by_name = _load_quotes_maps(today.strftime("%Y-%m-%d"))
+        sample = next(iter(by_code.values()), None)
+        if sample:
+            print(f"       若现在记录，基准价取：m4_quotes.json 的 {sample.get('name')}"
+                  f"({sample.get('code')}) 最新价 {sample.get('price')}"
+                  f"　该行情报价时刻={sample.get('time') or '（东财源无时刻字段）'}"
+                  f"　预期基准日 {prev}")
+        else:
+            print("       若现在记录，基准价取：当日 quotes.json 不可用（非今日生成或为空）"
+                  "→ 盘前通道会跳过（reason=empty）")
+        print(f"       am 行 → T+1 到期日 = {due(1, _midnight(prev)).strftime('%Y-%m-%d')}"
+              "（= 记录日当天收盘后由 pm 运行补上）")
+    else:
+        print("[warn] 缺基准行情或基准日，判据③ 无法判定（fail-closed，不记录）")
+
     print("=" * 52)
     print("[OK] 自检通过" if ok else "[FAIL] 自检未通过")
     return 0 if ok else 1
@@ -1527,7 +2026,9 @@ def probe():
 
 REASON_DOC = ("ok=正常入账 / gate_closed=闸门未开 / llm_error=调用异常 / "
               "parse_failed=JSON 解析失败（含重问后仍失败）/ "
-              "all_rejected=解析到候选但全被校验丢弃 / empty=无材料")
+              "all_rejected=解析到候选但全被校验丢弃 / empty=无材料 / "
+              "non_trading_day=今天休市（盘前通道判据①，am 专用）/ "
+              "not_premarket=最新报价不是上一交易日收盘（盘前通道判据②，am 专用）")
 
 
 def write_status(today_s, slot, state):
@@ -1536,6 +2037,10 @@ def write_status(today_s, slot, state):
     接口冻结：M6 推送与体检按 date/slot/generated_at/gate_open/recorded/reason/
     detail 这 7 个字段读。**写失败只 warn** —— 状态文件是旁路产物，绝不能让它的
     失败掐断已经算好的账本写回。
+
+    第 8 个字段 `calendar` 是 2026-10-04 追加的（**只增不改**，老读者不受影响）：
+    盘前通道的日历口径 real / approx / approx-unverified-year。体检靠它发现
+    "进入未核实年份 → 盘前清单每天静默停摆"这件事（见 calendar_kind 的注释）。
     """
     path = PICKS_DIR / f"picks-{today_s}-{slot}.json"
     payload = {
@@ -1547,6 +2052,8 @@ def write_status(today_s, slot, state):
         "reason": state.get("reason") or "empty",
         "detail": str(state.get("detail") or "")[:200],
     }
+    if state.get("calendar"):
+        payload["calendar"] = state["calendar"]
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
@@ -1557,6 +2064,90 @@ def write_status(today_s, slot, state):
     except Exception as e:
         print(f"[warn] 状态文件写入失败（不影响主流程）: {type(e).__name__}: {str(e)[:60]}")
     return payload
+
+
+# ---------------------------------------------------------------- 盘前通道
+
+def record_premarket(rows, today_s, bench, by_code, by_name, base_date, state):
+    """盘前通道的「选股 → 入账」（main 在 am 且闸门已开时调用）。state 就地更新。
+
+    与 pm 那条路的三点不同，全部收在这里（main 只在槽位上分叉一次）：
+      ① 材料必须带**当日** quotes.json：盘前基准价只能来自本轮行情
+         （am_base_quote 首选它），旧的 quotes.json 会让「昨收」变成几天前的价，
+         而这行记录一写就不再改 —— 故非今日一律跳过，reason=empty
+      ② 用盘前版 prompt（ask_candidates(am=True)）：多要 entry_zone 与 trigger
+      ③ record(am=True)：基准=上一交易日收盘价，写 base_date/entry_zone/trigger，
+         锁不到昨收的候选整条丢弃
+
+    0 条时的 reason 分类与 pm 一致（_pick_reason 给 empty/all_rejected/parse_failed），
+    但多一层"其实是幂等重跑"的区分：id 是内容寻址的，同一批重跑第二次必然 0 条新增，
+    那不是故障。
+    """
+    if not (DATA_DIR / "analysis.md").exists():
+        state.update(reason="empty", detail="无 data/analysis.md 材料，跳过盘前清单")
+        print("[warn] data/analysis.md 不存在，跳过盘前清单")
+        return
+    try:
+        news = json.loads(
+            (DATA_DIR / "structured_news.json").read_text(encoding="utf-8"))["news"]
+        quotes_json = json.loads(
+            (DATA_DIR / "quotes.json").read_text(encoding="utf-8"))
+        analysis_md = (DATA_DIR / "analysis.md").read_text(encoding="utf-8")
+    except Exception as e:
+        state.update(reason="empty",
+                     detail=f"读取材料失败: {type(e).__name__}: {str(e)[:60]}")
+        print(f"[warn] 材料读取失败，跳过盘前清单: {type(e).__name__}: {str(e)[:80]}")
+        return
+
+    gen = str(quotes_json.get("generated_at") or "")
+    if not gen.startswith(today_s):
+        state.update(reason="empty",
+                     detail=f"quotes.json 生成于 {gen or '?'}，非本轮材料："
+                            "盘前基准价（昨收）不可信")
+        print(f"[warn] quotes.json 生成于 {gen or '?'}，非今日 → 盘前通道本轮不产出清单")
+        return
+
+    try:
+        digest, count = M3.build_news_digest(news)
+        cands = ask_candidates(digest, count, analysis_md,
+                               quotes_json.get("quotes", []), am=True)
+    except Exception as e:
+        # 可选产出：盘前选股失败不该掐断主链路（复盘在 pm 那次运行里）
+        state.update(reason="llm_error", detail=f"{type(e).__name__}: {str(e)[:80]}")
+        print(f"[warn] 盘前选股失败: {type(e).__name__}: {str(e)[:80]}")
+        return
+
+    if not cands:
+        reason, detail = _pick_reason(LAST_LLM)
+        state.update(reason=reason, detail=detail)
+        print("[warn] 盘前未产出合格候选（LLM 失败或全部未通过校验）")
+        return
+
+    stats = {}
+    try:
+        n = record(rows, today_s, "am", cands, bench, {}, {}, by_code, by_name,
+                   am=True, base_date=base_date, stats=stats)
+    except Exception as e:
+        state.update(reason="empty",
+                     detail=f"入账失败: {type(e).__name__}: {str(e)[:60]}")
+        print(f"[warn] 盘前候选入账失败: {type(e).__name__}: {str(e)[:80]}")
+        return
+
+    state["recorded"] = n
+    print(f"[OK] 盘前记录 {n} 条观察候选（基准日 {base_date}）")
+    if n:
+        state.update(reason="ok",
+                     detail=f"新入账 {n} 条盘前观察候选（基准日 {base_date}）")
+    elif stats.get("dup") == len(cands):
+        state.update(reason="ok", detail="候选已在账本中（幂等跳过），本轮无新增")
+    elif stats.get("no_base"):
+        state.update(reason="all_rejected",
+                     detail=f"{stats['no_base']} 条候选锁不到上一交易日收盘价，未入账")
+    elif stats.get("no_market"):
+        state.update(reason="all_rejected",
+                     detail=f"{stats['no_market']} 条候选非沪深 A 股，未入账")
+    else:
+        state.update(reason="all_rejected", detail="候选全部未通过入账校验")
 
 
 # ---------------------------------------------------------------- 主流程
@@ -1590,26 +2181,62 @@ def main():
         # 当日 quotes.json 的 name/code 索引：选股复用行情，复盘兼做 secid 兜底
         by_code, by_name = _load_quotes_maps(today_s)
 
-        # 0) 收盘闸门：记录与打分共同的前提，见 close_ready 的 docstring
+        # 0) 闸门：pm 走收盘闸门（未改，见 close_ready 的 docstring）；
+        #    am 走盘前闸门（新增，见 am_gate/premarket_ready）
         bench, bench_q = fetch_bench()
-        ok_close, why = close_ready(bench_q, today)
-        if args.force:
-            print(f"[warn] --force：跳过收盘闸门（{why}）——仅限本地测试")
-            ok_close = True
+        base_date = None
+        if slot == "am":
+            gate_ok, why, gate_reason, base_date = am_gate(bench_q, today)
+            if args.force:
+                print(f"[warn] --force：跳过盘前闸门（{why}）——仅限本地测试")
+                gate_ok, gate_reason = True, ""
+                if not base_date:
+                    # 闸门被判住时 base_date 也是空的（休市 / 上一交易日求不出来）。
+                    # --force 的契约就是"跳过闸门、会写脏数据"，所以给一个自然日兜底 ——
+                    # 不然入账会因为"没有基准日"整批失败，--force 在 am 下等于没用。
+                    base_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+                    print(f"[warn] --force：上一交易日求不出来，base_date 暂用自然日 "
+                          f"{base_date}（T+1 基准可能偏一天）")
+            else:
+                print(f"{'[OK]' if gate_ok else '[warn]'} 盘前闸门：{why}")
+            # 盘前拿不到"今日收盘价"：收盘闸门天然未开 → 本轮不做复盘打分
+            # （与改造前一致：打分的行情是"今天收盘价"，只有 pm 那次运行拿得到）
+            ok_close = False
         else:
-            print(f"{'[OK]' if ok_close else '[warn]'} 收盘闸门：{why}")
-        state["gate_open"] = bool(ok_close)
+            ok_close, why = close_ready(bench_q, today)
+            if args.force:
+                print(f"[warn] --force：跳过收盘闸门（{why}）——仅限本地测试")
+                ok_close = True
+            else:
+                print(f"{'[OK]' if ok_close else '[warn]'} 收盘闸门：{why}")
+            gate_ok, gate_reason = ok_close, ""
+        state["gate_open"] = bool(gate_ok)
+        # 机器可读的日历口径（2026-10-04 加）：盘前通道的"今天是不是交易日"在
+        # **今天没有 K 线** 时只能走内置近似日历，而那张表只核实过
+        # FALLBACK_HOLIDAY_YEARS。进入未核实年份后，盘前清单会**每天**被判成休市
+        # 而静默停摆 —— 把口径写进状态文件，送达体检就能把这件事喊出来
+        # （见 healthcheck.py 的「盘前交易日历未覆盖该年份」检查）。
+        if slot == "am":
+            state["calendar"] = calendar_kind(today)
 
-        if not ok_close and not rows:
+        if not gate_ok and not rows:
             print("闸门未开且账本为空，无事可做")
-            state.update(reason="gate_closed", detail=why)
+            state.update(reason=(gate_reason or "gate_closed"), detail=why)
             save_ledger(LEDGER_PATH, rows)
             return 0
 
-        # 1) 记录今日候选（只在盘后、且今日已收盘）
+        # 1) 记录今日候选：pm 只在盘后、且今日已收盘；am 走盘前通道
         if args.score_only:
             state.update(detail="--score-only：本轮不选股，只做到期复盘")
             print("--score-only：跳过选股，只做到期复盘")
+        elif slot == "am":
+            # ---- 盘前通道：产出「今日可执行观察清单」（基准 = 上一交易日收盘）----
+            if not gate_ok:
+                state.update(reason=(gate_reason or "gate_closed"), detail=why)
+                print(f"盘前闸门未开，本轮不产出观察清单（{why}）")
+            else:
+                record_premarket(rows, today_s, bench, by_code, by_name,
+                                 base_date, state)
         elif not ok_close:
             state.update(reason="gate_closed", detail=why)
             print("闸门未开，本轮不记录新候选（只在今日收盘后记录）")
@@ -1702,12 +2329,13 @@ def main():
 def _has_due(row, today):
     """本轮是否有到期/可判逾期的档 → main 据此决定要不要进打分。
 
-    与 score_pending 同口径：只看**最早未填**的那一档（due 随 k 单调递增，故最早
-    未填档就是最早到期的档，一旦它没到期，后面几档更没到期）。日历取不到时
-    due() 内部已降级为近似日历，不抛异常。
+    与 score_pending 同口径：基准日 d0 = base_date（am 行）或 date（pm 行），
+    且只看**最早未填**的那一档（due 随 k 单调递增，故最早未填档就是最早到期的档，
+    一旦它没到期，后面几档更没到期）。日历取不到时 due() 内部已降级为近似日历，
+    不抛异常。
     """
     try:
-        d0 = _date(row["date"])
+        d0 = _date(row.get("base_date") or row["date"])
     except Exception:
         return False
     rv = row.get("reviews")
