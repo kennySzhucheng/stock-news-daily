@@ -186,15 +186,22 @@ class Bundle:
     def _build_citation_map(self):
         """复刻 M3 的排序，得到 编号 -> 结构化新闻下标 的映射。
 
-        M3 用稳定排序按 (类别权重, 是否已确认, 时间) 排列后从 0 编号，
-        这里的 order 与之一致，故 order[i] 就是正文里 [i] 指的那条新闻。
+        M3 用**两次稳定排序**排列后从 0 编号：
+          ① 先按 time **降序**（最新优先）—— 2026-10-04 起由升序改为降序
+          ② 再按 (类别权重, 是否已确认) 升序（稳定排序，不打乱同一 key 内的时间序）
+        下面必须与 `modules/m3_analyzer/analyzer.py` 的 `build_news_digest`
+        **逐字同步**，否则正文里的 [12] 会点到错的新闻 —— 这个错位是静默的，
+        页面上看起来一切正常。改任何一边都必须同时改另一边。
         """
         order = sorted(
             range(len(self.news)),
+            key=lambda j: self.news[j].get("time", "") or "",
+            reverse=True,
+        )
+        order.sort(
             key=lambda j: (
                 DIGEST_WEIGHT.get(self.news[j].get("category"), 4),
                 0 if self.news[j].get("verified") == "confirmed" else 1,
-                self.news[j].get("time", ""),
             ),
         )
         return {i: j for i, j in enumerate(order)}
@@ -306,21 +313,84 @@ class Bundle:
         }
 
     def conclusion(self):
-        """M3 的"结论：…"一行。
+        """M3 的市场情绪结论（三级兜底），取不到返回 ""。
 
-        M3 会不定期把整行写成 `**结论：中性偏谨慎**——…`（加粗标记在行首），
-        所以先剥掉加粗再匹配，否则总览页的结论卡会空掉。
+        **同一判据在另外两处各有一份副本，改动必须三处同步、逐字同逻辑**：
+          - modules/m6_push/push.py     :: extract_sentiment
+          - modules/m5_report/report.py :: extract_conclusion
+        这里返回 ""（而不是某句固定文案），由 summary()/前端决定怎么标记"没解析到"。
+
+        级1  逐行剥掉成对 ** 后匹配 `^结论[：:]` + 正文（M3 有时写成
+             `**结论：中性偏谨慎**——…`，加粗标记在行首，不剥就漏，总览卡会空掉）；
+        级2  首个含「结论/情绪」或带情绪词、且剥 ** 后 >= 6 字的正文行（跳过标题行），
+             取「结论/情绪」之后的文本，再砍到最后一个「为/是/：/，」之后、
+             含 乐观|中性|谨慎|悲观|积极|偏 的短句；取不到则整行截断 40 字；
+        级3  「## 一、市场情绪概览」小节内的第一段正文（跳过标题行），截断 60 字。
         """
-        for line in self.analysis_md.splitlines():
-            s = re.sub(r"\*\*(.+?)\*\*", r"\1", line).strip()
+        text = self.analysis_md or ""
+
+        def strip_bold(line):
+            return re.sub(r"\*\*(.+?)\*\*", r"\1", line).strip()
+
+        def after_marker(s):
+            """取「结论/情绪」之后、最后一个「为/是/：/，」之后的情绪短句"""
+            pos = max(s.rfind("结论"), s.rfind("情绪"))
+            body = s[pos + 2:] if pos >= 0 else s
+            cut = -1
+            for ch in ("为", "是", "：", ":", "，", ","):
+                cut = max(cut, body.rfind(ch))
+            cand = (body[cut + 1:] if cut >= 0 else body).strip(
+                " 　*#-—…。；;、!！?？\"'“”‘’()（）[]【】")
+            if cand and any(w in cand for w in ("乐观", "中性", "谨慎", "悲观", "积极", "偏")):
+                return cand[:40]
+            return ""
+
+        # 级 1：行首「结论：…」
+        for line in text.splitlines():
+            s = strip_bold(line)
             m = re.match(r"^结论[：:]\s*(.+)$", s)
-            if m:
+            if m and m.group(1).strip():
                 return m.group(1).strip()
+
+        # 级 2：没有独立成行的「结论：」，就从含结论/情绪词的正文行里抠
+        for line in text.splitlines():
+            s = strip_bold(line)
+            if not s or s.startswith("#") or len(s) < 6:
+                continue
+            if not ("结论" in s or "情绪" in s
+                    or any(w in s for w in ("乐观", "中性", "谨慎", "悲观", "积极", "偏"))):
+                continue
+            frag = after_marker(s)
+            return frag if frag else s[:40]
+
+        # 级 3：「市场情绪概览」小节的第一段正文
+        inside = False
+        for line in text.splitlines():
+            s = line.strip()
+            if not inside:
+                if re.match(r"^#{1,6}\s", s) and "市场情绪概览" in s:
+                    inside = True
+                continue
+            if re.match(r"^#{1,6}\s", s):
+                break
+            if not s or re.match(r"^-{3,}$", s):
+                continue
+            para = re.sub(r"^(?:[-*]|\d+[.、)])\s*", "", strip_bold(s)).strip()
+            if para:
+                return para[:60]
         return ""
 
     def summary(self):
+        """总览卡的一句话结论。
+
+        解析不到就**明说没解析到**，不再回"暂无"型固定文案——那是把解析
+        失败伪装成"今天没有情绪判断"，而同一份 analysis.md 里其实有完整分析
+        （2026-09-28/10-04 的推送与总览卡都栽在这句话上）。详见 conclusion()。
+        """
         c = self.conclusion()
-        return f"今日市场：{c}" if c else "今日暂无市场情绪判断"
+        if c:
+            return f"今日市场：{c}"
+        return "（M3 结论未解析，见「深度分析」页）"
 
     def market_view(self, max_sections=6):
         """M3「值得关注的板块」的结构化版本，供网页展示与追问上下文复用"""

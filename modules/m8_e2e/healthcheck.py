@@ -98,6 +98,17 @@ SEVERE, WARN = "严重", "提醒"
 # 状态属正常，只作提醒；从这一天起查不到就要当成问题——说明 M6 没写或没部署。
 STATUS_SINCE = "2026-09-25"
 
+# 内容面字段（sentiment_ok / analysis_ok / picks/picks-*.json）从这一天起才有。
+# 早于它的日期一律跳过内容检查，避免对历史日期误报。
+#
+# 为什么要有内容面检查（2026-10-04 定稿）：原来的体检只回答「送到了没有」，
+# 而 2026-09-28 / 10-04 这四天推送正文里的市场分析其实是占位串
+# （「暂无市场情绪判断」）、09-30 盘后闸门已开却 0 条候选入账、账本从此停止增长
+# —— 三件事全都发生在「push_ok: true、两份日报都在线」的情况下，
+# 体检每晚都输出「一切正常 ✓」。送达级检查看不见这些，所以必须有内容级断言。
+# 详见 CHANGELOG 2026-10-04 条目。
+CONTENT_SINCE = "2026-10-05"
+
 
 # ---------------------------------------------------------------- 数据获取
 
@@ -165,6 +176,21 @@ def push_status(pages_base, date_str, slot):
         return None, "线上无推送状态文件" if e.code == 404 else f"HTTP {e.code}"
     except Exception as e:
         return None, str(e)[:50]
+
+
+def pages_json(pages_base, path):
+    """读 gh-pages（线上 Pages）上的一个 JSON 文件。不存在返回 None，其它异常抛出。
+
+    只读已上线的产物：`status-*.json` 与 `picks/picks-*.json` 都随日报一起部署，
+    所以体检不必下载 artifact 就能核对内容面。
+    """
+    try:
+        with _retry(lambda: observe._open(f"{pages_base}/{path}")) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
 
 
 def pages_deliveries(repo, date_str, pages=40):
@@ -334,24 +360,101 @@ def check_date(repo, pages_base, date_str):
     if unknown_n:
         line += f"（另有 {unknown_n} 次产物已过 7 天保留期，判不出，未计入）"
     out.append(line)
+
+    # 6：内容面 ——「送到了」不等于「送的是好的」
+    #
+    # 判据全部是**存在才检查**：老日期的状态文件里没有这些字段（字段是
+    # 2026-10-04 之后才加的），缺字段一律当"该日早于内容面检查上线"，不报问题。
+    out.append("\n内容面：")
+    if date_str < CONTENT_SINCE:
+        out.append(f"  （{CONTENT_SINCE} 之前没有内容面字段，跳过）")
+    else:
+        for slot in ("am", "pm"):
+            st = pages_json(pages_base, f"status-{date_str}-{slot}.json")
+            if not isinstance(st, dict):
+                out.append(f"  {SLOT_CN[slot]}  ? 无推送状态文件，内容面无法判定")
+                continue
+            bad = False
+            # 推送正文里的市场分析结论没解析出来：用户看到的推送缺判断，
+            # 而 push_ok 仍是 true（推送确实发出去了）→ 只有这个字段能发现。
+            if st.get("sentiment_ok") is False:
+                bad = True
+                problems.append((SEVERE, f"{SLOT_CN[slot]}推送正文的**市场分析结论未能解析**"
+                                         f"（M3 输出格式与提取器不一致）—— "
+                                         f"微信里看不到情绪结论，完整日报里其实是有的"))
+                out.append(f"  {SLOT_CN[slot]}  ✗ 推送结论未解析（sentiment_ok=false）")
+            # M3 输出没通过内容契约（空/过短/缺小节/命中禁用词）
+            if st.get("analysis_ok") is False:
+                bad = True
+                v = st.get("analysis_violations") or "无"
+                problems.append((SEVERE, f"{SLOT_CN[slot]}的 M3 分析**未通过完整性校验**"
+                                         f"（字数 {st.get('analysis_chars')}、违规词：{v}）"
+                                         f"—— 相关内容不可信，请以新闻原文为准"))
+                out.append(f"  {SLOT_CN[slot]}  ✗ 分析未通过契约校验"
+                           f"（字数 {st.get('analysis_chars')}）")
+            # 新闻/行情条数异常（M2/M4 静默失效时最直观的信号）
+            nc, qc = st.get("news_count"), st.get("quotes_count")
+            if isinstance(nc, int) and nc < 40:
+                bad = True
+                problems.append((SEVERE if nc < 20 else WARN,
+                                 f"{SLOT_CN[slot]}结构化新闻只有 {nc} 条（正常 130~150）"
+                                 f"—— M2 可能整批失败，报表会显得「今天没什么新闻」"))
+                out.append(f"  {SLOT_CN[slot]}  ⚠ 新闻仅 {nc} 条")
+            if isinstance(qc, int) and qc == 0:
+                bad = True
+                problems.append((WARN, f"{SLOT_CN[slot]}行情条数为 0"
+                                       f"—— M4 可能整体失败，个股行情版块会是空的"))
+                out.append(f"  {SLOT_CN[slot]}  ⚠ 行情 0 条")
+            if not bad:
+                out.append(f"  {SLOT_CN[slot]}  ✓ 内容面正常"
+                           f"（新闻 {nc if isinstance(nc, int) else '?'} 条）")
+
+        # M10 候选：**闸门已开却 0 条入账 = 静默故障**。
+        # 2026-09-30 就是这样：解析失败 → 0 条 → 账本从 09-29 起再没长过，
+        # 而推送里那句"盘前不记录新候选"把它伪装成了正常的调度行为。
+        for slot in ("am", "pm"):
+            ps = pages_json(pages_base, f"picks/picks-{date_str}-{slot}.json")
+            if not isinstance(ps, dict):
+                continue
+            gate = ps.get("gate_open") is True
+            rec = ps.get("recorded")
+            rec = rec if isinstance(rec, int) else 0
+            reason = str(ps.get("reason") or "")
+            if gate and rec == 0:
+                problems.append((SEVERE, f"{SLOT_CN[slot]}收盘闸门已开却 **0 条候选入账**"
+                                         f"（原因 {reason or '未知'}）—— "
+                                         f"候选账本当天没有增长，复盘样本永久缺失"))
+                out.append(f"  {SLOT_CN[slot]}候选  ✗ 闸门已开但 0 条（{reason or '?'}）")
+            elif gate:
+                out.append(f"  {SLOT_CN[slot]}候选  ✓ 新增 {rec} 条（{reason or 'ok'}）")
+            else:
+                out.append(f"  {SLOT_CN[slot]}候选  — 闸门未开（{reason or '非交易时段'}），本轮不记录")
+
     return out, problems
 
 
 # ---------------------------------------------------------------- 告警
 
 def notify(problems, date_str, sendkey):
-    """有问题时推一条微信。标题控制在 Server酱 的 32 字符上限内。"""
+    """有问题时推一条微信。标题控制在 Server酱 的 32 字符上限内。
+
+    返回 True/False。**调用方必须检查返回值**：告警推送自己失败（最典型的是
+    Server酱 免费额度 5 条/天用完）时，体检就彻底静默了 —— 唯一还能用的通道
+    是「让 workflow 失败 → GitHub 给仓库所有者发失败邮件」，所以那一步由
+    main() 负责触发。
+    """
     try:
         import push as m6_push
     except Exception as e:
         print(f"[warn] 无法加载 M6 推送模块（{e}），跳过通知")
-        return
+        return False
     head = [f"[{lv}] {txt}" for lv, txt in problems[:4]]
     title = f"⚠️ 日报体检 {date_str[5:]}：{len(problems)} 项异常"
     desp = ("### 送达体检发现问题\n\n" + "\n\n".join(f"- {h}" for h in head)
             + ("\n\n（还有更多，见 Actions 日志）" if len(problems) > 4 else ""))
     ok, msg = m6_push.send(title, desp, sendkey)
     print(f"[{'OK' if ok else 'warn'}] 告警推送{'成功（' + msg + '）' if ok else '失败（' + msg + '）'}")
+    return bool(ok)
 
 
 # ---------------------------------------------------------------- 入口
@@ -409,17 +512,23 @@ def main():
         for lv, txt in all_problems:
             print(f"  [{lv}] {txt}")
     else:
-        print("结论：一切正常 ✓（两份日报都已送达，准点，推送成功）")
+        print("结论：一切正常 ✓（两份日报都已送达、准点，推送成功，内容面正常）")
     print("=" * 74)
 
+    # 告警通道的可用性本身也要体检：微信那条断了就只剩 GitHub 失败邮件，
+    # 所以「告警没发出去」必须升级为让 workflow 失败。
+    notify_failed = False
     if all_problems and args.notify:
         sendkey = os.environ.get("SERVERCHAN_SENDKEY", "").strip()
         if sendkey:
-            notify(all_problems, dates[0], sendkey)
+            if not notify(all_problems, dates[0], sendkey):
+                notify_failed = True
+                print("[FAIL] 告警推送失败（可能 Server酱 配额已用完）"
+                      "—— 本次改为让 workflow 失败，改走 GitHub 失败邮件那条通道")
         else:
             print("[warn] SERVERCHAN_SENDKEY 未设置，跳过告警推送")
 
-    return 1 if severe else 0
+    return 1 if (severe or notify_failed) else 0
 
 
 if __name__ == "__main__":

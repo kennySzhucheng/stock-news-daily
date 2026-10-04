@@ -1,0 +1,38 @@
+name: 离线用例
+
+# 每次 push 到 main、或手动触发时跑一遍**纯离线**用例：不联网、不需要任何密钥、
+# 不消耗 GLM/DeepSeek 额度。
+#
+# 为什么单独一个 workflow：这个项目两周里的故障没有一个是「跑不起来」，全是
+# 「坏了没人看得出来」——推送正文变成占位串（09-28/10-04）、候选账本从 09-30 起
+# 停止增长、交叉验证标记恒为 0~4%，而每晚的送达体检全部输出「一切正常 ✓」。
+# 当时唯一的验证手段是真跑一遍完整流水线（要密钥、要网络、花额度、约 8 分钟），
+# 所以这类判据从来留不下回归用例。现在它们都在 tests/offline_tests.py 里，
+# 每条用例对应一个真实发生过的缺陷。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # 用例全部离线，但 healthcheck.py 导入时会尝试复用 gh 的令牌。
+      # 给一个假值可以跳过那次子进程调用，也确保用例绝不会碰到真接口。
+      - name: 跑离线用例
+        env:
+          GITHUB_TOKEN: offline-tests-do-not-use
+        run: python tests/offline_tests.py

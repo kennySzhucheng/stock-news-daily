@@ -84,7 +84,24 @@ def check_output(step_id, output=""):
             cats[n.get("category", "?")] = cats.get(n.get("category", "?"), 0) + 1
         checks.append(("分类覆盖", len(cats) >= 2, f"{len(cats)} 类：{cats}"))
         conf = sum(1 for n in news if n.get("verified") == "confirmed")
-        checks.append(("交叉验证标记", True, f"已确认 {conf} / 待核实 {len(news) - conf}"))
+        # 原来这里是 `checks.append(("交叉验证标记", True, ...))` —— 恒真，
+        # 永远不会失败，所以「已确认」长期只有 0~4%（且全是假阳性）这件事
+        # 从来没有任何检查能发现。现在改成两条真实断言：
+        #   1) M1 必须真的把多源来源带下来（来源字段覆盖所有条目），
+        #      否则 M2 的交叉验证退化为「每条都是单源」，标记恒定无效；
+        #   2) 每条都必须有明确的 verified 取值。
+        stats = d.get("verify_stats") or {}
+        no_src = stats.get("no_sources_field")
+        if no_src is None:
+            checks.append(("交叉验证来源字段", False,
+                           "输出里没有 verify_stats.no_sources_field —— M2 未按新契约写出统计"))
+        else:
+            checks.append(("交叉验证来源字段", no_src < len(news),
+                           f"{len(news) - no_src}/{len(news)} 条带 sources 字段，"
+                           f"独立源家族 {stats.get('distinct_families', '?')} 个"))
+        bad_verified = [n for n in news if n.get("verified") not in ("confirmed", "unverified")]
+        checks.append(("交叉验证标记取值合法", not bad_verified,
+                       f"已确认 {conf} / 待核实 {len(news) - conf}"))
 
     elif step_id == "M3":
         p = DATA_DIR / "analysis.md"
@@ -94,6 +111,19 @@ def check_output(step_id, output=""):
         checks.append(("分析报告长度", len(txt) > 500, f"{len(txt)} 字符"))
         for sec in ["市场情绪", "板块", "个股", "风险"]:
             checks.append((f"含「{sec}」章节", sec in txt, ""))
+        # 光有字数和关键词是不够的：2026-10-04 的实际故障是「分析有 4000 多字、
+        # 四个关键词全在，但里面没有一行可解析的『结论：』」，于是微信推送退化成
+        # 占位串，而这四项检查 100% 通过。M3 现在会写 analysis.status.json，
+        # 这里直接读它——内容契约不通过就是失败。
+        st = DATA_DIR / "analysis.status.json"
+        if not st.exists():
+            checks.append(("分析内容契约", False,
+                           "没有 analysis.status.json —— M3 未按新契约落状态"))
+        else:
+            s = json.loads(st.read_text(encoding="utf-8"))
+            detail = (f"字数 {s.get('chars')}、违规词 {s.get('violations') or '无'}、"
+                      f"结论 {'可解析' if s.get('conclusion_ok') else '未解析'}")
+            checks.append(("分析内容契约", bool(s.get("ok")), detail))
 
     elif step_id == "M4":
         p = DATA_DIR / "quotes.json"
@@ -220,6 +250,12 @@ def check_output(step_id, output=""):
             checks.append(("微信推送", False, "推送失败（不影响日报生成）"))
         else:
             checks.append(("微信推送", False, "未检测到推送结果"))
+        # 推送发出去了 ≠ 内容是对的：2026-09-28 / 10-04 那四次推送 pushid 正常、
+        # push_ok=true，正文里的「市场分析」却是占位串。M6 现在会在结论取不到时
+        # 打印明显标记，这里据此判失败（旧版本只会打印一句"暂无市场情绪判断"）。
+        placeholder = "结论未解析" in output or "暂无市场情绪判断" in output
+        checks.append(("推送正文含市场结论", not placeholder,
+                       "结论未能解析，推送正文已降级" if placeholder else ""))
 
     return checks
 

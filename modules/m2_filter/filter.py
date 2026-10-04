@@ -23,6 +23,130 @@ GLM_MODEL = "glm-4-flash"
 
 VALID_CATEGORIES = ["policy", "industry", "stock", "international", "other"]
 
+# ---------------------------------------------------------------------------
+# 独立源家族（2026-10-04 新增，服务交叉验证）
+# ---------------------------------------------------------------------------
+# 依据：同一个出版方会以多个"频道"形式出现在 M1 的源清单里（见 collector.py 的
+# SOURCES：`东方财富7x24`/`东方财富宏观政策`/`新浪财经7x24`/`新浪财经滚动`）。
+# 这些频道**不是独立来源**——它们转载/复用同一套稿子，让它们互相"印证"会产出
+# 假的 confirmed。故交叉验证前先把频道名归一到"出版方家族"。
+# 10-04 线上逐条核验（见验收报告）：旧逻辑标的 6 条 confirmed 里，
+# 2 条是同族自证（东方财富 ↔ 东方财富-宏观政策），另 4 条连"同一事件"都不成立。
+#
+# 写法容错：线上的源名既有"东方财富-宏观政策"（带连字符）也有
+# "东方财富宏观政策"（无连字符，collector.py 里的写法），故这里列的是**前缀主干**，
+# 用带边界的前缀匹配兜住两种写法，避免写死连字符。
+#
+# ⚠️ 新华网 / 人民网 / 中国政府网 **各自独立**，绝不并成一家：
+# 它们会各自采写、也互为转载源，合并等于自造假 confirmed。
+FAMILY_PREFIXES = (
+    ("东方财富", "eastmoney"),
+    ("新浪财经", "sina"),
+    ("新浪", "sina"),
+    ("新华网", "xinhua"),
+    ("人民网", "people"),
+    ("中国政府网", "gov_cn"),
+)
+
+# 家族前缀的连接符：归一化时先删掉这些，使"东方财富-宏观政策"与
+# "东方财富宏观政策"都能被 FAMILY_PREFIXES 匹配到
+_FAMILY_JOINERS = "-－—_・· "
+
+
+def source_family(source):
+    """把来源名归一到"独立源家族"ID。
+
+    未知源一律视为独立（返回其归一化后的自身名字）——宁可保守：把两个真的不
+    同源的媒体合并会让 confirmed 消失，把同族拆开才会造假 confirmed，而这里的
+    默认分支只会让未知源**各自独立**，不会与任何已知源合并。
+    """
+    s = (source or "").strip()
+    if not s:
+        return ""
+    for joiner in _FAMILY_JOINERS:
+        s = s.replace(joiner, "")
+    low = s.lower()
+    for prefix, family in FAMILY_PREFIXES:
+        if low.startswith(prefix.lower()):
+            return family
+    return low
+
+
+def independent_source_count(sources):
+    """一组来源名里有几个**独立源家族**。未知源各自计一个（保守）。"""
+    return len({source_family(s) for s in (sources or []) if (s or "").strip()})
+
+
+def event_sources(n):
+    """取一条新闻"报道过该事件的全部来源"。
+
+    M1（同事改造后）会在 raw_news.json 每条上写 `sources: list[str]`：报道过同一
+    事件的所有来源，已去重排序，至少含自己的 `source`。
+
+    容错顺序：
+      ① `sources` 非空 → 直接用（并补上 `source`，因为 M1 的契约说它应已包含，
+         但多算一个自己的名字不会改变家族数，属于兜底）；
+      ② 否则退回 `[source]` —— 退化为旧行为（单源，必然 unverified）；
+      ③ 两者都没有（异常数据）→ 返回 []，由调用方计入 unverified 计数。
+    """
+    raw = n.get("sources")
+    if isinstance(raw, list):
+        srcs = [s for s in raw if isinstance(s, str) and s.strip()]
+        if srcs:
+            own = n.get("source")
+            if isinstance(own, str) and own.strip() and own not in srcs:
+                srcs = srcs + [own]
+            return srcs
+    own = n.get("source")
+    if isinstance(own, str) and own.strip():
+        return [own]
+    return []
+
+
+def apply_cross_verification(rows):
+    """交叉验证：代码层**确定性**比对，不用 LLM 判断（实测 LLM 判断不可靠）。
+
+    ## 语义变更（2026-10-04，务必读完再改）
+    旧规则（已删除）：把正文去掉标点/数字后取**前 16 字**做主键分组，同组内出现
+    ≥2 个不同 `source` 即 confirmed。
+
+    ① 它与 M1 的跨源去重**直接冲突**：M1 的 `collect`（collector.py 里的
+       "跨源去重"段）先按"正文前 25 字"把多源重复合并成一条，第二个来源在进入
+       M2 时就已消失 —— 于是"前 16 字相同且 ≥2 源"几乎不可能由真的多源重复
+       触发；10-04 实测 confirmed 只有 6/144（4.2%），09-30 盘后 0/135。
+    ② 它还会把**同一来源的两篇不同报道**（前 16 字恰好相同的巧合）算成
+       "多源印证"——这是纯假阳性，比漏报更危险。
+
+    新规则：改用 M1 聚合好的 `sources` 字段（"报道过同一事件的所有来源"），
+    把来源归一到独立家族后，**独立源家族数 ≥2 → confirmed**。这比旧的文本前缀
+    比对更准确：不依赖两家媒体措辞恰好一致（同一事件各家标题写法本就不同），
+    也天然免疫"同族频道互相印证"。
+
+    新规则：改用 M1 聚合好的 `sources` 字段（"报道过同一事件的所有来源"），
+    把来源归一到独立家族后，**独立源家族数 ≥2 → confirmed**。这比旧的文本前缀
+    比对更准确：不依赖两家媒体措辞恰好一致（同一事件各家标题写法本就不同），
+    也天然免疫"同族频道互相印证"。
+
+    家族归一后，同一家族内部有几个频道都只算 1 个独立源（见 FAMILY_PREFIXES）。
+
+    返回 (rows, stats)，stats 供输出文件与日志使用。
+    """
+    for n in rows:
+        srcs = event_sources(n)
+        n["verified"] = ("confirmed" if independent_source_count(srcs) >= 2
+                        else "unverified")
+    no_source = sum(1 for n in rows if not event_sources(n))
+    no_field = sum(1 for n in rows if not isinstance(n.get("sources"), list)
+                   or not n.get("sources"))
+    fams = {source_family(s) for n in rows for s in event_sources(n)}
+    stats = {
+        "confirmed": sum(1 for n in rows if n.get("verified") == "confirmed"),
+        "no_sources_field": no_field,     # 退化到旧的 [source] 行为
+        "no_source_at_all": no_source,    # 异常数据（连 source 都没有）
+        "distinct_families": len(fams - {""}),
+    }
+    return rows, stats
+
 # prefilter 的优先组：先占 max_for_llm 的名额，再由其余类别按时间倒序补满。
 # `announcement` 是 M1 巨潮公告的 category 提示（不是 M2 的最终分类，最终仍由
 # 模型判定）——它的原始时间戳恒为 00:00，不进优先组就会被时间截断整批挤掉。
@@ -91,8 +215,17 @@ def glm_chat(messages, temperature=0.1, max_tokens=2000, retries=2):
                 return None
 
 
-def _extract_json(text):
-    """从模型输出中提取 JSON（容错：剥 markdown 代码围栏）"""
+def _extract_json(text, unwrap_keys=("news", "data", "items")):
+    """从模型输出中提取 **JSON 数组**（容错：剥 markdown 代码围栏）。
+
+    崩溃防护（2026-10-04）：旧实现直接把 `json.loads` 的结果返回，模型若返回
+    `{"news":[...]}` 这样的**对象**，调用方 `result[i]`（int 下标）会立刻抛
+    KeyError 冲出 main —— 而 structured_news.json 在 main 末尾才写，于是 M2 全无
+    产出、M3/M5 连锁失败（10-04 就是这种"整条链静默断掉"的表现）。
+
+    现在：是 dict 就依次尝试 news / data / items 取内层 list；取不到 list（仍是
+    dict，或是数字/字符串等）一律返回 None，由调用方按"该批 LLM 失败"走兜底。
+    """
     if not text:
         return None
     text = re.sub(r"```(?:json)?", "", text).strip().strip("`")
@@ -100,9 +233,18 @@ def _extract_json(text):
     if not m:
         return None
     try:
-        return json.loads(m.group(0))
+        data = json.loads(m.group(0))
     except json.JSONDecodeError:
         return None
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in unwrap_keys:
+            inner = data.get(key)
+            if isinstance(inner, list):
+                return inner
+        return None       # dict 但取不到 list → 视为该批失败
+    return None           # 数字/字符串/布尔 → 视为该批失败
 
 
 def normalize_boards(board, stocks, global_stocks):
@@ -148,6 +290,9 @@ def batch_filter(news_items, batch_size=20):
     - 只基于原文，不编造
     - 股票代码只提取原文中出现的
     - 与"现实世界知识"相关的判断保持保守
+
+    返回 list（每条含模型自己回填的 `i`）或 **None（该批失败）**。
+    调用方必须按 `i` 回填，不得按列表下标对齐 —— 见 main() 的说明。
     """
     items = [{"i": i, "text": (n["text"] or "")[:300],
               "source": n["source"], "time": n["time"]}
@@ -237,6 +382,38 @@ def cross_verify_news(running_list, new_items):
     return running_list + new_items
 
 
+def fallback_row(hint=None):
+    """LLM 失败时的兜底结构化结果：本批全保留（保守策略，宁多勿漏）。
+
+    `hint` 是 M1 给的原类别提示（finance / policy / announcement …）。类别同样
+    要过 normalize_cat：直接塞原始提示会把 finance / tech / announcement 这些
+    **不在 VALID_CATEGORIES 里**的值漏进下游。
+    """
+    return {"category": normalize_cat(hint), "board": [], "stocks": [],
+            "sentiment": "neutral", "keep": True}
+
+
+def _match_row(s):
+    """把模型返回的一行字典规范成结构化结果（字段级容错）"""
+    return {
+        "category": normalize_cat(s.get("category")),
+        "board": s.get("board") if isinstance(s.get("board"), list) else [],
+        "stocks": s.get("stocks") if isinstance(s.get("stocks"), list) else [],
+        "sentiment": s.get("sentiment") if s.get("sentiment") in VALID_SENTIMENT else "neutral",
+        "keep": bool(s.get("keep", True)),
+    }
+
+
+# 一批里模型回填的 `i` 无法对上原文的比例超过此值 → 整批判为 LLM 失败。
+# 依据：prompt 要求"每条与输入一一对应"，正常情况未匹配应为 0；偶发一条漏返
+# （1/20 = 5%）尚可容忍并单独记为空结构，成片错位则说明模型调序/漏段，
+# 此时任何"按下标硬对齐"的结果都会把分类挂到错误的新闻上，宁可按失败兜底。
+UNMATCHED_FAIL_RATIO = 0.10
+
+# 全批次失败率超过此值 → 额外打一行醒目 warn（"今天新闻很少"的假象源头）
+FAILED_BATCH_ALERT_RATIO = 0.30
+
+
 def main():
     raw = json.loads((DATA_DIR / "raw_news.json").read_text(encoding="utf-8"))
     news = raw["news"]
@@ -246,31 +423,63 @@ def main():
     print(f"本地预筛: 保留 {len(keep)} 条，丢弃 {dropped} 条纯无关内容")
 
     structured = []
+    llm_batches = 0            # 实际发出的批次数
+    llm_failed_batches = 0     # batch_filter 返回 None，或未匹配比例超阈值的批次
+    unmatched_rows = 0         # 单条未匹配（i 缺失/越界/重复）的总数
     for bs in range(0, len(keep), 20):
         batch = keep[bs:bs + 20]
+        batch_no = bs // 20
+        llm_batches += 1
         result = batch_filter(batch)
-        if result is None:
-            # LLM 失败时本批全保留（保守策略，宁多勿漏）。
-            # 类别同样要过 normalize_cat：直接塞原始提示会把 finance / tech /
-            # announcement 这些**不在 VALID_CATEGORIES 里**的值漏进下游。
-            for i in range(len(batch)):
-                structured.append({"category": normalize_cat(batch[i].get("category")),
-                                   "board": [], "stocks": [],
-                                   "sentiment": "neutral",
-                                   "keep": True})
+        if result is None or not isinstance(result, list):
+            # 任务 3：LLM 失败时本批全保留（保守策略，宁多勿漏），但**必须计数**——
+            # 10-04 的假象正是"GLM 全挂 → 150 条零结构化但全保留 → 报表看起来
+            # 像今天没什么新闻"，而输出文件里没有任何失败标记。
+            llm_failed_batches += 1
+            structured.extend(fallback_row(n.get("category")) for n in batch)
+            print(f"  [warn] batch {batch_no}: LLM 返回不可用（{type(result).__name__}），"
+                  f"本批 {len(batch)} 条按全保留兜底（无结构化字段）")
             continue
-        # 对齐
+
+        # 按 `i` 回填（2026-10-04 修正）。
+        # 旧实现用 `result[i]`（列表下标）对齐，但 prompt 要求模型**自己**在每条里
+        # 回填 `i`，模型漏一条或调序时，该批其后所有新闻的分类/板块/个股/情绪会
+        # 全部挂错原文，且没有任何断言。现在改为按模型给出的 `i` 建映射：
+        #   i 缺失 / 非 int / 越界 / 重复 → 该条记为空结构 {}，并计入"未匹配"。
+        by_index = {}
+        for row in result:
+            if not isinstance(row, dict):
+                continue
+            i = row.get("i")
+            if isinstance(i, bool) or not isinstance(i, int):
+                continue
+            if not (0 <= i < len(batch)):     # 越界（模型把 i 当成 1-based 或串批）
+                continue
+            if i in by_index:                 # 重复 → 只认第一条，第二条算未匹配
+                continue
+            by_index[i] = row
+
         for i, n in enumerate(batch):
-            row = result[i] if i < len(result) and isinstance(result[i], dict) else {}
-            structured.append({
-                "category": normalize_cat(row.get("category")),
-                "board": row.get("board") if isinstance(row.get("board"), list) else [],
-                "stocks": row.get("stocks") if isinstance(row.get("stocks"), list) else [],
-                "sentiment": row.get("sentiment") if row.get("sentiment") in VALID_SENTIMENT else "neutral",
-                "keep": bool(row.get("keep", True)),
-            })
+            row = by_index.get(i)
+            if row is None:
+                unmatched_rows += 1
+                structured.append(_match_row({}))      # 空结构 = {} 的效果
+            else:
+                structured.append(_match_row(row))
+
+        ratio = (len(batch) - len(by_index)) / len(batch)
+        if ratio > UNMATCHED_FAIL_RATIO:
+            # 未匹配比例超阈值 → 该批视为 LLM 失败，走与 result is None 相同的兜底
+            # 路径。已经 append 的那部分结果必须整批回滚，否则会与兜底结果重影。
+            del structured[len(structured) - len(batch):]
+            structured.extend(fallback_row(n.get("category")) for n in batch)
+            llm_failed_batches += 1
+            print(f"  [warn] batch {batch_no}: 未匹配 {len(batch) - len(by_index)}/{len(batch)} "
+                  f"条（{ratio:.0%} > {UNMATCHED_FAIL_RATIO:.0%}），整批判为 LLM 失败，"
+                  f"按全保留兜底")
+            continue
         time.sleep(1)
-        print(f"  batch {bs//20}: done ({bs+len(batch)}/{len(keep)})")
+        print(f"  batch {batch_no}: done ({bs+len(batch)}/{len(keep)})")
 
     # board 清洗：先汇总全局个股名，再逐条剔除被误当成板块的公司名
     all_stocks = collect_stock_names(structured)
@@ -286,17 +495,11 @@ def main():
             continue
         out.append({**n, **s})
 
-    # 交叉验证：代码层确定性比对（不用 LLM 判断——实测不可靠）
-    # 规则：去除标点/数字/空白后的正文主干（前16字）一致的条目，来自 ≥2 个独立源 → confirmed
-    from collections import defaultdict
-    groups = defaultdict(list)
-    for n in out:
-        key = re.sub(r"[【】\s：:，,。（）()0-9]", "", n["text"])[:16]
-        groups[key].append(n["source"])
-    for n in out:
-        key = re.sub(r"[【】\s：:，,。（）()0-9]", "", n["text"])[:16]
-        n["verified"] = "confirmed" if len(set(groups[key])) >= 2 else "unverified"
-    # 修正顺序：verified 依据 out 内分组，逐条写回
+    # 交叉验证：代码层确定性比对（不用 LLM 判断——实测不可靠）。
+    # 2026-10-04 起改用 M1 聚合的 `sources` 字段 + 独立源家族归一，
+    # 旧的"正文前 16 字相同且 ≥2 源"规则已删除（与 M1 的跨源去重直接冲突，
+    # 详见 apply_cross_verification 的 docstring）。
+    out, verify_stats = apply_cross_verification(out)
     out.sort(key=lambda x: x["time"], reverse=True)
 
     out_path = DATA_DIR / "structured_news.json"
@@ -304,8 +507,23 @@ def main():
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "input_count": len(news),
         "prefilter_dropped": dropped,
+        # 以下三个为 2026-10-04 新增（只增不改，老读者不受影响）。
+        # 为什么必须落盘：LLM 全挂时旧输出文件里没有任何失败标记，于是"150 条
+        # 零结构化但全保留"看起来就像"今天没什么新闻"，报表层面完全看不出异常。
+        "llm_batches": llm_batches,
+        "llm_failed_batches": llm_failed_batches,
+        "unmatched_rows": unmatched_rows,
+        "verify_stats": verify_stats,
         "news": out,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    if llm_batches and llm_failed_batches / llm_batches > FAILED_BATCH_ALERT_RATIO:
+        print("!" * 72)
+        print(f"[WARN] LLM 失败率过高：{llm_failed_batches}/{llm_batches} 批失败"
+              f"（> {FAILED_BATCH_ALERT_RATIO:.0%}）。本日 structured_news.json 中"
+              f"大量条目**只有类别、无板块/个股/情绪**——这不是'今天新闻少'，"
+              f"是模型没跑通。请检查 ZAI_API_KEY / 额度 / 网络后重跑 M2。")
+        print("!" * 72)
 
     cats, ver = {}, {}
     for o in out:
@@ -317,6 +535,9 @@ def main():
     print(f"可信度: {ver}")
     print(f"含个股: {stock_cnt} 条, 含板块: {board_cnt} 条")
     print(f"板块清洗: {before} -> {after} 个标签（剔除 {before - after} 个误填的公司名）")
+    print(f"LLM 批次: {llm_batches} 批，失败 {llm_failed_batches} 批，"
+          f"未匹配行 {unmatched_rows} 条")
+    print(f"交叉验证: {verify_stats}")
     print(f"输出 → {out_path}")
 
 

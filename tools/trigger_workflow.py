@@ -55,7 +55,17 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+# pythonw.exe（GDI 子系统，无控制台）下 sys.stdout / sys.stderr 都是 None，
+# 直接调 `.reconfigure` 会在 import 阶段抛 AttributeError，脚本当场死掉、且
+# 因为无控制台看不到任何输出 —— 而本机计划任务**必须**用 pythonw 才能不弹
+# 控制台窗口（2026-10-04 查明：每天 08:10 / 15:40 弹出的终端窗口就是这里
+# 用 python.exe 跑出来的）。所以这里判空；print() 在 stdout 为 None 时静默
+# 丢弃，不影响后续逻辑（输出同时会写进 --log-file）。
+if sys.stdout is not None:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if sys.stderr is not None:
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 CST = timezone(timedelta(hours=8))
 WORKFLOW = "daily.yml"
@@ -455,5 +465,37 @@ def main():
         wait_for_run(repo, token, before)
 
 
+def _log_file_from_argv():
+    """从 argv 里先捞出 --log-file（在 argparse 之前就能用）。
+
+    为什么需要：计划任务用 pythonw 无窗口运行，此时 print/traceback 都没有去处。
+    main() 里的日志重定向发生在 parse_args 之后，所以「参数写错」「令牌读不到」
+    这类早期异常会彻底静默，只剩 Task Scheduler 的 LastResult 非 0 可查。
+    这里提前定位日志文件，让 __main__ 的兜底 except 也能把 traceback 写进去。
+    """
+    for i, a in enumerate(sys.argv):
+        if a == "--log-file" and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+        if a.startswith("--log-file="):
+            return a.split("=", 1)[1]
+    return None
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except BaseException:
+        # 无控制台时（pythonw）这是唯一的现场，必须落盘
+        import traceback
+        path = _log_file_from_argv()
+        if path:
+            try:
+                Path(path).parent.mkdir(parents=True, exist_ok=True)
+                with open(path, "a", encoding="utf-8") as f:
+                    f.write(f"\n===== {datetime.now(CST):%Y-%m-%d %H:%M:%S} 未捕获异常 =====\n")
+                    traceback.print_exc(file=f)
+            except Exception:
+                pass
+        raise

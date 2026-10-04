@@ -143,7 +143,12 @@ def load_data():
 # 推送摘要（≤200 字）
 # ---------------------------------------------------------------------------
 def extract_summary(analysis_md):
-    """从 M3 分析里取市场情绪结论句，压缩到 ≤200 字"""
+    """从 M3 分析里取市场情绪结论句，压缩到 ≤200 字
+
+    先走 extract_conclusion 的三级兜底；仍取不到时保留原有兜底（取第一段正文），
+    连正文都没有（空文件/纯标题）则用显式标记收尾 —— **不留「今日市场：」后面
+    空一串**：那会让读者以为"今天没有判断"，而实际是解析失败。
+    """
     core = extract_conclusion(analysis_md)
     if not core:
         # 兜底：取第一段正文。必须跳过标题行，否则会抓到 "## 一、市场情绪概览"
@@ -152,6 +157,8 @@ def extract_summary(analysis_md):
             if line and not line.startswith("#"):
                 core = re.sub(r"\*\*(.+?)\*\*", r"\1", line)
                 break
+    if not core:
+        core = "未能解析出结论（见下方市场分析）"
     summary = f"今日市场：{core}"
     if len(summary) > 200:
         summary = summary[:199] + "…"
@@ -159,17 +166,73 @@ def extract_summary(analysis_md):
 
 
 def extract_conclusion(analysis_md):
-    """取 M3 的"结论：…"一行，供摘要框与索引页使用。
+    """取 M3 的市场情绪结论（三级兜底），取不到返回 ""。
 
-    M3 会不定期把整行写成 `**结论：中性偏谨慎**——…`，加粗标记落在行首。
-    若直接按"行首必须是结论"匹配就会漏掉，摘要框会退化成抓正文第一行
-    （实际会抓到 "## 一、市场情绪概览" 这种标题）。故先剥掉加粗再匹配。
+    **同一判据在另外两处各有一份副本，改动必须三处同步、逐字同逻辑**：
+      - modules/m6_push/push.py    :: extract_sentiment
+      - modules/m9_web/aggregate.py:: Bundle.conclusion
+    （本函数被摘要框与索引页复用，故签名固定为「返回 str、取不到返回 ""」，
+    调用方自己决定怎么标记「没解析到」。）
+
+    级1  逐行剥掉成对 ** 后匹配 `^结论[：:]` + 正文（M3 有时写成
+         `**结论：中性偏谨慎**——…`，加粗标记在行首，直接按行首匹配会漏，
+         摘要框会退化成抓正文第一行）；
+    级2  首个含「结论/情绪」或带情绪词、且剥 ** 后 >= 6 字的正文行（跳过标题行），
+         取「结论/情绪」之后的文本，再砍到最后一个「为/是/：/，」之后、
+         含 乐观|中性|谨慎|悲观|积极|偏 的短句；取不到则整行截断 40 字；
+    级3  「## 一、市场情绪概览」小节内的第一段正文（跳过标题行），截断 60 字。
     """
-    for line in analysis_md.splitlines():
-        s = re.sub(r"\*\*(.+?)\*\*", r"\1", line).strip()
+    text = analysis_md or ""
+
+    def strip_bold(line):
+        return re.sub(r"\*\*(.+?)\*\*", r"\1", line).strip()
+
+    def after_marker(s):
+        """取「结论/情绪」之后、最后一个「为/是/：/，」之后的情绪短句"""
+        pos = max(s.rfind("结论"), s.rfind("情绪"))
+        body = s[pos + 2:] if pos >= 0 else s
+        cut = -1
+        for ch in ("为", "是", "：", ":", "，", ","):
+            cut = max(cut, body.rfind(ch))
+        cand = (body[cut + 1:] if cut >= 0 else body).strip(
+            " 　*#-—…。；;、!！?？\"'“”‘’()（）[]【】")
+        if cand and any(w in cand for w in ("乐观", "中性", "谨慎", "悲观", "积极", "偏")):
+            return cand[:40]
+        return ""
+
+    # 级 1：行首「结论：…」
+    for line in text.splitlines():
+        s = strip_bold(line)
         m = re.match(r"^结论[：:]\s*(.+)$", s)
-        if m:
+        if m and m.group(1).strip():
             return m.group(1).strip()
+
+    # 级 2：没有独立成行的「结论：」，就从含结论/情绪词的正文行里抠
+    for line in text.splitlines():
+        s = strip_bold(line)
+        if not s or s.startswith("#") or len(s) < 6:
+            continue
+        if not ("结论" in s or "情绪" in s
+                or any(w in s for w in ("乐观", "中性", "谨慎", "悲观", "积极", "偏"))):
+            continue
+        frag = after_marker(s)
+        return frag if frag else s[:40]
+
+    # 级 3：「市场情绪概览」小节的第一段正文
+    inside = False
+    for line in text.splitlines():
+        s = line.strip()
+        if not inside:
+            if re.match(r"^#{1,6}\s", s) and "市场情绪概览" in s:
+                inside = True
+            continue
+        if re.match(r"^#{1,6}\s", s):
+            break
+        if not s or re.match(r"^-{3,}$", s):
+            continue
+        para = re.sub(r"^(?:[-*]|\d+[.、)])\s*", "", strip_bold(s)).strip()
+        if para:
+            return para[:60]
     return ""
 
 

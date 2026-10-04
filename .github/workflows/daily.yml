@@ -52,17 +52,34 @@ jobs:
 
       # gh-pages 上的历史日报要恢复到 reports/，否则索引页只剩当天一份。
       # 恢复是否成功供下面的去重步骤判断（失败时无从判断有无重复，放行）。
+      #
+      # ⚠️ **这一步比看上去重要得多**：reports/ 不入库（见 .gitignore），所以
+      # gh-pages 的整棵树（历史日报 + picks/ledger.jsonl + web/ + status-*.json）
+      # 在云上是**唯一副本**；而下面的部署是用本地 reports/ **整棵树替换**
+      # gh-pages（peaceiris 的 keep_files 默认 false）。也就是说：fetch 抖动一次
+      # 就可能把全部历史、以及**只此一份的候选账本**删掉，而当晚体检只会看到
+      # 「今天这两份都在」→ 报「一切正常」。故这里重试 3 次，且部署步骤以本步
+      # 成功为前提（宁可当天不发布、由体检报「日报未送达」，也不能整树覆盖）。
       - name: 恢复历史日报
         id: restore
         run: |
-          if git fetch origin gh-pages --depth=1 2>/dev/null; then
+          ok=false
+          for i in 1 2 3; do
+            if git fetch origin gh-pages --depth=1 2>/dev/null; then ok=true; break; fi
+            echo "第 $i 次 fetch gh-pages 失败$([ "$i" -lt 3 ] && echo '，5 秒后重试' || echo '，放弃')"
+            sleep 5
+          done
+          if [ "$ok" = "true" ]; then
             mkdir -p reports
             git archive FETCH_HEAD | tar -x -C reports
-            echo "已恢复历史日报: $(ls reports/*.html 2>/dev/null | wc -l) 份"
+            n=$(ls reports/*.html 2>/dev/null | wc -l)
+            echo "已恢复历史日报: $n 份"
             echo "ok=true" >> "$GITHUB_OUTPUT"
+            echo "count=$n" >> "$GITHUB_OUTPUT"
           else
-            echo "首次运行，暂无 gh-pages 分支"
+            echo "无法取得 gh-pages（首次运行，或网络持续抖动）—— 本次将不部署，避免覆盖线上历史"
             echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "count=0" >> "$GITHUB_OUTPUT"
           fi
 
       # 盘前/盘后产出不同文件名（YYYY-MM-DD-am/pm.html），两份都保留、互不覆盖。
@@ -275,14 +292,54 @@ jobs:
         continue-on-error: true
         run: python modules/m9_web/export.py
 
+      # **以「历史恢复成功」为前提**：restore 失败时本地 reports/ 里只有今天这几份，
+      # 而这个 action 的 keep_files 默认 false（= 用本地整棵树替换 gh-pages），
+      # 一部署就会删掉全部历史日报、status-*.json、web/，以及**只此一份的候选账本**。
+      # skip 时当天不发布，交给送达体检报「日报没有送达」（严重）→ GitHub 失败邮件，
+      # 比静默清空整站好得多。确需在 fetch 失败的运行里强制发布时传 inputs.force=true。
       - name: 部署到 GitHub Pages
-        if: steps.dup.outputs.skip != 'true'
+        id: deploy
+        if: steps.dup.outputs.skip != 'true' && (steps.restore.outputs.ok == 'true' || github.event.inputs.force == 'true')
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./reports
           publish_branch: gh-pages
+          # 刻意保持默认的 keep_files=false：export.py 的孤儿清理靠"整树替换"生效
+          # （web/api/*.js 改名后旧文件会被清掉）。历史不会因此丢失，因为上面已把
+          # 「恢复成功」设为发布前提。改这个默认值前请先读 export.py 的清理逻辑。
           commit_message: "日报更新 ${{ github.run_number }} [${{ github.event.schedule || 'manual' }}]"
+
+      # 部署后自检：今天这一份确实上线了，且线上 HTML 数不比部署前恢复的少。
+      # 防的是「恢复成功但发布仍丢历史」——以前没有任何观测手段。
+      - name: 校验线上历史未丢失
+        if: steps.dup.outputs.skip != 'true' && steps.deploy.outcome == 'success'
+        env:
+          RESTORED: ${{ steps.restore.outputs.count }}
+        run: |
+          TODAY=$(TZ=Asia/Shanghai date +%F)
+          SLOT="${{ steps.slot.outputs.slot }}"
+          ok=false
+          for i in 1 2 3; do
+            if git fetch origin gh-pages --depth=1 2>/dev/null; then ok=true; break; fi
+            sleep 5
+          done
+          if [ "$ok" != "true" ]; then
+            echo "::warning::校验时取不到 gh-pages，跳过线上校验（部署本身已由上一步成功）"
+            exit 0
+          fi
+          LIST=$(git ls-tree -r --name-only FETCH_HEAD)
+          ONLINE=$(printf '%s\n' "$LIST" | grep -c '\.html$' || true)
+          echo "线上 HTML 数: $ONLINE（部署前恢复到 $RESTORED 份）"
+          if ! printf '%s\n' "$LIST" | grep -qx "${TODAY}-${SLOT}.html"; then
+            echo "::error::线上没有 ${TODAY}-${SLOT}.html —— 本次部署可能没生效"
+            exit 1
+          fi
+          if [ "$RESTORED" != "0" ] && [ "$ONLINE" -lt "$RESTORED" ]; then
+            echo "::error::线上 HTML 数（$ONLINE）少于部署前恢复的数量（$RESTORED）—— 历史日报可能被覆盖"
+            exit 1
+          fi
+          echo "✓ 今天这一份已上线，且历史文件数未减少"
 
       # 产物名带上时段：运行对象里既没有 inputs 也没有 schedule 字段，
       # 外部工具（modules/m8_e2e/observe.py）光凭触发时刻推不出本次该出哪个时段
