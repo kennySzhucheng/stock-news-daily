@@ -1,4 +1,4 @@
-﻿"""离线用例：不联网、不需要密钥、不消耗任何 API 额度。
+"""离线用例：不联网、不需要密钥、不消耗任何 API 额度。
 
 跑法（仓库根目录）：
     python tests/offline_tests.py
@@ -1152,7 +1152,12 @@ class InvalidationCheck(unittest.TestCase):
         self.assertNotIn("2026-10-01", days, "记录日当天的新闻不算『之后新出现』")
 
     def test_roll_write_failure_is_only_warn(self):
-        bad = pathlib.Path("Z:/nonexistent-xyz/news_roll.jsonl")
+        # 不可写路径必须**跨平台**：最初写的是 "Z:/…"，在 Windows 上 Z 盘不存在 → 写失败，
+        # 但在 Linux（CI）上那只是普通相对目录、反而写成功 —— CI 因此红过一次。
+        # 改成"父路径是一个文件"，两个平台上 mkdir 都会抛 OSError。
+        blocker = self.tmp / "blocker"
+        blocker.write_text("x", encoding="utf-8")
+        bad = blocker / "news_roll.jsonl"
         self.assertEqual(self.pk.news_roll_append([self._news("x")], "2026-10-05", path=bad), 0)
 
     # ── 批量核查 ───────────────────────────────────────────────
