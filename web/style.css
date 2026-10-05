@@ -344,6 +344,13 @@ a.cite:hover{background:none; border-bottom-style:solid; text-decoration:none;}
 }
 .sec-label:first-child{margin-top:0;}
 
+/* 非沪深 A 股的那张表：降饱和，避免与主表混为一谈（2026-10-04） */
+.muted-table{opacity:.72;}
+
+/* 盘前清单的关注区间 / 触发条件（与 M5 日报同名类，不引入新颜色） */
+.pick-plan{margin-top:7px; font-size:13.5px; line-height:1.6;}
+.pick-plan b{color:var(--text); margin-right:6px; font-weight:600;}
+
 /* ── 候选观察清单（M10） ───────────────────────────────── */
 /* 超额一律不着红绿色：+0.1% 与 -0.1% 在配色上被分成两档，等于替用户
    判了个「对/错」，而这里的样本量（常常个位数）撑不起这种判断。 */
