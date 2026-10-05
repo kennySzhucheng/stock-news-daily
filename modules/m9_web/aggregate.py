@@ -569,7 +569,29 @@ class Bundle:
         rows.sort(key=lambda r: (r.get("date") or "", -SLOT_ORDER[pick_slot(r)],
                                  r.get("id") or ""), reverse=True)
 
+        # 连续推荐（2026-10-05，**只在展示层**）：同名、相邻记录日相差 ≤3 自然日的
+        # 行属于同一次连续推荐，卡片上标出「连续第 N 天推荐（首次 MM-DD）」。
+        # 用**整本账本**算天数（"连续"要跨天看今天这一批是算不出来的）。
+        # 账本一行不动；stats 仍按 rows 每一行算；历史明细仍是扁平的 rows。
+        runs = pick_run_map(rows)
+        for r in rows:
+            info = runs.get(id(r)) or {}
+            days = int(info.get("days") or 1)
+            r["streak"] = ({"days": days, "first_date": _mmdd(info.get("first_date"))}
+                           if days >= 2 else None)
+
         latest = max((r.get("date") or "" for r in rows), default="")
+        # 今日/最近一批的**卡片行**（纯附加字段，2026-10-05）：按批次分组，组内
+        # 已按连续推荐合并（同名相邻 ≤3 自然日 → 一条，以最新那条为代表）。
+        # 前端优先用这个渲染卡片；老静态导出没有这个键时回退到 rows 现算。
+        cards = []
+        for s in ("am", "pm"):
+            grp = [r for r in rows if (r.get("date") or "") == latest and pick_slot(r) == s]
+            if not grp:
+                continue
+            reps = [g["row"] for g in merge_pick_rows(grp)]
+            cards.append({"slot": s, "label": SLOT_GROUP_CN[s],
+                          "count": len(reps), "rows": reps})
         # 均值与样本数由 M5 同一份实现算出，保证日报与网页版不会各算各的。
         # picks_stats 现在同时给两个口径：n/alpha（沪深300）与 n2/alpha2（中证1000），
         # 两者样本数各算各的（老账本行只进第一个口径）—— 前端据此分别显示。
@@ -588,6 +610,10 @@ class Bundle:
             "rows": rows,
             "groups": groups,
             "latest_date": latest,
+            # 今日/最近一批的卡片行（纯附加字段，2026-10-05）：已按连续推荐合并。
+            # rows 仍是**扁平、未合并**的账本行（历史明细表逐行列出，统计也按它算）。
+            "cards": {"date": latest, "groups": cards,
+                      "merge_gap_days": PICK_MERGE_GAP_DAYS},
             "stats": {str(k): v for k, v in stats.items()},
             # 两个基准的名字与那句解释（纯附加字段，2026-10-05）：前端照抄渲染即可，
             # 判据/文案只在这里定义一次，旧导出没有这些字段时前端回退到内置常量。
@@ -673,12 +699,63 @@ def news_sources(n):
     return out
 
 
+def _mmdd(s):
+    """2026-10-08 / 2026-10-08 10:00:00 → "10-08"；取不到返回 ""（不编日期）。"""
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", str(s or ""))
+    return f"{m.group(2)}-{m.group(3)}" if m else ""
+
+
+def continuing_info(n):
+    """M2 的跨天事件追踪字段（原样透传给前端的**展示用**版本）；无则 None。
+
+    冻结契约：新事件**没有** continuing 这个键（不是 null）→ 返回 None，
+    前端据此什么都不加（不能出现空标签）。confidence 只有 high/low；
+    `days` 取不到就不给 —— 宁可少一行，也不编一个"N 天"出来。
+    """
+    c = n.get("continuing")
+    if not isinstance(c, dict):
+        return None
+    try:
+        days = int(c.get("days"))
+    except (TypeError, ValueError):
+        return None
+    if days < 1:
+        return None
+    conf = str(c.get("confidence") or "").strip().lower()
+    if conf not in ("high", "low"):
+        return None
+    return {"days": days, "confidence": conf,
+            "first_date": str(c.get("first_date") or ""),
+            "first_mmdd": _mmdd(c.get("first_date"))}
+
+
+def news_families(n):
+    """该新闻的**全部报道来源家族** = 今天的 sources ∪ 历史的 continuing.families。
+
+    families 只有历史那几天的记录（**不含今天这条自己的来源**，冻结契约），
+    所以要报「N 家媒体」必须把 news_sources(n) 并进去。去重、保持原顺序。
+    """
+    out = list(news_sources(n))
+    c = n.get("continuing")
+    if isinstance(c, dict):
+        for f in (c.get("families") or []):
+            f = f.strip() if isinstance(f, str) else ""
+            if f and f not in out:
+                out.append(f)
+    return out
+
+
+def news_family_count(n):
+    """报道家数 = 独立来源家族数（今天的 sources + 历史 families）。"""
+    return len(news_families(n))
+
+
 def sources_label(n, max_sources=SOURCES_IN_LIST):
     """「来源：新浪财经、东方财富」；来源过多时「来源：A、B、C、D 等 6 家」。
 
     max_sources=0（SOURCES_FULL）表示不截断。没有可取来源时返回 ""。
     """
-    srcs = news_sources(n)
+    srcs = news_families(n)
     if not srcs:
         return ""
     if max_sources and len(srcs) > max_sources:
@@ -686,14 +763,26 @@ def sources_label(n, max_sources=SOURCES_IN_LIST):
     return "来源：" + "、".join(srcs)
 
 
+def family_sources_label(n, max_sources=SOURCES_IN_LIST):
+    """「2 家媒体 · 来源：新浪财经、东方财富」；**单源不加家数**（没信息量），
+    来源取不到时返回 ""（调用方据此不渲染空标签）。"""
+    lab = sources_label(n, max_sources)
+    if not lab:
+        return ""
+    n_fam = news_family_count(n)
+    if n_fam < 2:
+        return lab
+    return f"{n_fam} 家媒体 · {lab}"
+
+
 def verified_label(n, max_sources=SOURCES_IN_LIST):
-    """列表徽章的整句文案：「已确认 · 来源：A、B、C、D 等 6 家」/「待核实」。
+    """列表徽章的整句文案：「已确认 · 2 家媒体 · 来源：A、B、C、D 等 6 家」/「待核实」。
 
     单源条目保持原样 —— 来源就是它自己那一家，元信息里已经显示了。
     """
     if n.get("verified") != "confirmed":
         return "待核实"
-    lab = sources_label(n, max_sources)
+    lab = family_sources_label(n, max_sources)
     return f"已确认 · {lab}" if lab else "已确认"
 
 
@@ -701,19 +790,19 @@ def verified_detail_label(n):
     """详情弹层的整句文案：来源**完整列出**、不截断（弹层里有的是空间）。"""
     if n.get("verified") != "confirmed":
         return "待核实（单源）"
-    lab = sources_label(n, SOURCES_FULL)
+    lab = family_sources_label(n, SOURCES_FULL)
     return f"已确认（多源） · {lab}" if lab else "已确认（多源）"
 
 
 def confirmed_sources(n, max_sources=SOURCES_IN_LIST):
-    """confirmed 条目裸的来源清单（「来源：A、B 等 6 家」），其余一律返回 ""。
+    """confirmed 条目裸的来源清单（「2 家媒体 · 来源：A、B 等 6 家」），其余返回 ""。
 
     字段名带 confirmed 是故意的：前端拿到就能直接塞进元信息，不必再判一次
     verified，也不会把单源条目自己那一家当成"来源清单"渲染出来。
     """
     if n.get("verified") != "confirmed":
         return ""
-    return sources_label(n, max_sources)
+    return family_sources_label(n, max_sources)
 
 
 # ---------------------------------------------------------------------------
@@ -751,6 +840,111 @@ def pick_slot(row):
 
 
 # ---------------------------------------------------------------------------
+# 连续推荐合并（2026-10-05，**只在展示层**，与 M5 日报 / M6 推送同一口径）
+#
+# 同一 name、相邻记录日相差 ≤ PICK_MERGE_GAP_DAYS 个自然日 → 同一次连续推荐，
+# 合并成一条并以最新那条为代表（`cards` 里给前端的就是合并后的代表行）。
+# 间隔更远的同名行是两次独立推荐，不合并。
+#
+# 铁律：账本一行不动；统计口径一行不动（stats 仍按 rows 每一行算）；
+#       历史明细表仍是扁平的 rows（逐行列出，不合并）。
+# ---------------------------------------------------------------------------
+PICK_MERGE_GAP_DAYS = 3
+
+
+def _iso_date(s):
+    try:
+        return datetime.strptime(str(s or ""), "%Y-%m-%d")
+    except Exception:
+        return None
+
+
+def merge_pick_rows(rows):
+    """显示层合并 → [{"row", "days", "first_date", "members"}]（详见 M5 同名函数）。"""
+    groups = []
+    for r in sorted(rows or [], key=lambda x: str(x.get("date") or ""), reverse=True):
+        name = r.get("name")
+        d = _iso_date(r.get("date"))
+        for g in groups:
+            if g["row"].get("name") != name:
+                continue
+            prev = _iso_date(g["members"][-1].get("date"))
+            if d and prev and 0 <= (prev - d).days <= PICK_MERGE_GAP_DAYS:
+                g["members"].append(r)
+                g["days"] += 1
+                g["first_date"] = str(r.get("date") or "")
+                break
+        else:
+            groups.append({"row": r, "days": 1,
+                           "first_date": str(r.get("date") or ""), "members": [r]})
+    return groups
+
+
+def pick_run(all_rows, row):
+    """该行所处的连续推荐区间（用整本账本算）→ {"days", "first_date"}。
+
+    **N 按「不同日期数」算**（2026-10-05 修正，与 M5/M6 同口径）：同日 am/pm 两条
+    只算一天。
+    """
+    name = row.get("name")
+    d = _iso_date(row.get("date"))
+    if not name or not d:
+        return {"days": 1, "first_date": str(row.get("date") or "")}
+    dates = {str(row.get("date") or "")}
+    cur = d
+    rest = sorted((r for r in (all_rows or [])
+                   if r is not row and r.get("name") == name
+                   and _iso_date(r.get("date")) and _iso_date(r.get("date")) <= d),
+                  key=lambda r: str(r.get("date")), reverse=True)
+    for r in rest:
+        rd = _iso_date(r.get("date"))
+        gap = (cur - rd).days
+        if 0 <= gap <= PICK_MERGE_GAP_DAYS:
+            dates.add(str(r.get("date") or ""))
+            cur = rd
+        else:
+            break
+    return {"days": len(dates), "first_date": min(dates)}
+
+
+def pick_run_map(rows):
+    """整本账本 → {id(row): {"days", "first_date"}}（每行所处的连续推荐区间）。
+
+    与 pick_run 同一判据（同名、相邻记录日相差 ≤ PICK_MERGE_GAP_DAYS 个自然日），
+    但**一次算完**（按 name 分组、按记录日归并后累加）—— picks_view 要给每一行都算，
+    逐行扫全表在跨年账本上是 O(n²)。
+
+    同一天的多行**只算一天**（N = 不同日期数，与 M5/M6 逐字同口径），且同日各行
+    拿到**同一个值** —— 否则"代表行"（合并后保留的那条）会拿到 1，标记就不显示了。
+    """
+    by_name = {}
+    for r in (rows or []):
+        if r.get("name") and _iso_date(r.get("date")):
+            by_name.setdefault(r.get("name"), []).append(r)
+    out = {}
+    for group in by_name.values():
+        by_date = {}
+        for r in group:
+            by_date.setdefault(str(r.get("date")), []).append(r)
+        dates = sorted(by_date, reverse=True)          # 最新在前
+        chain, first = {}, {}
+        # 从**最旧**的一天往前累加：某一天的天数 = 它自己 + 与它相邻(≤3 天)的更旧那一段。
+        # 方向反了会把"最旧那条"标成第 N 天（实测过），而卡片上显示的是最新那条。
+        for i in range(len(dates) - 1, -1, -1):
+            d = dates[i]
+            nxt = dates[i + 1] if i + 1 < len(dates) else None
+            if nxt and 0 <= (_iso_date(d) - _iso_date(nxt)).days <= PICK_MERGE_GAP_DAYS:
+                chain[d] = chain[nxt] + 1
+                first[d] = first[nxt]
+            else:
+                chain[d] = 1
+                first[d] = d
+            for r in by_date[d]:
+                out[id(r)] = {"days": chain[d], "first_date": first[d]}
+    return out
+
+
+# ---------------------------------------------------------------------------
 # 检索
 # ---------------------------------------------------------------------------
 def query_news(bundle, q="", cat="", senti="", verified="", source="",
@@ -762,8 +956,15 @@ def query_news(bundle, q="", cat="", senti="", verified="", source="",
     条目原样带上 sources（列表）与下面几个**展示用**字段，前端不必自己知道
     截断规则：
       - verified_label  / verified_detail    整句徽章文案（列表截断 / 详情完整）
-      - confirmed_sources / confirmed_sources_full  裸「来源：…」清单（非
-        confirmed 为空串，可直接判断要不要渲染）
+      - confirmed_sources / confirmed_sources_full  裸「N 家媒体 · 来源：…」清单
+        （非 confirmed 为空串，可直接判断要不要渲染；单源不写家数）
+      - family_count   独立报道家数（今天的 sources + 历史 continuing.families）
+      - continuing     M2 的跨天事件追踪字段（**原样透传**，前端自行渲染；
+                       新事件没有这个键 → null）
+      - family_label / family_label_full  上面那两句的别名（与 M5 日报同一口径）
+    排序 sort="importance" 时按 **(报道家数 desc, 时间 desc)** —— 只改**展示顺序**，
+    M3 的 digest 顺序与 citation_map（[n] → 新闻下标）一个字节都不动；
+    每个条目的 `id` 仍是它在 news 数组里的下标，引用锚点 #news-<id> 不受排序影响。
     """
     items = []
     terms = [t.lower() for t in (q or "").split() if t.strip()]
@@ -795,9 +996,20 @@ def query_news(bundle, q="", cat="", senti="", verified="", source="",
         item["verified_detail"] = verified_detail_label(n)
         item["confirmed_sources"] = confirmed_sources(n)
         item["confirmed_sources_full"] = confirmed_sources(n, SOURCES_FULL)
+        # 报道家数（今天的 sources + 历史的 continuing.families）与跨天标记：
+        # 家数供「按重要度」排序与展示复用；continuing 原样透传（前端渲染）。
+        item["family_count"] = news_family_count(n)
+        item["family_label"] = family_sources_label(n)
+        item["family_label_full"] = family_sources_label(n, SOURCES_FULL)
+        item["continuing"] = continuing_info(n)
         items.append(item)
 
-    if sort == "source":
+    if sort == "importance":
+        # 同一类别/板块内：报道家数多的在前，家数相同按时间倒序（最新在前）。
+        # 只改展示顺序 —— 不动 M3 的 digest 顺序，也不动每条自己的 id。
+        items.sort(key=lambda x: (x.get("family_count") or 0, x.get("time") or ""),
+                   reverse=True)
+    elif sort == "source":
         items.sort(key=lambda x: (x.get("source") or "", x.get("time") or ""), reverse=True)
     elif sort == "sentiment":
         rank = {"bullish": 0, "bearish": 1, "neutral": 2}

@@ -475,12 +475,96 @@ def news_sources(n):
     return out
 
 
+# ---------------------------------------------------------------------------
+# 跨天事件追踪（M2 的 continuing 字段）与「报道家数」
+#
+# continuing 是 M2 的**跨天事件追踪**结果，新事件**没有这个键**（不是 null）：
+#   {"days": 3, "first_date": "2026-10-08", "prev_date": "2026-10-09",
+#    "families": ["新浪财经"], "confidence": "high"}
+# 两条铁律（冻结契约）：
+#   ① confidence 只有 high / low。**low 绝不许写成「持续关注第 N 天」** ——
+#      那会让人以为"同一事件"已经确认；low 只能写「疑似同一事件」。
+#   ② `families` 是**历史记录**的来源家族，**不含今天这条自己的来源**。要写
+#      「N 家媒体」必须自己把今天的 sources 并进去，否则系统性少数一家。
+# ---------------------------------------------------------------------------
+CONT_FIRST_PREFIX = "首次 "
+
+
+def _mmdd(s):
+    """2026-10-08 / 2026-10-08 10:00:00 → "10-08"；取不到返回 ""（不编日期）。"""
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", str(s or ""))
+    return f"{m.group(2)}-{m.group(3)}" if m else ""
+
+
+def continuing_info(n):
+    """M2 的 continuing → {"days", "confidence", "first_date", "first_mmdd"}；无则 None。
+
+    `days` 取不到（缺键/写坏/非数字/小于 1）就返回 None：宁可**什么都不显示**，
+    也不能编一个"N 天"出来（空标签比没标签更糟）。confidence 不是 high/low 时
+    同样按"没有"处理。
+    """
+    c = n.get("continuing")
+    if not isinstance(c, dict):
+        return None
+    try:
+        days = int(c.get("days"))
+    except (TypeError, ValueError):
+        return None
+    if days < 1:
+        return None
+    conf = str(c.get("confidence") or "").strip().lower()
+    if conf not in ("high", "low"):
+        return None
+    return {"days": days, "confidence": conf,
+            "first_date": str(c.get("first_date") or ""),
+            "first_mmdd": _mmdd(c.get("first_date"))}
+
+
+def continuing_badge(n):
+    """新闻卡片上的跨天标记（HTML）；没有该字段时不返回任何东西。
+
+    high → 「持续关注 · 第 N 天」+ 首次 MM-DD（确认了是同一事件，才敢说"持续"）
+    low  → 「疑似同一事件（第 N 天）」，样式更弱
+    """
+    info = continuing_info(n)
+    if not info:
+        return ""
+    if info["confidence"] == "high":
+        first = (f'<span class="src-list">{esc(CONT_FIRST_PREFIX)}'
+                 f'{esc(info["first_mmdd"])}</span>') if info["first_mmdd"] else ""
+        return (f'<span class="badge continuing">持续关注 · 第 {info["days"]} 天</span>'
+                f"{first}")
+    return (f'<span class="badge continuing weak">疑似同一事件'
+            f'（第 {info["days"]} 天）</span>')
+
+
+def news_families(n):
+    """该新闻的**全部报道来源家族** = 今天的 sources ∪ 历史的 continuing.families。
+
+    families 只有历史那几天的记录（不含今天这条自己的来源），所以要报「N 家
+    媒体」必须把 news_sources(n) 并进去。去重、保持原顺序（今天的在前）。
+    """
+    out = list(news_sources(n))
+    c = n.get("continuing")
+    if isinstance(c, dict):
+        for f in (c.get("families") or []):
+            f = f.strip() if isinstance(f, str) else ""
+            if f and f not in out:
+                out.append(f)
+    return out
+
+
+def news_family_count(n):
+    """报道家数 = 独立来源家族数（今天的 sources + 历史 families）。"""
+    return len(news_families(n))
+
+
 def sources_label(n, max_sources=SOURCES_IN_BADGE):
     """「来源：新浪财经、东方财富」；来源过多时「来源：A、B、C、D 等 6 家」。
 
     没有可取来源时返回 ""（调用方据此不渲染空标签）。
     """
-    srcs = news_sources(n)
+    srcs = news_families(n)
     if not srcs:
         return ""
     if max_sources and len(srcs) > max_sources:
@@ -488,8 +572,26 @@ def sources_label(n, max_sources=SOURCES_IN_BADGE):
     return "来源：" + "、".join(srcs)
 
 
+def family_sources_label(n, max_sources=SOURCES_IN_BADGE):
+    """「2 家媒体 · 来源：新浪财经、东方财富」；**单源不加家数**（没信息量），
+    没有可取来源时返回 ""（调用方据此不渲染空标签）。"""
+    lab = sources_label(n, max_sources)
+    if not lab:
+        return ""
+    n_fam = news_family_count(n)
+    if n_fam < 2:
+        return lab
+    return f"{n_fam} 家媒体 · {lab}"
+
+
 def render_news(structured):
-    """分板块新闻列表，带验证标记、情绪、板块/个股标签、原文链接"""
+    """分板块新闻列表，带验证标记、情绪、板块/个股标签、原文链接。
+
+    **板块内排序**（2026-10-05，只动展示顺序）：按「报道家数 desc → 时间 desc」。
+    报道家数 = 该条 sources 的独立来源家族数（与「已确认」判据同源，见
+    news_families）。**不碰 M3 的 digest 顺序** —— 正文里的 [n] 引用编号是另一
+    套契约，改展示顺序不影响它（日报里每条新闻没有编号锚点）。
+    """
     news = structured.get("news", [])
     by_cat = {}
     for n in news:
@@ -501,7 +603,11 @@ def render_news(structured):
     for cat in order:
         if cat not in by_cat:
             continue
-        items = by_cat[cat]
+        # 同一板块内：报道家数多的在前，家数相同按时间倒序（最新在前）。
+        # time 缺失/为 None 时按空串处理 —— 否则与字符串比较会抛 TypeError。
+        items = sorted(by_cat[cat],
+                       key=lambda x: (news_family_count(x), str(x.get("time") or "")),
+                       reverse=True)
         cards = []
         for n in items:
             verified = n.get("verified") == "confirmed"
@@ -513,10 +619,14 @@ def render_news(structured):
             # 只有 confirmed 附来源清单：单源条目的来源就是它自己那一家，左边
             # <span class="src"> 已经显示过一次，重复列是画蛇添足（也避免读者
             # 误以为"列出来了 = 有印证"）。来源取不到时整段不渲染。
-            src_text = sources_label(n) if verified else ""
+            # 「N 家媒体」的家数把 M2 continuing.families 并进来了（单源不写家数）。
+            src_text = family_sources_label(n) if verified else ""
             src_html = (
                 f'<span class="src-list">· {esc(src_text)}</span>' if src_text else ""
             )
+            # 跨天标记：新事件没有 continuing 键 → continuing_badge 返回 ""，
+            # 卡片上不会多出一个空标签
+            cont_badge = continuing_badge(n)
             senti = n.get("sentiment") or "neutral"
             s_badge = (
                 f'<span class="badge senti {SENTI_CLS.get(senti, "flat")}">'
@@ -537,7 +647,7 @@ def render_news(structured):
                 '<div class="news-meta">'
                 f'<span class="time">{time_str}</span>'
                 f'<span class="src">{esc(n.get("source"))}</span>'
-                f"{v_badge}{src_html}{s_badge}"
+                f"{v_badge}{cont_badge}{src_html}{s_badge}"
                 f'<span class="tags">{boards}{stocks}</span>'
                 f"{link}"
                 "</div></div>"
@@ -729,6 +839,111 @@ def pick_slot(row):
     return s if s in SLOT_ORDER else "pm"
 
 
+# ---------------------------------------------------------------------------
+# 连续推荐合并（2026-10-05，**只在展示层**）
+#
+# 用户要求：同一只票连续被推荐时不要一天一条地刷屏，合并成一条并标出「第几天」。
+# 判据只有这一条：**同一 name，相邻记录日相差不超过 PICK_MERGE_GAP_DAYS 个自然日**
+# 即视为同一次连续推荐；间隔更远的同名行是**两次独立推荐**，绝不合并。
+#
+# 铁律（不许破）：
+#   · 账本（reports/picks/ledger.jsonl）一行都不改；
+#   · 统计口径一行都不改 —— T+1/T+3/T+5 的均值与样本数照旧按**账本每一行**算
+#     （picks_stats 收的仍是未合并的 hist）；
+#   · 历史明细表（往期候选回填）**逐行列出，不得合并**。
+# ---------------------------------------------------------------------------
+PICK_MERGE_GAP_DAYS = 3
+
+
+def _iso_date(s):
+    """账本日期串 → datetime；解析不了返回 None（不猜）。"""
+    try:
+        return datetime.strptime(str(s or ""), "%Y-%m-%d")
+    except Exception:
+        return None
+
+
+def merge_pick_rows(rows):
+    """显示层合并：把「同一次连续推荐」的行并成一条，以**最新那条**为代表。
+
+    返回 [{"row": 代表行, "days": 组内行数, "first_date": 组内最早记录日,
+    "members": [...]}]；输入顺序按记录日倒序遍历，同日保持原顺序。
+    日期缺失/坏掉的行不并入任何组（宁可各显各的，也不把两条无关的记录并起来）。
+    """
+    groups = []
+    for r in sorted(rows or [], key=lambda x: str(x.get("date") or ""), reverse=True):
+        name = r.get("name")
+        d = _iso_date(r.get("date"))
+        for g in groups:
+            if g["row"].get("name") != name:
+                continue
+            prev = _iso_date(g["members"][-1].get("date"))
+            if d and prev and 0 <= (prev - d).days <= PICK_MERGE_GAP_DAYS:
+                g["members"].append(r)
+                g["days"] += 1
+                g["first_date"] = str(r.get("date") or "")
+                break
+        else:
+            groups.append({"row": r, "days": 1,
+                           "first_date": str(r.get("date") or ""), "members": [r]})
+    return groups
+
+
+def pick_run(all_rows, row):
+    """该行所处的「连续推荐」区间（用**整本账本**算，不只看今天这一批）。
+
+    返回 {"days": N, "first_date": ...}。同名、相邻记录日相差 ≤
+    PICK_MERGE_GAP_DAYS 个自然日的一串行算同一次。
+
+    **N 按「不同日期数」算，不按账本行数**（2026-10-05 修正）：从 10-08 起同一天会有
+    盘前（am）与盘后（pm）两批，同一只票同日出现两条是常态 —— 按行数算会显示
+    「连续第 2 天推荐」而实际上只过了一天，是明确的误导。
+    """
+    name = row.get("name")
+    d = _iso_date(row.get("date"))
+    if not name or not d:
+        return {"days": 1, "first_date": str(row.get("date") or "")}
+    dates = {str(row.get("date") or "")}
+    cur = d
+    rest = sorted((r for r in (all_rows or [])
+                   if r is not row and r.get("name") == name
+                   and _iso_date(r.get("date")) and _iso_date(r.get("date")) <= d),
+                  key=lambda r: str(r.get("date")), reverse=True)
+    for r in rest:
+        rd = _iso_date(r.get("date"))
+        gap = (cur - rd).days
+        if 0 <= gap <= PICK_MERGE_GAP_DAYS:
+            dates.add(str(r.get("date") or ""))
+            cur = rd
+        else:
+            break      # 日期已按倒序排好，后面只会更远
+    return {"days": len(dates), "first_date": min(dates)}
+
+
+def streak_label(days, first_date):
+    """「连续第 3 天推荐（首次 10-06）」；days < 2 返回 ""（一次记录不叫"连续"）。"""
+    if not isinstance(days, int) or days < 2:
+        return ""
+    mm = _mmdd(first_date)
+    return (f"连续第 {days} 天推荐（首次 {mm}）" if mm
+            else f"连续第 {days} 天推荐")
+
+
+def pick_streak(all_rows, row):
+    """一条候选在整本账本里的连续推荐区间 → 可显示的短句（无则 ""）。"""
+    run = pick_run(all_rows, row)
+    return streak_label(run["days"], run["first_date"])
+
+
+def merge_group_streak(grp, all_rows):
+    """合并组 → (天数, 首次日期)：组内合并口径与整本账本的连续区间取**较大**者，
+    首次日期取更早的那个（两者一致时就是它自己）。"""
+    run = pick_run(all_rows, grp["row"])
+    days = max(grp["days"], run["days"])
+    firsts = [x for x in (grp.get("first_date"), run.get("first_date")) if x]
+    return days, (min(firsts) if firsts else "")
+
+
 def load_picks():
     """reports/picks/ledger.jsonl → list[dict]。
 
@@ -825,7 +1040,7 @@ def picks_stats(rows):
     return out
 
 
-def _pick_card(r):
+def _pick_card(r, streak=""):
     """一条今日候选卡：推荐理由（am）/ 逻辑（pm）+ 推翻条件是主体，价格只是脚注。
 
     盘前行（slot=am）额外给出**关注区间**与**触发条件** —— 这两个字段是
@@ -839,6 +1054,10 @@ def _pick_card(r):
     **推翻条件的两个层次**（2026-10-05）：`invalidation` 是当初写下的那句话，
     `invalidation_check` 是后来复核的结论 —— 两句都显示，且**核查列的措辞必须
     与原文的「推翻条件」区分开**（前者是"当初写了什么"，后者是"后来查得怎样"）。
+
+    `streak` 是显示层的连续推荐标记（「连续第 3 天推荐（首次 10-06）」）：
+    同名的相邻记录日 ≤3 自然日的行已被 merge_pick_rows 并成这一条（2026-10-05）。
+    为空串时一个字符都不加。
     """
     tag = '<span class="pick-tag">板块</span>' if r.get("kind") == "board" else ""
     refs = "".join(f'<span class="pick-ref">[{n}]</span>'
@@ -862,8 +1081,9 @@ def _pick_card(r):
     else:
         base = esc(price)
     inv_check = inv_check_html(r)
+    streak_html = f'<span class="pick-streak">{esc(streak)}</span>' if streak else ""
     return f"""<div class="pick-card">
-  <div class="pick-head"><b>{esc(r.get("name"))}</b>{tag}
+  <div class="pick-head"><b>{esc(r.get("name"))}</b>{tag}{streak_html}
     <span class="pick-conf">置信度 {esc(r.get("confidence") or "—")}</span></div>
   <p class="pick-logic"><b>{PICK_LOGIC_LABEL["am" if is_am else "pm"]}</b>：{esc(r.get("logic"))}</p>
   {plan}<p class="pick-inval"><b>推翻条件</b>：{esc(r.get("invalidation"))}</p>
@@ -938,6 +1158,15 @@ def render_picks(picks, date_str):
     # 今日候选卡按批次分组（推荐在前），组内保持账本原有顺序
     groups = [(s, [r for r in today_rows if pick_slot(r) == s]) for s in SLOT_ORDER]
     groups = [(s, rs) for s, rs in groups if rs]
+    # **连续推荐合并**（2026-10-05，只在展示层）：同一 name 且相邻记录日 ≤3 自然日
+    # 的行并成一条，以最新那条为代表，卡片上标出「连续第 N 天推荐（首次 MM-DD）」。
+    # 天数取「组内合并口径」与「整本账本的连续区间」中较大者 —— 今天这张卡要说的
+    # 是"这只票已经连续第几天被推荐"，不是"今天这一批里有几条同名"。
+    # 账本一行不动、统计口径一行不动（往期回填与 stats 仍用未合并的 hist）。
+    groups = [(s, [{"row": g["row"],
+                    "streak": streak_label(*merge_group_streak(g, picks))}
+                   for g in merge_pick_rows(rs)])
+              for s, rs in groups]
     # 风险提示跟着**推荐那批**走：只要有 am 行就出现（哪怕只有一组、没出组标题）。
     # 只有 pm 批时不出 —— 那批没被叫过"推荐"，不需要这句。
     am_note = (f'<p class="pick-note">{PICK_RECOMMEND_NOTE}</p>'
@@ -947,14 +1176,15 @@ def render_picks(picks, date_str):
             f'<div class="pick-group">'
             f'<h3 class="pick-group-title">{SLOT_GROUP_CN[s]}'
             f'<span class="h2-count">{len(rs)} 条</span></h3>'
-            f'{"".join(_pick_card(r) for r in rs)}'
+            f'{"".join(_pick_card(g["row"], g["streak"]) for g in rs)}'
             f'{am_note if s == "am" else ""}</div>'
             for s, rs in groups
         )
         count_breakdown = ("（" + " · ".join(f"{SLOT_COUNT_CN[s]} {len(rs)}"
                                              for s, rs in groups) + "）")
     else:
-        today_html = ("".join(_pick_card(r) for _, rs in groups for r in rs)
+        today_html = ("".join(_pick_card(g["row"], g["streak"])
+                              for _, rs in groups for g in rs)
                       + (am_note if groups and groups[0][0] == "am" else ""))
         count_breakdown = ""
 
@@ -1007,7 +1237,9 @@ def render_picks(picks, date_str):
   「—」（不计入均值）。「补」表示实际打分日与到期日不同（周末/停牌/限流所致）。</p>
 </details>"""
 
-    n_today = len(today_rows)
+    # 计数与**实际渲染出来的卡片数**一致（连续推荐合并后卡片会少于账本行数，
+    # 表头仍写账本行数会与下面的卡片对不上）——账本行数本身在往期明细里逐行可见
+    n_today = sum(len(rs) for _, rs in groups) if today_rows else 0
     return f"""<section class="block" id="picks">
   <h2>候选观察清单<span class="h2-count">今日 {n_today} 条{count_breakdown}</span></h2>
   <p class="pick-note">盘前 08:10 那批是<b>推荐</b>：每条都写明推荐的三件事
@@ -1153,6 +1385,11 @@ details[open] > summary .fold-arrow{transform:rotate(90deg);}
 /* confirmed 徽章后的来源清单：沿用页面 token（--muted），不引入新颜色。
    .news-meta 已是 flex-wrap，手机上整段会折到下一行，不会撑破版心。 */
 .src-list{font-size:12px; color:var(--muted); line-height:1.5; min-width:0; overflow-wrap:anywhere;}
+/* 跨天事件追踪标记（2026-10-05，M2 的 continuing）：high 是"确认了同一事件在
+   持续发酵"，low 只是"疑似"，所以 low 用更弱的样式（灰、无边框强调）。
+   只用既有 token（--accent / --muted / --border），不引入新颜色。 */
+.badge.continuing{background:none; color:var(--accent); border:1px solid var(--accent);}
+.badge.continuing.weak{color:var(--muted); border-color:var(--border);}
 .badge.senti{border:1px solid var(--border);}
 .badge.senti.up{color:var(--up); border-color:var(--up); background:none;}
 .badge.senti.down{color:var(--down); border-color:var(--down); background:none;}
@@ -1284,6 +1521,11 @@ section.block > details > summary > h3{
 .pick-conf{font-size:11.5px; color:var(--muted); border:1px solid var(--border);
   border-radius:2px; padding:1px 7px;}
 .pick-tag{font-size:11px; color:var(--accent); border:1px solid var(--accent);
+  border-radius:2px; padding:1px 6px;}
+/* 连续推荐标记（2026-10-05）：同名、相邻记录日 ≤3 自然日的行已合并成这一条。
+   与 .pick-tag 同版式（既有 token），但语义不同故单独一类，免得改 .pick-tag
+   时把"板块"标签一起改了。 */
+.pick-streak{font-size:11px; color:var(--warn); border:1px solid var(--warn);
   border-radius:2px; padding:1px 6px;}
 .pick-logic{font-size:14px; line-height:1.65; margin:8px 0 6px;}
 .pick-inval{font-size:13px; line-height:1.6; margin:0; color:var(--muted);}

@@ -240,18 +240,46 @@ def _stem(s):
 SOURCES_IN_PUSH = 3
 
 
+def news_sources(n):
+    """该新闻的全部报道来源：优先 sources，缺字段时退回自身 source（去重保序）。"""
+    raw = n.get("sources") or []
+    if not raw:
+        raw = [n.get("source")]
+    out = []
+    for s in raw:
+        s = s.strip() if isinstance(s, str) else ""
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
+def news_families(n):
+    """该新闻的**全部报道来源家族** = 今天的 sources ∪ 历史的 continuing.families。
+
+    M2 的 `continuing.families` 是**历史记录**的来源家族，**不含今天这条自己的
+    sources**（冻结契约），所以要报「N 源/家」必须自己把今天的并进去，否则会
+    系统性少数一家。与 M5 日报（report.py::news_families）、M9 网页
+    （aggregate.py::news_families）同一口径，三处各一份实现（模块各自独立运行）。
+    """
+    out = list(news_sources(n))
+    c = n.get("continuing")
+    if isinstance(c, dict):
+        for f in (c.get("families") or []):
+            f = f.strip() if isinstance(f, str) else ""
+            if f and f not in out:
+                out.append(f)
+    return out
+
+
 def push_verified_note(n):
     """「已确认 2 源：新浪财经、东方财富」/「待核实」——推送里的一句话形式。
 
     没有 sources 字段（旧数据）时退回「已确认」，绝不渲染成「已确认 0 源：」。
+    家数把 M2 continuing.families（历史来源家族）并进来算（见 news_families）。
     """
     if n.get("verified") != "confirmed":
         return "待核实"
-    srcs = []
-    for s in (n.get("sources") or [n.get("source")]):
-        s = s.strip() if isinstance(s, str) else ""
-        if s and s not in srcs:
-            srcs.append(s)
+    srcs = news_families(n)
     if not srcs:
         return "已确认"
     note = f"已确认 {len(srcs)} 源：" + "、".join(srcs[:SOURCES_IN_PUSH])
@@ -260,13 +288,40 @@ def push_verified_note(n):
     return note
 
 
+def push_continuing_note(n):
+    """跨天持续标记的最短形式；**只在 confidence=high 时**给，其余返回 ""。
+
+    微信正文长度敏感（Server酱），所以：
+      · low（疑似同一事件）**不写** —— 弱结论不值得占字符，更不能写成像
+        「持续关注第 N 天」那样让人以为已确认；
+      · high 也只给最短的一句「（持续第 N 天）」（8 个字符）。
+    """
+    c = n.get("continuing")
+    if not isinstance(c, dict):
+        return ""
+    try:
+        days = int(c.get("days"))
+    except (TypeError, ValueError):
+        return ""
+    if days < 1:
+        return ""
+    if str(c.get("confidence") or "").strip().lower() != "high":
+        return ""
+    return f"（持续第 {days} 天）"
+
+
 def select_top_news(news, k=3):
-    """按 确认优先 > 类别权重 > 情绪显著性 排序，去重后取前 k 条"""
+    """按 **报道家数** > 确认优先 > 类别权重 > 情绪显著性 排序，去重后取前 k 条。
+
+    2026-10-05 只**叠加**了一条排序键：独立报道家数多的优先（多家独立刊发 =
+    这件事更重要）。原有三级判据（confirmed / 类别 / 情绪）原样保留在后面当
+    平手判据 —— 不是替换，是加在最前面。
+    """
     def score(n):
         verified = 1 if n.get("verified") == "confirmed" else 0
         cat = CAT_WEIGHT.get(n.get("category"), 1)
         senti = SENTI_WEIGHT.get(n.get("sentiment"), 1)
-        return (verified, cat, senti)
+        return (len(news_families(n)), verified, cat, senti)
     ranked = sorted(news, key=score, reverse=True)
     picked, seen = [], []
     for n in ranked:
@@ -446,7 +501,10 @@ def load_picks(date_str):
                 latest_days = None
         return {"today": today, "stats": stats, "inv_stats": inv_line,
                 "latest": latest, "latest_days": latest_days,
-                "latest_is_am": bool(am_dates)}
+                "latest_is_am": bool(am_dates),
+                # 整本账本（纯附加键，2026-10-05）：连续推荐的「第 N 天」要用**整本
+                # 账本**算，只看今天那一批算不出"连续"；账本内容与统计口径都不动。
+                "rows": rows}
     except Exception as e:
         print(f"[warn] 候选账本读取失败（{str(e)[:50]}），推送不含候选块")
         return None
@@ -576,7 +634,93 @@ def pick_slot(row):
     return s if s in SLOT_ORDER else "pm"
 
 
-def _pick_lines(i, r):
+# ---------------------------------------------------------------------------
+# 连续推荐合并（2026-10-05，**只在展示层**，与 M5 日报 / M9 网页同一口径）
+#
+# 同一 name、相邻记录日相差 ≤ PICK_MERGE_GAP_DAYS 个自然日 → 同一次连续推荐，
+# 合并成一条并以最新那条为代表；间隔更远的同名行是两次独立推荐，不合并。
+# 账本一行不动，统计口径一行不动（「已回填」那段仍按账本每一行算）。
+# ---------------------------------------------------------------------------
+PICK_MERGE_GAP_DAYS = 3
+
+
+def _iso_date(s):
+    try:
+        return datetime.strptime(str(s or ""), "%Y-%m-%d")
+    except Exception:
+        return None
+
+
+def merge_pick_rows(rows):
+    """显示层合并 → [{"row", "days", "first_date", "members"}]（详见 M5 同名函数）。"""
+    groups = []
+    for r in sorted(rows or [], key=lambda x: str(x.get("date") or ""), reverse=True):
+        name = r.get("name")
+        d = _iso_date(r.get("date"))
+        for g in groups:
+            if g["row"].get("name") != name:
+                continue
+            prev = _iso_date(g["members"][-1].get("date"))
+            if d and prev and 0 <= (prev - d).days <= PICK_MERGE_GAP_DAYS:
+                g["members"].append(r)
+                g["days"] += 1
+                g["first_date"] = str(r.get("date") or "")
+                break
+        else:
+            groups.append({"row": r, "days": 1,
+                           "first_date": str(r.get("date") or ""), "members": [r]})
+    return groups
+
+
+def pick_run(all_rows, row):
+    """该行所处的连续推荐区间（用整本账本算）→ {"days", "first_date"}。
+
+    **N 按「不同日期数」算，不按账本行数**（2026-10-05 修正）：同一天 am/pm 两批
+    出现同一只票是常态，按行数算会把一天说成「连续第 2 天」。
+    """
+    name = row.get("name")
+    d = _iso_date(row.get("date"))
+    if not name or not d:
+        return {"days": 1, "first_date": str(row.get("date") or "")}
+    dates = {str(row.get("date") or "")}
+    cur = d
+    rest = sorted((r for r in (all_rows or [])
+                   if r is not row and r.get("name") == name
+                   and _iso_date(r.get("date")) and _iso_date(r.get("date")) <= d),
+                  key=lambda r: str(r.get("date")), reverse=True)
+    for r in rest:
+        rd = _iso_date(r.get("date"))
+        gap = (cur - rd).days
+        if 0 <= gap <= PICK_MERGE_GAP_DAYS:
+            dates.add(str(r.get("date") or ""))
+            cur = rd
+        else:
+            break
+    return {"days": len(dates), "first_date": min(dates)}
+
+
+def _mmdd(s):
+    """2026-10-06 → "10-06"（推送正文里不写全年份）；取不到返回 ""。"""
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", str(s or ""))
+    return f"{m.group(2)}-{m.group(3)}" if m else ""
+
+
+def pick_streak_note(all_rows, grp):
+    """合并组 → 「（连续第3天推荐·首次10-06）」；只一天时返回 ""。
+
+    微信正文长度敏感，所以是**最短形**：不加空格、不加「日」以外的字。
+    """
+    run = pick_run(all_rows, grp["row"])
+    days = max(grp.get("days", 1), run.get("days", 1))
+    if days < 2:
+        return ""
+    firsts = [x for x in (grp.get("first_date"), run.get("first_date")) if x]
+    mm = _mmdd(min(firsts) if firsts else "")
+    return (f"（连续第{days}天推荐·首次{mm}）" if mm
+            else f"（连续第{days}天推荐）")
+
+
+def _pick_lines(i, r, streak=""):
     """一条候选 → [标题行, 推翻信号行]。
 
     第 1 行的 `logic` 带**按 slot 分的标签**（与 M5 日报 / M9 网页同一口径）：
@@ -587,6 +731,9 @@ def _pick_lines(i, r):
     盘前行额外带「关注 区间 · 触发：条件」（这两个字段是「今日可执行」的全部
     依据，见 M10 冻结 schema）。区间原样给出、触发条件截断 30 字；两者都为空时
     一个字符都不追加 —— 不留「关注 」后面空着的半截标签。
+
+    `streak` 是连续推荐的最短标记（同名的相邻记录日 ≤3 自然日的行已合并成这一条）；
+    空串时一个字符都不加。
     """
     tag = "〔板块〕" if r.get("kind") == "board" else ""
     conf = f"（{r['confidence']}）" if r.get("confidence") else ""
@@ -603,7 +750,7 @@ def _pick_lines(i, r):
         if bits:
             extra = "（" + " · ".join(bits) + "）"
     label = PICK_LOGIC_LABEL["am" if is_am else "pm"]
-    return [f"{i}. **{r.get('name')}**{tag} {label}："
+    return [f"{i}. **{r.get('name')}**{tag}{streak} {label}："
             f"{_clip(r.get('logic'), 60)}{conf}{extra}",
             f"   推翻信号：{_clip(r.get('invalidation'), 40)}"]
 
@@ -626,14 +773,18 @@ def build_picks_block(picks, slot="", status=None):
         return []
     parts = ["", "### 🎯 候选观察清单（不是买入建议）"]
     today = picks.get("today") or []
+    all_rows = picks.get("rows") or []       # 整本账本：连续推荐的"第 N 天"要跨天算
     if today:
         groups = [(s, [r for r in today if pick_slot(r) == s]) for s in SLOT_ORDER]
         groups = [(s, rs) for s, rs in groups if rs]
         for s, rs in groups:
             if len(groups) > 1:
                 parts.append(f"**{SLOT_GROUP_CN[s]}**")
-            for i, r in enumerate(rs, 1):
-                parts += _pick_lines(i, r)
+            # 连续推荐合并（显示层）：同一 name、相邻记录日 ≤3 自然日的行并成一条
+            # （以最新那条为代表），标记最短形「（连续第N天推荐·首次MM-DD）」。
+            # 账本与统计口径都不动；这里的"整本账本"只是用来算天数，不参与统计。
+            for i, g in enumerate(merge_pick_rows(rs), 1):
+                parts += _pick_lines(i, g["row"], pick_streak_note(all_rows or rs, g))
             if s == "am":
                 parts.append(PICK_RECOMMEND_NOTE)
     else:
@@ -687,7 +838,10 @@ def build_digest(date_str, slot, sentiment, market_view, top_news, delay=None, p
         cat = CAT_CN.get(n.get("category"), n.get("category"))
         senti = SENTI_CN.get(n.get("sentiment"), "")
         verified = push_verified_note(n)
-        parts.append(f"{i}. [{cat}] {title}（{senti}·{verified}）")
+        # 跨天持续标记：只在 confidence=high 时给最短的一句「（持续第 N 天）」；
+        # 新事件没有 continuing 键 → 空串，一个字符都不加。
+        parts.append(f"{i}. [{cat}] {title}（{senti}·{verified}）"
+                     f"{push_continuing_note(n)}")
 
     return "\n".join(parts)
 

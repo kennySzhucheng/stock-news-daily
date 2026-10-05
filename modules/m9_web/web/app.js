@@ -280,7 +280,18 @@
     });
 
     var sort = $('#fsort').value;
-    if (sort === 'source') {
+    if (sort === 'importance') {
+      /* 按重要度：**报道家数 desc → 时间 desc**（2026-10-05，默认视图）。
+         家数 = 该条 sources 的独立来源家族数（后端 family_count，兜底本地现算），
+         与「已确认」判据同源。只改**展示顺序**：每条新闻的 id 没变，引用锚点
+         #news-<id> 仍指向它自己那条（M3 的 digest 顺序与 citation_map 一个字节
+         都没动）。 */
+      out.sort(function (a, b) {
+        var d = niFamilyCount(b) - niFamilyCount(a);
+        if (d) return d;
+        return String(b.time).localeCompare(String(a.time));
+      });
+    } else if (sort === 'source') {
       out.sort(function (a, b) { return String(a.source).localeCompare(String(b.source), 'zh'); });
     } else if (sort === 'sentiment') {
       var rk = { bullish: 0, bearish: 1, neutral: 2 };
@@ -314,6 +325,67 @@
   /* isRaw 显式传入，不能靠 item 上有没有 dropped 字段判断：
      原始新闻里"被 M2 选中"的那些 dropped 为 false，
      若据此当普通新闻渲染，点击会跳到 id 恰好相同的另一条结构化新闻。 */
+
+  // ── 跨天持续标记 + 报道家数（纯函数，与 M5 日报同一口径） ──────────────
+  /* M2 的跨天事件追踪字段（冻结契约）：
+       "continuing": {"days":3, "first_date":"2026-10-08", "prev_date":"…",
+                      "families":["新浪财经"], "confidence":"high"}
+     ① **新事件没有这个键**（不是 null）→ 什么都不加，绝不渲染空标签；
+     ② confidence 只有 high / low。**low 不许写成「持续关注第 N 天」** —— 那会让
+        人以为"同一事件"已经确认；low 只能写「疑似同一事件」；
+     ③ `families` 是**历史记录**的来源家族，**不含今天这条自己的来源**，所以
+        「N 家媒体」必须自己把今天的 sources 并进去（见 niFamilies）。
+     后端 aggregate.py 的 query_news 会把 family_label / continuing 算好带下来，
+     这几支函数既是兜底（旧静态导出没有那些字段时），也是文案的单一定义处之一。 */
+  function mmdd(s) {
+    var m = /(\d{4})-(\d{2})-(\d{2})/.exec(String(s == null ? '' : s));
+    return m ? m[2] + '-' + m[3] : '';
+  }
+
+  // 该条的全部报道来源家族 = 今天的 sources ∪ 历史的 continuing.families（去重保序）
+  function niFamilies(n) {
+    var out = [];
+    var push = function (s) {
+      s = String(s == null ? '' : s).trim();
+      if (s && out.indexOf(s) < 0) out.push(s);
+    };
+    var raw = (n.sources && n.sources.length) ? n.sources : [n.source];
+    (raw || []).forEach(push);
+    var c = n.continuing;
+    if (c && typeof c === 'object') (c.families || []).forEach(push);
+    return out;
+  }
+
+  function niFamilyCount(n) {
+    return (typeof n.family_count === 'number') ? n.family_count : niFamilies(n).length;
+  }
+
+  // 跨天标记：high →「持续关注 · 第 N 天（首次 MM-DD）」；low →「疑似同一事件（第 N 天）」
+  function continuingBadge(n) {
+    var c = n && n.continuing;
+    if (!c || typeof c !== 'object') return '';
+    var d = parseInt(c.days, 10);
+    if (!(d >= 1)) return '';
+    var first = mmdd(c.first_date) || c.first_mmdd || '';
+    var conf = String(c.confidence || '').toLowerCase();
+    if (conf === 'high') {
+      return '<span class="badge continuing">持续关注 · 第 ' + d + ' 天' +
+        (first ? '（首次 ' + esc(first) + '）' : '') + '</span>';
+    }
+    if (conf === 'low') {
+      return '<span class="badge continuing weak">疑似同一事件（第 ' + d + ' 天）</span>';
+    }
+    return '';
+  }
+
+  // 「2 家媒体 · 来源：新浪财经、东方财富」：只有 confirmed 才显示来源清单
+  // （与 M5 日报同一口径）；单源不写家数（没信息量）。
+  // 句子由后端算好（aggregate.family_sources_label），旧静态导出退回 confirmed_sources。
+  function familySourceLabel(n) {
+    if (!n || n.verified !== 'confirmed') return '';
+    return n.family_label || n.confirmed_sources || '';
+  }
+
   function newsCard(n, isRaw) {
     var meta = ['<span>' + esc((n.time || '').slice(5, 16)) + '</span>',
                 '<span>' + esc(n.source || '') + '</span>'];
@@ -325,11 +397,15 @@
       if (n.category) meta.push('<span class="tag">' + esc(CAT_CN[n.category] || n.category) + '</span>');
       meta.push('<span class="badge ' + (n.verified === 'confirmed' ? 'confirmed' : 'unverified') + '">' +
                 (n.verified === 'confirmed' ? '已确认' : '待核实') + '</span>');
+      // 跨天标记（2026-10-05）：没有 continuing 的条目一个字符都不加
+      var cont = continuingBadge(n);
+      if (cont) meta.push(cont);
       // 来源清单（2026-10-04）：confirmed 不再只给一个二值标记 —— 显示是哪几家
-      // 独立出版方刊发了同一事件，读者可自行判断印证强度。字段由 aggregate.py
-      // 的 query_news 提供（confirmed_sources 已按 4 家截断；为空串时不渲染）。
+      // 独立出版方刊发了同一事件，读者可自行判断印证强度。「N 家媒体」的家数把
+      // M2 continuing.families（历史来源家族）并进来了（单源不写家数）。
       // 不能塞进 .badge（那个类 white-space:nowrap，长来源名会撑破窄屏）。
-      if (n.confirmed_sources) meta.push('<span>' + esc(n.confirmed_sources) + '</span>');
+      var fam = familySourceLabel(n);
+      if (fam) meta.push('<span>' + esc(fam) + '</span>');
       meta.push('<span class="badge ' + esc(n.sentiment || 'neutral') + '">' +
                 esc(SENTI_CN[n.sentiment] || '中性') + '</span>');
       (n.board || []).forEach(function (b) {
@@ -827,6 +903,14 @@
   function pickCard(r, p) {
     var conf = r.confidence ? '<span class="pick-conf">置信度 ' + esc(r.confidence) + '</span>' : '';
     var board = r.board ? '<span class="pick-tag">' + esc(r.board) + '</span>' : '';
+    // 连续推荐标记（2026-10-05，**只在展示层**）：同名、相邻记录日 ≤3 自然日的行
+    // 已被后端 picks.cards 合并成这一条，以最新那条为代表。days < 2（只记录过一次）
+    // 时一个字符都不加 —— "连续第 1 天"没有信息量。
+    // 账本与统计口径都不受它影响：stats 仍按 rows 每一行算，历史明细表逐行列出。
+    var streak = (r.streak && r.streak.days >= 2)
+      ? '<span class="pick-streak">连续第 ' + r.streak.days + ' 天推荐' +
+        (r.streak.first_date ? '（首次 ' + esc(r.streak.first_date) + '）' : '') + '</span>'
+      : '';
     var refs = (r.basis_ids || []).filter(function (i) { return i < S.news.length; });
     var ref = refs.length
       ? '<span class="pick-ref">依据 ' + refs.map(function (i) {
@@ -843,7 +927,7 @@
     return '<div class="pick-card">' +
       '<div class="pick-head"><b>' + esc(r.name) + '</b>' +
       '<span class="pick-kind">' + esc(KIND_CN[r.kind] || r.kind) + '</span>' +
-      board + conf + '</div>' +
+      board + streak + conf + '</div>' +
       (r.logic
         ? '<p class="pick-logic"><b>' + logicLabel + '</b>：' + esc(r.logic) + '</p>'
         : '') +
@@ -912,13 +996,25 @@
     var todayRows = rows.filter(function (r) { return r.date === today; });
     // 同一天可能有两批：推荐（am，盘前那批，基准=昨收）与盘后（收盘后记录）。
     // 推荐在前 —— 那才是"今天要看的东西"。只有一批时不加分组标题（沿用既有规则）。
+    // **连续推荐合并**（2026-10-05，只在展示层）：后端 picks.cards 已把同名且相邻
+    // 记录日 ≤3 自然日的行并成一条（以最新那条为代表，行上带 streak）。这里优先用它；
+    // 旧静态导出没有 cards 时回退到 rows 现算（不合并）。
+    // 注意 rows 本身**仍是未合并的账本行**：下面的历史明细表逐行列出，stats 也按它算。
     var ORDER = [['am', PICK_GROUP_CN.am], ['pm', PICK_GROUP_CN.pm]];
-    var groups = ORDER.map(function (g) {
-      return { label: g[1], slot: g[0],
-               rows: todayRows.filter(function (r) {
-                 return (isRecommendation(r) ? 'am' : 'pm') === g[0];
-               }) };
-    }).filter(function (g) { return g.rows.length; });
+    var cardsInfo = (p.cards && p.cards.groups && p.cards.date === today) ? p.cards : null;
+    var groups = cardsInfo
+      ? cardsInfo.groups.map(function (g) {
+          return { label: g.label || PICK_GROUP_CN[g.slot] || g.slot,
+                   slot: g.slot, rows: g.rows || [] };
+        })
+      : ORDER.map(function (g) {
+          return { label: g[1], slot: g[0],
+                   rows: todayRows.filter(function (r) {
+                     return (isRecommendation(r) ? 'am' : 'pm') === g[0];
+                   }) };
+        }).filter(function (g) { return g.rows.length; });
+    // 卡片数是**合并后**的条数（表头与下面实际渲染的卡片必须对得上）
+    var nCards = groups.reduce(function (n, g) { return n + g.rows.length; }, 0);
     // 推荐批下方固定一句风险提示（「推荐」旁边必须有"不是买入指令"）。
     var recNote = groups.some(function (g) { return g.slot === 'am'; })
       ? '<p class="muted small">' + esc(PICK_RECOMMEND_NOTE) + '</p>' : '';
@@ -934,7 +1030,7 @@
     // 不把它说成「今日」
     var cards = todayRows.length
       ? staleNote +
-        '<h3 class="pick-sub">' + esc(today) + ' 记录的候选（' + todayRows.length + ' 条）</h3>' +
+        '<h3 class="pick-sub">' + esc(today) + ' 记录的候选（' + nCards + ' 条）</h3>' +
         groups.map(function (g) {
           return (groups.length > 1
             ? '<h3 class="pick-sub">' + g.label + '（' + g.rows.length + ' 条）</h3>' : '') +
@@ -998,6 +1094,10 @@
     });
 
     $('#modalTitle').textContent = '新闻详情 #' + id;
+    // 详情弹层里的来源清单：**完整**列出、不截断（family_label_full），家数含
+    // M2 的历史来源家族；单源条目不写家数。取不到就整段不渲染（不留空 span）。
+    var famFull = (d.verified === 'confirmed')
+      ? (d.family_label_full || d.confirmed_sources_full || familySourceLabel(d)) : '';
     var h = [];
     h.push('<div class="markdown"><p>' + esc(d.text) + '</p></div>');
     h.push('<div class="sec-label">元信息</div>');
@@ -1005,10 +1105,11 @@
       '<span class="tag">' + esc(CAT_CN[d.category] || d.category || '') + '</span>' +
       '<span class="badge ' + (d.verified === 'confirmed' ? 'confirmed' : 'unverified') + '">' +
       (d.verified === 'confirmed' ? '已确认（多源）' : '待核实（单源）') + '</span>' +
+      // 跨天标记（2026-10-05）：与列表同一句文案；没有 continuing 就什么都不加
+      continuingBadge(d) +
       '<span class="badge ' + esc(d.sentiment || 'neutral') + '">' +
       esc(SENTI_CN[d.sentiment] || '中性') + '</span>' +
-      // 详情弹层里**完整**列出所有来源（confirmed_sources_full 不截断）
-      (d.confirmed_sources_full ? '<span>' + esc(d.confirmed_sources_full) + '</span>' : '') +
+      (famFull ? '<span>' + esc(famFull) + '</span>' : '') +
       '<span>' + esc(d.time || '') + '</span><span>' + esc(d.source || '') + '</span>' +
       (d.url ? '<a href="' + esc(d.url) + '" target="_blank" rel="noopener">原文 ↗</a>' : '') +
       '</div>');
@@ -1059,7 +1160,7 @@
 
     $('#fclear').addEventListener('click', function () {
       ['fq', 'fsort', 'fcat', 'fsenti', 'fverified', 'fsource', 'fboard', 'fstock']
-        .forEach(function (id) { var el = $('#' + id); el.value = id === 'fsort' ? 'time' : ''; });
+        .forEach(function (id) { var el = $('#' + id); el.value = id === 'fsort' ? 'importance' : ''; });
       renderNews(true);
     });
 
