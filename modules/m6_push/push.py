@@ -372,7 +372,25 @@ def load_picks(date_str):
             else:
                 avg = sum(v["alpha"] for v in vals) / len(vals)
                 bits.append(f"T+{k} 均超额 {avg:+.2%}（样本 {len(vals)} 条）")
-        return {"today": today, "stats": "　".join(bits)}
+
+        # 最近一批（供"今天没有产出推荐"的空态用）：优先**盘前（推荐）批**的最近日期，
+        # 一条 am 都没有（老账本）时退回最近一条记录并把用词降级为"候选记录"。
+        # 日期取不到就留空串/None，_latest_note 会整段不写。
+        am_dates = [r.get("date") for r in rows
+                    if str(r.get("slot") or "").strip().lower() == "am" and r.get("date")]
+        all_dates = [r.get("date") for r in rows if r.get("date")]
+        latest = str(max(am_dates)) if am_dates else (
+            str(max(all_dates)) if all_dates else "")
+        latest_days = None
+        if latest:
+            try:
+                latest_days = (datetime.strptime(date_str, "%Y-%m-%d")
+                               - datetime.strptime(latest, "%Y-%m-%d")).days
+            except Exception:
+                latest_days = None
+        return {"today": today, "stats": "　".join(bits),
+                "latest": latest, "latest_days": latest_days,
+                "latest_is_am": bool(am_dates)}
     except Exception as e:
         print(f"[warn] 候选账本读取失败（{str(e)[:50]}），推送不含候选块")
         return None
@@ -418,8 +436,25 @@ PICKS_REASON_CN = {
 }
 
 
-def _picks_empty_note(slot, status):
-    """今天 0 条候选时的那句话 —— 按状态文件与时段分派，pm 绝不说「盘前」。"""
+def _latest_note(latest, days=None, is_am=True):
+    """「最近一批推荐是 X（N 天前）。」——账本里取不到日期时返回空串。
+
+    空态必须回答"上一批是什么时候"，只说"本轮未产出"读者没法判断是休市、
+    长假，还是流水线坏了。取不到日期（空账本/字段坏）就整段不写。
+    """
+    if not latest:
+        return ""
+    what = "推荐" if is_am else "候选记录"
+    ago = f"（{days} 天前）" if days is not None else ""
+    return f"最近一批{what}是 {latest}{ago}。"
+
+
+def _picks_empty_note(slot, status, latest="", latest_days=None, latest_is_am=True):
+    """今天 0 条候选时的那句话 —— 按状态文件与时段分派，pm 绝不说「盘前」。
+
+    latest / latest_days / latest_is_am 来自 load_picks()：末尾统一追加
+    「最近一批推荐是 …」，把"今天没有"与"上一批隔了多久"一起说清。
+    """
     is_am = (slot or "").lower() == "am"
     if status is not None and status.get("gate_open") in (False, 0):
         if is_am:
@@ -427,35 +462,45 @@ def _picks_empty_note(slot, status):
             #   ① 今天休市（non_trading_day）② 最新报价已是今日盘中价（not_premarket）
             reason = str(status.get("reason") or "").strip()
             if reason == "non_trading_day":
-                return "今天休市，不记录候选；以下是跟踪中候选的表现。"
-            if reason == "not_premarket":
-                return "本轮不是盘前快照（已出现今日盘中报价），不记录盘前候选；"\
-                       "以下是跟踪中候选的表现。"
-            return "本时段不记录新候选（昨收尚未结算或非交易时段）；以下是跟踪中候选的表现。"
-        return "本时段为非交易时段，不记录新候选；以下是跟踪中候选的表现。"
-    if (status is not None and status.get("gate_open") in (True, 1)
+                msg = "今天休市，不产出推荐；以下是跟踪中候选的表现。"
+            elif reason == "not_premarket":
+                msg = ("本轮不是盘前快照（已出现今日盘中报价），不记录盘前候选；"
+                       "以下是跟踪中候选的表现。")
+            else:
+                msg = "本时段不记录新候选（昨收尚未结算或非交易时段）；以下是跟踪中候选的表现。"
+        else:
+            msg = "本时段为非交易时段，不记录新候选；以下是跟踪中候选的表现。"
+    elif (status is not None and status.get("gate_open") in (True, 1)
             and status.get("recorded") == 0):
         # 闸门开着却一条没记 → 异常，必须点名原因，不能再伪装成调度正常
         reason = str(status.get("reason") or "").strip()
         cn = PICKS_REASON_CN.get(reason, reason) or "未给出原因"
-        return f"⚠️ 本时段未产出新候选（原因：{cn}）——这是异常，已记入体检。"
-    if is_am:
-        # 盘前**会**记录候选（2026-10-04 起：用昨收价作基准记入「今日可执行」清单），
+        msg = f"⚠️ 本时段未产出新候选（原因：{cn}）——这是异常，已记入体检。"
+    elif is_am:
+        # 盘前**会**产出推荐（2026-10-04 起：用昨收价作基准记入账本），
         # 所以这句话不能说"盘前不记录" —— 那是旧口径，现在只会把"本轮真没产出"
         # 说成"按设计不记录"，正是这个项目反复踩过的静默故障形态。
-        return "本轮未产出新的盘前候选；以下是跟踪中候选的表现。"
-    if status is not None:
+        msg = "本轮未产出新的推荐；以下是跟踪中候选的表现。"
+    elif status is not None:
         # 文件在、但缺 gate_open（旧版或写坏了）：不能谎称「未找到状态文件」
-        return "本时段未产出新候选记录（候选状态信息不完整）；以下是跟踪中候选的表现。"
-    return "本时段未产出新候选记录（未找到候选状态文件）；以下是跟踪中候选的表现。"
+        msg = "本时段未产出新候选记录（候选状态信息不完整）；以下是跟踪中候选的表现。"
+    else:
+        msg = "本时段未产出新候选记录（未找到候选状态文件）；以下是跟踪中候选的表现。"
+    return msg + _latest_note(latest, latest_days, latest_is_am)
 
 
 # 盘前/盘后两批候选的分组小标题（与 M5 日报同一口径，文案从简以省 Server酱 长度）：
-#   am = 08:10 那批「今日可执行观察清单」，基准昨收，条目带关注区间/触发条件；
+#   am = 08:10 那批**推荐**（「今日潜力个股（推荐）」），基准昨收，条目带关注区间/触发条件；
 #   pm = 收盘后那批，基准当日收盘价。
 # 只有一批时不加标题：没有可混淆的另一批，标题纯属多占一行推送长度。
 SLOT_ORDER = ("am", "pm")
-SLOT_GROUP_CN = {"am": "盘前（今日可执行）", "pm": "盘后（收盘复盘后记录）"}
+SLOT_GROUP_CN = {"am": "今日潜力个股（推荐）", "pm": "盘后（收盘复盘后记录）"}
+# `logic` 的字段标签（与 M5/M9 同一口径）：am 行是推荐 → 「为什么推荐」；
+# pm 行是收盘后的事后记录 → 「逻辑」。
+PICK_LOGIC_LABEL = {"am": "为什么推荐", "pm": "逻辑"}
+# 推荐批下方的**短**风险提示：微信正文长度敏感（Server酱），把 M5/M9 那句压成一句，
+# 但「非买入指令」必须留着 —— 「推荐」这个词旁边不能没有这句。
+PICK_RECOMMEND_NOTE = "⚠️ 以上为 AI 观察建议（含关注区间与触发条件），非买入指令、不构成投资建议。"
 
 
 def pick_slot(row):
@@ -469,16 +514,22 @@ def pick_slot(row):
 
 
 def _pick_lines(i, r):
-    """一条候选 → [标题行, 推翻信号行]，与原来的两行格式逐字兼容。
+    """一条候选 → [标题行, 推翻信号行]。
+
+    第 1 行的 `logic` 带**按 slot 分的标签**（与 M5 日报 / M9 网页同一口径）：
+    `am` 行是推荐 → 「为什么推荐：」，`pm` 行是收盘后的事后记录 → 「逻辑：」。
+    标签净增 5 / 3 个字符（远低于单条 60 字符的上限），logic 本身仍截断 60 字 ——
+    微信正文长度敏感，完整理由在日报/网页里给。
 
     盘前行额外带「关注 区间 · 触发：条件」（这两个字段是「今日可执行」的全部
     依据，见 M10 冻结 schema）。区间原样给出、触发条件截断 30 字；两者都为空时
-    一个字符都不追加 —— 不留「关注 」后面空着的半截标签。单条净增约 40~50 字符。
+    一个字符都不追加 —— 不留「关注 」后面空着的半截标签。
     """
     tag = "〔板块〕" if r.get("kind") == "board" else ""
     conf = f"（{r['confidence']}）" if r.get("confidence") else ""
+    is_am = pick_slot(r) == "am"
     extra = ""
-    if pick_slot(r) == "am":
+    if is_am:
         bits = []
         zone = (r.get("entry_zone") or "").strip()
         trig = (r.get("trigger") or "").strip()
@@ -488,19 +539,25 @@ def _pick_lines(i, r):
             bits.append(f"触发：{_clip(trig, 30)}")
         if bits:
             extra = "（" + " · ".join(bits) + "）"
-    return [f"{i}. **{r.get('name')}**{tag}：{_clip(r.get('logic'), 60)}{conf}{extra}",
+    label = PICK_LOGIC_LABEL["am" if is_am else "pm"]
+    return [f"{i}. **{r.get('name')}**{tag} {label}："
+            f"{_clip(r.get('logic'), 60)}{conf}{extra}",
             f"   推翻信号：{_clip(r.get('invalidation'), 40)}"]
 
 
 def build_picks_block(picks, slot="", status=None):
     """候选观察清单 → 推送正文的一段。picks 为 None（账本缺失）时返回 []。
 
-    今天的候选**按批次分组**：盘前（今日可执行）在前、盘后（收盘复盘后记录）在后，
+    今天的候选**按批次分组**：推荐（am，今日潜力个股）在前、盘后（收盘复盘后记录）在后，
     两组都有时才各给一行小标题（只有一组时不加，省推送长度也不制造"另一组呢"的疑问）。
+    **推荐那一组下面另给一句短风险提示**（PICK_RECOMMEND_NOTE）——「推荐」旁边
+    必须有"非买入指令"，不能只在文末那一行里兜着。
 
     slot 为时段（am/pm），status 为 load_picks_status() 的结果（可为 None）；
     二者只影响「今天 0 条候选」时的措辞：账本里今天没有行既可能是盘前调度，
     也可能是闸门已开却选股失败，不能一律说成"盘前不记录"。
+    picks 里的 latest / latest_days / latest_is_am 由 load_picks() 给出，
+    用于空态里补一句"最近一批推荐是 X（N 天前）"。
     """
     if not picks:
         return []
@@ -514,10 +571,14 @@ def build_picks_block(picks, slot="", status=None):
                 parts.append(f"**{SLOT_GROUP_CN[s]}**")
             for i, r in enumerate(rs, 1):
                 parts += _pick_lines(i, r)
+            if s == "am":
+                parts.append(PICK_RECOMMEND_NOTE)
     else:
         # 本轮没有当日候选（盘前那轮还没跑 / 没有合格材料）；但**跟踪中的候选往往
         # 正好到期**，那段表现是这一条推送唯一的价值增量，不能只留一块空白
-        parts.append(_picks_empty_note(slot, status))
+        parts.append(_picks_empty_note(slot, status, picks.get("latest") or "",
+                                       picks.get("latest_days"),
+                                       picks.get("latest_is_am", True)))
     if picks.get("stats"):
         parts.append(f"📊 已回填：{picks['stats']}")
     parts.append("（候选为观察清单，非买入指令；历史表现不代表未来）")

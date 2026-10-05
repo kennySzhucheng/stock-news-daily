@@ -496,10 +496,13 @@ class Bundle:
         批次与字段（2026-10-04 盘前通道）：
           - rows 仍是**扁平列表**（server.py / check.py / export.py 都按列表读），
             但排序改成「日期倒序 → 同日盘前在前 → id 倒序」，并给每行补
-            `slot_label`（盘前/盘后中文名），前端据此插入分组小标题即可；
+            `slot_label`（推荐/盘后中文名），前端据此插入分组小标题即可；
           - `entry_zone` / `trigger` 原样透传（缺失补空串），前端判空后渲染，
             export.py 不需要改 —— 它把 rows 整个序列化，不做字段白名单；
-          - `groups` 是纯附加的分组摘要（盘前在前），行数仍以 rows 为准。
+          - `is_recommendation`（2026-10-05，纯附加布尔）：该行是不是「推荐」批
+            （slot=am）。前端不必自己认 slot 的取值口径 —— 那个口径（缺失/写坏
+            一律按 pm）只在这里定义一次；账本既有字段一个都没动。
+          - `groups` 是纯附加的分组摘要（推荐在前），行数仍以 rows 为准。
         """
         rows = []
         for r in (self.picks or []):
@@ -514,6 +517,10 @@ class Bundle:
             r["entry_zone"] = r.get("entry_zone") or ""
             r["trigger"] = r.get("trigger") or ""
             r["slot_label"] = SLOT_GROUP_CN[pick_slot(r)]
+            # 该行是不是「推荐」（盘前 08:10 那批）。**只增不改**：前端可以直接用
+            # 这个布尔渲染「为什么推荐」，不必自己判 slot（旧行没有 slot 字段，
+            # 判据只在 pick_slot 里定义一次）。
+            r["is_recommendation"] = pick_slot(r) == "am"
             rows.append(r)
         if days is not None:      # 注意用 is not None：days=0 是「只要今天」，不是「不筛选」
             cutoff = (datetime.now(CST) - timedelta(days=days)).strftime("%Y-%m-%d")
@@ -650,14 +657,15 @@ def confirmed_sources(n, max_sources=SOURCES_IN_LIST):
 # ---------------------------------------------------------------------------
 # M10 候选账本的批次（与 M5 日报 / M6 推送同一口径，2026-10-04 盘前通道）
 #
-#   am = 08:10 盘前那轮生成的「今日可执行观察清单」，基准是**昨收**，
+#   am = 08:10 盘前那轮生成的**推荐**（「今日潜力个股（推荐）」，2026-10-05 起
+#        对外就叫推荐：每条写明为什么推荐 —— 依据/传导机制/预期差），基准是**昨收**，
 #        条目多带 entry_zone（关注区间）与 trigger（触发条件）；
-#   pm = 收盘后那轮记录，基准是当日收盘价。
+#   pm = 收盘后那轮记录，基准是当日收盘价，属于事后复盘，不叫推荐。
 #
-# 盘前组一律排在前。
+# 盘前（推荐）组一律排在前。
 # ---------------------------------------------------------------------------
 SLOT_ORDER = {"am": 0, "pm": 1}
-SLOT_GROUP_CN = {"am": "盘前（今日可执行）", "pm": "盘后（收盘复盘后记录）"}
+SLOT_GROUP_CN = {"am": "今日潜力个股（推荐）", "pm": "盘后（收盘复盘后记录）"}
 
 
 def pick_slot(row):

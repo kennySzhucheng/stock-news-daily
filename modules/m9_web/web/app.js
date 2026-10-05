@@ -103,6 +103,41 @@
   // 与 m10_picks/picks.py 的 _STATUS_CN / m5_report 保持一致
   var REV_STATUS_CN = { no_quote: '未取到行情', no_bench: '基准缺失', expired: '未取到行情' };
   var PICK_TIERS = [1, 3, 5];
+  // 盘前（am）那批就是**推荐**（与 M5 日报 / M6 推送同一口径，2026-10-05 起）：
+  // 分组标题、logic 的字段标签、组下方那句风险提示三处都必须一致。
+  // 盘后（pm）那批是收盘后的事后记录，已经复盘过 —— 不叫推荐更准确。
+  var PICK_GROUP_CN = { am: '今日潜力个股（推荐）', pm: '盘后（收盘复盘后记录）' };
+  var PICK_LOGIC_LABEL = { am: '为什么推荐', pm: '逻辑' };
+  // 风险提示（沿用既有 .muted .small 排版，不新增样式、不加新颜色）
+  var PICK_RECOMMEND_NOTE =
+    '以上是 AI 依据当日新闻给出的观察建议（含关注区间与触发条件），' +
+    '不是买入指令、不构成投资建议；新闻≠股价，已被消化的利好可能“利好出尽”；' +
+    '每条都写了推翻条件，跑输的记录不会删。';
+
+  // 该行是不是「推荐」批：优先用后端给的 is_recommendation（判据只在 aggregate 里
+  // 定义一次），旧导出没有这个字段时退回 slot。
+  function isRecommendation(r) {
+    if (typeof r.is_recommendation === 'boolean') return r.is_recommendation;
+    return r.slot === 'am';
+  }
+
+  // 某个日期距本机今天几天（>=0 表示过去；解析不了返回 null）。
+  function daysAgo(dateStr) {
+    if (!dateStr) return null;
+    var t = new Date(dateStr + 'T00:00:00');
+    if (isNaN(t.getTime())) return null;
+    var now = new Date();
+    return Math.round(
+      (new Date(now.getFullYear(), now.getMonth(), now.getDate()) - t) / 86400000);
+  }
+
+  // 「最近一批推荐是 X，已过去 N 天」——空态用；日期取不到就返回空串
+  function latestBatchNote(latest) {
+    if (!latest) return '';
+    var d = daysAgo(latest);
+    return '最近一批推荐是 ' + latest +
+      (d !== null && d >= 0 ? '，已过去 ' + d + ' 天' : '') + '。';
+  }
 
   // ── 总览 ────────────────────────────────────────────────
   function renderOverview() {
@@ -699,11 +734,16 @@
       ? '<span class="pick-base">' +
         // 盘前行（slot=am）的基准价是**昨收**，不写清会被当成"记录时的现价"
         (r.slot === 'am' ? '基准 昨收 ' : '记录时价 ') + r.base_price + '</span>' : '';
+    // logic 的标签**按批次分**：推荐批（am）→「为什么推荐」；复盘批（pm）→「逻辑」。
+    // 不按 slot 硬判，走 isRecommendation()，旧导出缺字段时它自己会退回 slot。
+    var logicLabel = PICK_LOGIC_LABEL[isRecommendation(r) ? 'am' : 'pm'];
     return '<div class="pick-card">' +
       '<div class="pick-head"><b>' + esc(r.name) + '</b>' +
       '<span class="pick-kind">' + esc(KIND_CN[r.kind] || r.kind) + '</span>' +
       board + conf + '</div>' +
-      (r.logic ? '<p class="pick-logic">' + esc(r.logic) + '</p>' : '') +
+      (r.logic
+        ? '<p class="pick-logic"><b>' + logicLabel + '</b>：' + esc(r.logic) + '</p>'
+        : '') +
       // 盘前清单的可执行信息（2026-10-04 新增字段；空则不渲染该项）
       (r.entry_zone ? '<p class="pick-plan"><b>关注区间</b>' + esc(r.entry_zone) + '</p>' : '') +
       (r.trigger ? '<p class="pick-plan"><b>触发条件</b>' + esc(r.trigger) + '</p>' : '') +
@@ -744,23 +784,40 @@
 
     var today = (p.latest_date || '').trim();
     var todayRows = rows.filter(function (r) { return r.date === today; });
-    // 同一天可能有两批：盘前（今日可执行清单，基准=昨收）与盘后（收盘后记录）。
-    // 盘前在前 —— 那才是"今天要看的东西"。只有一批时不加分组标题。
-    var ORDER = [['am', '盘前（今日可执行）'], ['pm', '盘后（收盘复盘后记录）']];
+    // 同一天可能有两批：推荐（am，盘前那批，基准=昨收）与盘后（收盘后记录）。
+    // 推荐在前 —— 那才是"今天要看的东西"。只有一批时不加分组标题（沿用既有规则）。
+    var ORDER = [['am', PICK_GROUP_CN.am], ['pm', PICK_GROUP_CN.pm]];
     var groups = ORDER.map(function (g) {
-      return { label: g[1],
-               rows: todayRows.filter(function (r) { return (r.slot || 'pm') === g[0]; }) };
+      return { label: g[1], slot: g[0],
+               rows: todayRows.filter(function (r) {
+                 return (isRecommendation(r) ? 'am' : 'pm') === g[0];
+               }) };
     }).filter(function (g) { return g.rows.length; });
+    // 推荐批下方固定一句风险提示（「推荐」旁边必须有"不是买入指令"）。
+    var recNote = groups.some(function (g) { return g.slot === 'am'; })
+      ? '<p class="muted small">' + esc(PICK_RECOMMEND_NOTE) + '</p>' : '';
+    // 账本里最新的那批是不是"今天"的？不是（休市/长假/盘前那轮还没跑）就先说清
+    // **今天没有产出推荐**，再照常给出最近一批的候选 —— 只留一块"还没有记录"
+    // 会让人分不清是休市还是流水线坏了。
+    var ago = daysAgo(today);
+    var staleNote = (ago !== null && ago > 0)
+      ? '<p class="pick-empty">今天没有产出推荐（休市日不产出；盘前 08:10 那轮给出推荐，' +
+        '收盘后那轮记录当日候选）。' + esc(latestBatchNote(today)) + '</p>'
+      : '';
     // 盘前那次运行时当日还没有候选，此时 latest_date 是上一交易日 —— 如实标日期，
     // 不把它说成「今日」
     var cards = todayRows.length
-      ? '<h3 class="pick-sub">' + esc(today) + ' 记录的候选（' + todayRows.length + ' 条）</h3>' +
+      ? staleNote +
+        '<h3 class="pick-sub">' + esc(today) + ' 记录的候选（' + todayRows.length + ' 条）</h3>' +
         groups.map(function (g) {
           return (groups.length > 1
             ? '<h3 class="pick-sub">' + g.label + '（' + g.rows.length + ' 条）</h3>' : '') +
-            '<div class="pick-cards">' + g.rows.map(pickCard).join('') + '</div>';
+            '<div class="pick-cards">' + g.rows.map(pickCard).join('') + '</div>' +
+            (g.slot === 'am' ? recNote : '');
         }).join('')
-      : '<p class="pick-empty">这次运行时还没有新的候选记录。</p>';
+      : '<p class="pick-empty">今天没有产出推荐（休市日不产出；盘前 08:10 那轮给出推荐，' +
+        '收盘后那轮记录当日候选）。' + esc(latestBatchNote(today)) +
+        '以下是跟踪中候选的表现。</p>';
 
     $('#picksBody').innerHTML =
       '<div class="pick-stats">' + (statParts ||

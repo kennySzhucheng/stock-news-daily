@@ -567,10 +567,28 @@ _STATUS_CN = {"no_quote": "未匹配到行情", "no_bench": "基准缺失", "exp
 # 盘前/盘后两个批次分开显示（2026-10-04 盘前通道）：
 #   am = 08:10 那轮生成的「今日可执行观察清单」，基准是**昨收**，当天即可对照执行；
 #   pm = 收盘后那轮记录，基准是当日收盘价，属于事后判断。
+# 2026-10-05 起 am 那批对外就叫**推荐**（「今日潜力个股（推荐）」）：「今日可执行观察
+# 清单」这个名字只在卡片标签与分组标题里出现，账本字段一个都没动。
 # 盘前组一律排在前面；**两组都有时才给小标题** —— 只有一组时没有可对比的另一组，
-# 标题纯属多占一屏。
+# 标题纯属多占一屏（只有 am 那一组时，"推荐"体现在卡片的「为什么推荐」与 h2 计数行里）。
 SLOT_ORDER = ("am", "pm")
-SLOT_GROUP_CN = {"am": "盘前（今日可执行）", "pm": "盘后（收盘复盘后记录）"}
+# 分组标题（M5 / M6 / M9 三处同一口径，2026-10-05 起）：
+#   am 那批就是给用户看的**推荐**（「今日潜力个股（推荐）」，每条写明为什么推荐）；
+#   pm 那批是收盘后的记录，已经复盘过，不叫推荐更准确。
+SLOT_GROUP_CN = {"am": "今日潜力个股（推荐）", "pm": "盘后（收盘复盘后记录）"}
+# h2 计数行（今日 N 条（推荐 2 · 盘后 1））用的短名：长标题并列会把这行撑爆
+SLOT_COUNT_CN = {"am": "推荐", "pm": "盘后"}
+# logic 的字段标签：**按 slot 分**。am 行是"推荐"，所以要回答"为什么推荐"；
+# pm 行是收盘后的事后记录，仍然叫「逻辑」—— 把它也叫推荐并不准确。
+PICK_LOGIC_LABEL = {"am": "为什么推荐", "pm": "逻辑"}
+# 盘前（推荐）批次下方的固定风险提示。与 M6 推送、M9 网页同一口径
+# （三处都有「不是买入指令」），版式各自沿用既有排版（这里用既有的 .pick-note，
+# 不引入新类、不加新颜色）。HTML 片段，故用 <b> 而不是 markdown 的 **。
+PICK_RECOMMEND_NOTE = (
+    "以上是 AI 依据当日新闻给出的<b>观察建议</b>（含关注区间与触发条件），"
+    "<b>不是买入指令、不构成投资建议</b>；新闻≠股价，已被消化的利好可能“利好出尽”；"
+    "每条都写了推翻条件，跑输的记录不会删。"
+)
 
 
 def pick_slot(row):
@@ -648,11 +666,15 @@ def picks_stats(rows):
 
 
 def _pick_card(r):
-    """一条今日候选卡：逻辑链 + 推翻条件是主体，价格只是脚注。
+    """一条今日候选卡：推荐理由（am）/ 逻辑（pm）+ 推翻条件是主体，价格只是脚注。
 
     盘前行（slot=am）额外给出**关注区间**与**触发条件** —— 这两个字段是
     「今日可执行」的全部依据。任一字段为空串/缺失就整行不渲染，绝不出现
     「关注区间：」后面空着一串（那会让读者以为有区间、只是没写出来）。
+
+    `logic` 的**标签按 slot 分**（2026-10-05）：am 行是推荐，标签为「为什么推荐」
+    （内容由 M10 的 prompt + 校验保证写了依据/传导机制/预期差）；pm 行已经复盘过，
+    仍叫「逻辑」。两处都显式写出标签，读者一眼能分清这条是推荐还是事后记录。
     """
     tag = '<span class="pick-tag">板块</span>' if r.get("kind") == "board" else ""
     refs = "".join(f'<span class="pick-ref">[{n}]</span>'
@@ -678,7 +700,7 @@ def _pick_card(r):
     return f"""<div class="pick-card">
   <div class="pick-head"><b>{esc(r.get("name"))}</b>{tag}
     <span class="pick-conf">置信度 {esc(r.get("confidence") or "—")}</span></div>
-  <p class="pick-logic">{esc(r.get("logic"))}</p>
+  <p class="pick-logic"><b>{PICK_LOGIC_LABEL["am" if is_am else "pm"]}</b>：{esc(r.get("logic"))}</p>
   {plan}<p class="pick-inval"><b>推翻条件</b>：{esc(r.get("invalidation"))}</p>
   <div class="pick-foot">基准 {base}
     {("· 所属板块 " + esc(r["board"])) if r.get("board") and r.get("kind") == "stock" else ""}
@@ -686,11 +708,57 @@ def _pick_card(r):
 </div>"""
 
 
+def latest_batch(picks, date_str):
+    """账本里最近一批记录的（日期, 距 date_str 的天数, 是不是"推荐"批）。
+
+    "推荐"批 = slot=am 的那些行（盘前那轮）。账本里一条 am 都没有（全部是老账本）
+    时退回最近一条记录，调用方据此把用词降级为"候选记录" —— 把 pm 批也叫"推荐"
+    并不准确（它是收盘后的事后记录，见 PICK_LOGIC_LABEL 的说明）。
+    取不到日期、或日期格式坏掉时对应位置返回 None，调用方不写那一段。
+    """
+    def _latest(rows):
+        ds = [r.get("date") for r in rows if r.get("date")]
+        return max(ds) if ds else None
+
+    d = _latest([r for r in picks if pick_slot(r) == "am"])
+    is_am = bool(d)
+    if not d:
+        d = _latest(picks)
+    if not d:
+        return None, None, False
+    try:
+        days = (datetime.strptime(date_str, "%Y-%m-%d")
+                - datetime.strptime(str(d), "%Y-%m-%d")).days
+    except Exception:
+        return d, None, is_am
+    return d, days, is_am
+
+
+def picks_empty_note(picks, date_str):
+    """今天一条候选都没有时的说明（休市/长假/本轮没产出）。
+
+    旧文案只说"本时段没有新记录的候选"，读者没法判断这是"今天本来就不产出"还是
+    "出问题了"，也不知道上一批是什么时候。现在明说**今天没有产出推荐**，并给出
+    **最近一批**的日期与已过去的天数（账本里取不到就不写这一段）。
+    """
+    d, days, is_am = latest_batch(picks, date_str)
+    tail = ""
+    if d:
+        what = "推荐" if is_am else "候选记录"
+        ago = f"，已过去 {days} 天" if days is not None else ""
+        tail = f"最近一批{what}是 {esc(d)}{ago}。"
+    return ('<p class="pick-empty">今天没有产出推荐（休市日不产出；盘前 08:10 那轮记入'
+            '「今日潜力个股（推荐）」，基准为昨收；收盘后那轮记入当日候选，基准为'
+            f'当日收盘价）。{tail}以下是跟踪中候选的表现。</p>')
+
+
 def render_picks(picks, date_str):
     """候选观察清单版块。没有任何账本数据时返回空串（不显示空版块）。
 
-    今日候选按批次分组：**盘前（今日可执行）在前、盘后（收盘复盘后记录）在后**；
-    两组都有时才给组标题。往期回填明细与均值口径不受分组影响（照旧整段统计）。
+    今日候选按批次分组：**推荐（am）在前、盘后（收盘复盘后记录，pm）在后**；
+    两组都有时才给组标题。**推荐那一组下方另加一句固定风险提示**
+    （PICK_RECOMMEND_NOTE）——「推荐」这个词必须紧跟一句"不是买入指令"，
+    否则读者会把推荐读成买入建议。往期回填明细与均值口径不受分组影响。
     """
     if not picks:
         return ""
@@ -701,26 +769,31 @@ def render_picks(picks, date_str):
                    and r.get("date", "") >= cutoff],
                   key=lambda r: (r.get("date", ""), r.get("id", "")), reverse=True)
 
-    # 今日候选卡按批次分组（盘前在前），组内保持账本原有顺序
+    # 今日候选卡按批次分组（推荐在前），组内保持账本原有顺序
     groups = [(s, [r for r in today_rows if pick_slot(r) == s]) for s in SLOT_ORDER]
     groups = [(s, rs) for s, rs in groups if rs]
+    # 风险提示跟着**推荐那批**走：只要有 am 行就出现（哪怕只有一组、没出组标题）。
+    # 只有 pm 批时不出 —— 那批没被叫过"推荐"，不需要这句。
+    am_note = (f'<p class="pick-note">{PICK_RECOMMEND_NOTE}</p>'
+               if any(s == "am" for s, _ in groups) else "")
     if len(groups) > 1:
         today_html = "".join(
             f'<div class="pick-group">'
             f'<h3 class="pick-group-title">{SLOT_GROUP_CN[s]}'
             f'<span class="h2-count">{len(rs)} 条</span></h3>'
-            f'{"".join(_pick_card(r) for r in rs)}</div>'
+            f'{"".join(_pick_card(r) for r in rs)}'
+            f'{am_note if s == "am" else ""}</div>'
             for s, rs in groups
         )
-        count_breakdown = "（" + " · ".join(f"{SLOT_CN[s]} {len(rs)}" for s, rs in groups) + "）"
+        count_breakdown = ("（" + " · ".join(f"{SLOT_COUNT_CN[s]} {len(rs)}"
+                                             for s, rs in groups) + "）")
     else:
-        today_html = "".join(_pick_card(r) for _, rs in groups for r in rs)
+        today_html = ("".join(_pick_card(r) for _, rs in groups for r in rs)
+                      + (am_note if groups and groups[0][0] == "am" else ""))
         count_breakdown = ""
 
     if not today_rows:
-        today_html = ('<p class="pick-empty">本时段没有新记录的候选：盘前 08:10 记入'
-                      '「今日可执行」清单（基准为昨收），盘后收盘后记入当日候选'
-                      '（基准为当日收盘价）。以下是跟踪中候选的表现。</p>')
+        today_html = picks_empty_note(picks, date_str)
 
     # 历史回填：逐条明细，每条自带 T+1/T+3/T+5 与同期基准
     rows_html = []
@@ -763,9 +836,10 @@ def render_picks(picks, date_str):
     n_today = len(today_rows)
     return f"""<section class="block" id="picks">
   <h2>候选观察清单<span class="h2-count">今日 {n_today} 条{count_breakdown}</span></h2>
-  <p class="pick-note">每条候选都带<b>推翻条件</b>与新闻依据，其后续表现按 T+1/T+3/T+5
-  原样回填，<b>含跑输的</b>。超额相对沪深300。盘前条目另给<b>关注区间</b>与
-  <b>触发条件</b>——到了该位置、出现该信号才值得进一步观察，<b>不是买入指令</b>，
+  <p class="pick-note">盘前 08:10 那批是<b>推荐</b>：每条都写明推荐的三件事
+  （新闻依据 → 传导机制 → 预期差），并给出<b>关注区间</b>与<b>触发条件</b>；
+  收盘后那批是当日复盘记录。每条都带<b>推翻条件</b>与新闻依据，其后续表现按
+  T+1/T+3/T+5 原样回填，<b>含跑输的</b>（超额相对沪深300）。<b>不是买入指令</b>，
   决策权归您本人。</p>
   {today_html}
   {stats_html}

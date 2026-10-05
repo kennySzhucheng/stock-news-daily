@@ -918,5 +918,89 @@ class PremarketChannel(unittest.TestCase):
                       "score_pending 必须用 base_date 作基准日，否则 am 行的 T+1 会差一天")
 
 
+class RecommendationSection(unittest.TestCase):
+    """「今日潜力个股（推荐）」版块（2026-10-05 用户要求）。
+
+    用户原话："我希望有一个板块是推荐有潜力的个股，需要明确写出，以及为什么推荐"。
+    落地方式：盘前那批（slot=am）对外就叫**推荐** —— 分组标题「今日潜力个股（推荐）」、
+    字段标签「为什么推荐」（pm 批仍叫「逻辑」，它是事后记录，叫推荐不准确）；
+    并强制 `logic`（推荐理由）写清【依据 → 传导机制 → 预期差】三件事，
+    去空白后 < 20 字直接丢弃。**不是买入指令**这句话在三个出口都必须出现。
+    """
+
+    def setUp(self):
+        self.rep = load("m5_report", "modules/m5_report/report.py")
+        self.psh = load("m6_push", "modules/m6_push/push.py")
+
+    def _row(self, slot, name, date="2026-10-09", **kw):
+        r = {"id": f"{date}-{slot}-s-{name}", "date": date, "slot": slot, "kind": "stock",
+             "name": name, "code": "000001", "secid": "0.000001", "market": "深A",
+             "base_price": 12.34, "base_prev_close": 12.10, "bench_level": 4300.0,
+             "board": "", "logic": "①依据 [1] 公告中标 ②订单未来两季确认收入 ③份额逆势提升未被反映",
+             "invalidation": "若公司公告订单延期或取消", "confidence": "中",
+             "basis_refs": [1], "reviews": {"1": None, "3": None, "5": None}}
+        if slot == "am":
+            r.update({"base_date": "2026-10-08", "entry_zone": "12.0~12.5",
+                      "trigger": "开盘半小时站稳12.5且成交额较昨日同期放大"})
+        r.update(kw)
+        return r
+
+    def _plain(self, html):
+        return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html))
+
+    def test_m5_recommendation_group_and_labels(self):
+        p = self._plain(self.rep.render_picks(
+            [self._row("am", "甲股份"), self._row("pm", "乙股份")], "2026-10-09"))
+        self.assertIn("今日潜力个股（推荐）", p)
+        self.assertIn("盘后（收盘复盘后记录）", p)
+        self.assertLess(p.find("今日潜力个股（推荐）"), p.find("盘后（收盘复盘后记录）"))
+        self.assertIn("为什么推荐", p)
+        self.assertIn("逻辑", p)
+        self.assertIn("不是买入指令", p)
+        for k in ("关注区间", "触发条件", "推翻条件"):
+            self.assertIn(k, p)
+        self.assertNotIn("建议买入", p)
+        self.assertNotIn("满仓", p)
+
+    def test_m5_pm_only_has_no_recommendation_title(self):
+        p = self._plain(self.rep.render_picks([self._row("pm", "乙股份")], "2026-10-09"))
+        self.assertNotIn("今日潜力个股（推荐）", p)
+
+    def test_m5_empty_state_points_at_last_batch(self):
+        """今天没有候选时，要如实说明并把最近一批的日期与天数报出来。"""
+        p = self._plain(self.rep.render_picks([self._row("am", "丙股份", "2026-10-06")],
+                                             "2026-10-09"))
+        self.assertIn("今天没有产出推荐", p)
+        self.assertIn("最近一批推荐是 2026-10-06", p)
+        self.assertIn("3 天", p)
+
+    def test_m10_rejects_short_recommendation_reason(self):
+        """盘前「推荐理由」<20 字 = 没有推荐理由 → 丢弃该条（am 专用硬闸）。"""
+        pk = load("m10_picks", "modules/m10_picks/picks.py")
+        self.assertEqual(pk.AM_LOGIC_MIN_CHARS, 20)
+        base = {"kind": "stock", "entry_zone": "12.0~12.5", "trigger": "开盘半小时站稳12.5",
+                "invalidation": "公告否认该订单传闻", "confidence": "中"}
+        cands = [dict(base, name="太短股份", logic="利好"),
+                 dict(base, name="合格股份",
+                      logic="①依据 [1] 中标12亿元订单 ②订单未来两季确认收入 ③份额提升未被反映"),
+                 dict(base, name="乱填区间股份", entry_zone="便宜",
+                      logic="①依据 [2] 补贴落地 ②直接降低采购成本、抬升毛利率 ③力度超预期")]
+        kept = pk._validate_items(cands, am=True)
+        names = [c["name"] for c in kept]
+        self.assertNotIn("太短股份", names)
+        self.assertIn("合格股份", names)
+        # 区间解析不出只清字段，不丢整条（区间只是辅助信息）
+        self.assertIn("乱填区间股份", names)
+        self.assertEqual(next(c for c in kept if c["name"] == "乱填区间股份")["entry_zone"], "")
+
+    def test_pm_logic_gate_unchanged(self):
+        """pm 路径不得启用 20 字硬闸（既有行为与账本历史口径不能被改）。"""
+        pk = load("m10_picks", "modules/m10_picks/picks.py")
+        pm = pk._validate_items([{"kind": "stock", "name": "短逻辑股份", "logic": "利好",
+                                  "invalidation": "公告否认该订单传闻", "confidence": "中"}],
+                                am=False)
+        self.assertEqual([c["name"] for c in pm], ["短逻辑股份"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
