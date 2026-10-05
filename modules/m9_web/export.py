@@ -73,7 +73,7 @@ def build_payloads(bundle):
             "conclusion": bundle.conclusion(),
             "market_view": bundle.market_view(),
         },
-        "history": {"reports": bundle.history()},
+        "history": {"reports": bundle.history(), "review": bundle.review_view()},
         # 窗口化：账本一天最多 6 条、常年累积不清理，全量进 picks.js 会让静态页
         # 体积随日期线性膨胀。与本地服务的数据结构完全一致，只是行数更少。
         "picks": bundle.picks_view(days=PICKS_EXPORT_DAYS),

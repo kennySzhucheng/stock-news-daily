@@ -1513,6 +1513,32 @@ def build_index(report_files):
         '<div class="go">进入网页版 →</div>'
         "</a>"
     )
+    # 复盘看板（M12）入口：索引页只列"一天一份"的日报，而复盘看板回答的是
+    # 「这一个月我到底准不准」，属于另一种入口，放在日报列表下方、与网页版门户同列。
+    #
+    # **不渲染比渲染死链好**：链接只在 reports/review-latest.html 真的存在时出现
+    # （M12 允许失败，从未跑过、或被清掉时这个文件就不存在）。这条规则只影响
+    # 索引页 —— .web-entry / .index-item 是索引页专属类，日报正文不用它们。
+    review_path = REPORTS_DIR / "review-latest.html"
+    review_entry = ""
+    if review_path.exists():
+        # 标题里带着它是哪一周的快照（review-latest.html 是"最近一次生成的"，
+        # 流水线停摆时它会是旧周，写出来免得把旧快照当成今天的）
+        try:
+            _t = re.search(r"<title>[^<]*</title>",
+                           review_path.read_text(encoding="utf-8"))
+            _week = re.search(r"(\d{4}-W\d{2})", _t.group(0)) if _t else None
+        except Exception:
+            _week = None
+        _label = f"复盘看板 · {_week.group(1)}" if _week else "复盘看板"
+        review_entry = (
+            f'<a class="web-entry" href="review-latest.html">'
+            f'<div class="d">{esc(_label)}</div>'
+            f'<div class="s">一段时间里的候选表现汇总：双基准均值超额 · 按批次/置信度/板块分组 · '
+            f'逻辑核查（含"蒙对"）· 逐条明细</div>'
+            f'<div class="go">查看复盘看板 →</div>'
+            f"</a>"
+        )
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -1531,6 +1557,7 @@ def build_index(report_files):
   <section class="block">
     {latest_link}
     {body}
+    {review_entry}
     {web_entry}
   </section>
 </main>

@@ -1,4 +1,4 @@
-"""离线用例：不联网、不需要密钥、不消耗任何 API 额度。
+﻿"""离线用例：不联网、不需要密钥、不消耗任何 API 额度。
 
 跑法（仓库根目录）：
     python tests/offline_tests.py
@@ -11,6 +11,7 @@
 所以这里用纯离线的方式，把「已修复的具体缺陷」逐条钉成断言。
 """
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -1281,6 +1282,115 @@ class InvalidationCheck(unittest.TestCase):
         self.assertIn("invalidation_check", app, "前端要读这个字段")
         for cn in ("未核查", "推翻条件：未触发", "无法判断"):
             self.assertIn(cn, app, f"前端缺少文案：{cn}")
+
+
+class ReviewDashboard(unittest.TestCase):
+    """M12 复盘看板（2026-10-05，第 4 项）。
+
+    它回答的是"这套判断到底准不准"，所以**不许美化数字**：均值没有样本就不存在
+    （写「暂无」而不是 0.00%）、每个均值必须带样本数、样本 <5 要标注不足、
+    未核查的档不许算进核查口径、全文不给"胜率"。
+    """
+
+    def setUp(self):
+        import tempfile
+        self.wk = load("m12_weekly", "modules/m12_weekly/weekly.py")
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="snd-m12-"))
+        self.ledger = self.tmp / "ledger.jsonl"
+
+    def _write(self, rows):
+        self.ledger.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n",
+                               encoding="utf-8")
+
+    def _row(self, name, date="2026-09-21", slot="pm", conf="中", alpha=0.10,
+             alpha2=0.08, verdict=None, board="", t1=True):
+        rev1 = None
+        if t1:
+            rev1 = {"due": "2026-09-22", "done": "2026-09-22", "price": 11.0, "ret": 0.1,
+                    "bench": 4040.0, "bench_ret": 0.01, "alpha": alpha, "status": "ok",
+                    "span": 1, "span_kind": "trading",
+                    "bench2_ret": 0.004, "alpha2": alpha2,
+                    "invalidation_check": (None if verdict is None else
+                                           {"verdict": verdict, "reason": "r", "basis": [1],
+                                            "checked_at": "2026-09-22 15:49:00"})}
+        return {"id": f"{date}-{slot}-s-{name}", "date": date, "slot": slot, "kind": "stock",
+                "name": name, "code": "000001", "market": "深A", "base_price": 10.0,
+                "board": board, "logic": "x" * 30, "invalidation": "若公告否认订单",
+                "confidence": conf, "basis_refs": [1],
+                "reviews": {"1": rev1, "3": None, "5": None}}
+
+    def _page(self, rows, asof="2026-09-30"):
+        self._write(rows)
+        out = self.tmp / "out"
+        rc = self.wk.main(["--ledger", str(self.ledger), "--out-dir", str(out),
+                           "--asof", asof, "--quiet"])
+        self.assertEqual(rc, 0)
+        html = (out / "review-latest.html").read_text(encoding="utf-8")
+        return out, html
+
+    def test_mean_matches_hand_calculation(self):
+        _, html = self._page([self._row("A", alpha=0.10, alpha2=0.08),
+                              self._row("B", alpha=0.02, alpha2=0.00),
+                              self._row("C", alpha=-0.03, alpha2=-0.01)])
+        # 手算：沪深300 (0.10+0.02-0.03)/3 = +3.00%；中证1000 (0.08+0-0.01)/3 = +2.33%
+        self.assertIn("+3.00%", html)
+        self.assertIn("+2.33%", html)
+        self.assertIn("n=3", html, "每个均值必须带样本数")
+
+    def test_no_sample_shows_dash_not_zero(self):
+        _, html = self._page([self._row("A", t1=False)])
+        self.assertIn("暂无", html)
+        self.assertNotIn("0.00%", html, "0 样本的均值是编出来的，绝不能显示 0.00%")
+
+    def test_unchecked_not_counted_in_check_scope(self):
+        # 3 档已核查（2 triggered / 1 not_triggered）+ 1 档 null（未核查）
+        _, html = self._page([self._row("A", verdict="triggered", alpha=0.05),
+                              self._row("B", verdict="triggered", alpha=-0.02),
+                              self._row("C", verdict="not_triggered"),
+                              self._row("D", verdict=None)])
+        self.assertIn("已复核档数", html)
+        self.assertNotIn("已复核档数 4", html, "null 的档不算已核查")
+        self.assertIn("逻辑破产但价格仍跑赢", html)
+
+    def test_small_sample_note_threshold(self):
+        _, html3 = self._page([self._row(f"S{i}") for i in range(3)])
+        self.assertIn("样本不足", html3)
+        _, html6 = self._page([self._row(f"S{i}") for i in range(6)])
+        self.assertNotIn("样本不足", html6)
+
+    def test_honesty_words_and_no_winrate(self):
+        _, html = self._page([self._row("A")])
+        self.assertNotIn("胜率", html)
+        self.assertIn("不是买入指令", html)
+        self.assertIn("中证1000", html)
+        self.assertIn("沪深300", html)
+
+    def test_ledger_is_read_only(self):
+        self._write([self._row("A")])
+        before = hashlib.sha256(self.ledger.read_bytes()).hexdigest()
+        self.wk.main(["--ledger", str(self.ledger), "--out-dir", str(self.tmp / "o2"),
+                      "--asof", "2026-09-30", "--quiet"])
+        self.assertEqual(hashlib.sha256(self.ledger.read_bytes()).hexdigest(), before,
+                         "看板必须只读账本")
+
+    def test_missing_ledger_does_not_crash(self):
+        out = self.tmp / "nope"
+        rc = self.wk.main(["--ledger", str(self.tmp / "不存在.jsonl"),
+                           "--out-dir", str(out), "--asof", "2026-09-30", "--quiet"])
+        self.assertEqual(rc, 0)
+        self.assertTrue((out / "review-latest.html").is_file())
+
+    def test_wired_into_history_api_and_export(self):
+        """看板入口必须走数据（不是硬编码链接）：接口与静态导出都要带、前端要判 exists。"""
+        srv = (ROOT / "modules/m9_web/server.py").read_text(encoding="utf-8")
+        exp = (ROOT / "modules/m9_web/export.py").read_text(encoding="utf-8")
+        app = (ROOT / "modules/m9_web/web/app.js").read_text(encoding="utf-8")
+        idx = (ROOT / "modules/m9_web/web/index.html").read_text(encoding="utf-8")
+        self.assertIn("b.review_view()", srv)
+        self.assertIn("bundle.review_view()", exp)
+        self.assertIn("rv.exists", app)
+        self.assertNotIn('href="../review-latest.html"', idx,
+                         "硬编码链接会与接口形成两份真相，且本地必 404")
 
 
 if __name__ == "__main__":

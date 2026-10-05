@@ -207,7 +207,9 @@ class Handler(BaseHTTPRequestHandler):
             })
 
         if path == "/api/history":
-            return self._json({"reports": b.history()})
+            # review 是纯附加键（M12 复盘看板入口）：看板不存在时 exists=False，
+            # 前端据此**不渲染**链接而不是给一个死链。
+            return self._json({"reports": b.history(), "review": b.review_view()})
 
         if path == "/api/picks":
             return self._json(b.picks_view())

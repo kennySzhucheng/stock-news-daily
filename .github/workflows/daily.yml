@@ -263,6 +263,29 @@ jobs:
           REPORT_SLOT: ${{ steps.slot.outputs.slot }}
         run: python modules/m10_picks/picks.py
 
+      # 复盘看板（M12，2026-10-05）：只读 M10 刚写好的候选账本，把「已复核档位」
+      # 聚合成一周一个快照 reports/review-<ISO周>.html 与固定入口 review-latest.html。
+      #
+      # 为什么排在 M5 **之前**：它只读账本、不写其它产物，跑完立即产出看板，
+      # 紧接着的 M5 生成的索引页就能在本轮把看板链接一起发上线（排到 M5 之后，
+      # 索引页要等到下一次运行才会出现链接）。
+      #
+      # **旁路产物**：看板失败不影响日报与推送（continue-on-error），但失败会在
+      # 日志里显式 warn（下一条步骤），不留静默缺口。产物随 ./reports 整树部署。
+      - name: M12 复盘看板
+        id: m12
+        if: always() && steps.dup.outputs.skip != 'true'
+        continue-on-error: true
+        run: python modules/m12_weekly/weekly.py
+
+      # 看板挂了必须**显式**说一声：它是旁路产物，但"没生成"和"生成了空页"
+      # 在部署产物里长得差不多，所以要求它失败时在日志里留下 ::warning:: 。
+      - name: M12 复盘看板失败告警（不阻断部署）
+        if: always() && steps.dup.outputs.skip != 'true' && steps.m12.outcome == 'failure'
+        run: |
+          echo "::warning::M12 复盘看板生成失败 —— 看板只是旁路产物，本次不阻断部署；"
+          echo "::warning::日报与推送不受影响，线上保留上一周的 review-latest.html（如已有）。"
+
       - name: M5 生成日报
         if: steps.dup.outputs.skip != 'true'
         env:

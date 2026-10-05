@@ -483,6 +483,41 @@ class Bundle:
                         "latest": entries[-1]["file"]})
         return out
 
+    def review_view(self):
+        """M12 复盘看板的入口信息（**纯附加字段**，既有字段一个都没动）。
+
+        看板是 reports/review-latest.html（M12 每周生成、同日重跑覆盖同一文件）。
+        这里只回答"它在不在、是哪一周、多大"，**不复制它的内容** ——
+        页面上给一个静态链接过去就够了（web/index.html 里那条是硬编码的，
+        因为 index.html 是纯静态文件、不经过 app.js；这个方法是给
+        静态导出/其它消费方一个不透支既有字段的官方入口）。
+
+        **已接进接口**（2026-10-05 补齐）：`/api/history` 与静态导出的
+        `api/history.js` 都带 `review` 这个纯附加键，前端（app.js `renderHistory`）
+        据此决定渲不渲染链接 —— 之前 index.html 里那条硬编码链接已删除
+        （硬编码会在本地/未生成看板时变成死链，且与接口数据形成两份真相）。
+
+        report 为 None 表示这次快照里没有看板（M12 允许失败，或还没跑过）——
+        消费方据此**不渲染链接**，而不是渲染一个死链。
+        """
+        if not self.reports_dir:
+            return {"path": "../review-latest.html", "exists": False,
+                    "report": None, "week": ""}
+        p = Path(self.reports_dir) / "review-latest.html"
+        if not p.is_file():
+            return {"path": "../review-latest.html", "exists": False,
+                    "report": None, "week": ""}
+        week = ""
+        try:
+            m = re.search(r"(\d{4}-W\d{2})", p.read_text(encoding="utf-8"))
+            week = m.group(1) if m else ""
+        except Exception:
+            week = ""
+        return {"path": "../review-latest.html", "exists": True,
+                "report": {"file": p.name, "size": p.stat().st_size,
+                           "label": (f"复盘看板 · {week}" if week else "复盘看板")},
+                "week": week}
+
     def picks_view(self, days=None):
         """M10 候选观察清单 → 网页版需要的结构。
 

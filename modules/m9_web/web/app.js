@@ -94,6 +94,7 @@
   var S = {
     meta: null, overview: null, news: [], raw: [], rawLoaded: false,
     quotes: [], failed: [], boards: [], history: [], analysis: null, picks: null,
+    review: null,                       // M12 复盘看板入口（纯附加键）
     rawMode: false, shown: PAGE, sort: { key: 'change_pct', asc: false },
     // 持仓标签页：本机数据，不经过任何服务端
     pfList: [], pfQuotes: {}, pfQuoteAt: 0, pfQuoteTime: '', pfLoading: false
@@ -713,6 +714,22 @@
   function reportUrl(file) { return STATIC ? ('../' + file) : ('/reports/' + file); }
 
   function renderHistory() {
+    // 复盘看板入口（M12）：**看板不存在就整块不显示** —— 接口给 exists 判据，
+    // 前端不猜路径、也不渲染死链（本地没跑 M12 时就是这种情况）。
+    var rv = S.review || null;
+    var card = $('#reviewCard');
+    if (card) {
+      if (rv && rv.exists && (rv.report || {}).file) {
+        card.style.display = '';
+        var link = $('#reviewLink');
+        if (link) {
+          link.href = rv.path || ('../' + rv.report.file);
+          link.textContent = (rv.report.label || '复盘看板') + ' →';
+        }
+      } else {
+        card.style.display = 'none';
+      }
+    }
     if (!S.history.length) {
       $('#historyList').innerHTML = '<p class="empty">暂无历史日报</p>';
       return;
@@ -1188,6 +1205,7 @@
       S.meta = r[0]; S.overview = r[1]; S.news = r[2].items || [];
       S.quotes = r[3].quotes || []; S.failed = r[3].failed || [];
       S.boards = r[4].boards || []; S.analysis = r[5]; S.history = r[6].reports || [];
+      S.review = r[6].review || null;   // M12 看板入口（纯附加键，可能不存在）
       S.picks = r[7] || null;
       S.raw = []; S.rawLoaded = false;   // 原始新闻按需再拉
 
