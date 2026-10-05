@@ -6,17 +6,28 @@ M2 新闻筛选与结构化模块
 输入: data/raw_news.json
 输出: data/structured_news.json
 
+另有**跨天事件追踪**（2026-10-05 新增，纯数据侧）：把每天保留下来的新闻算一个保守
+的事件指纹，与 `reports/event_index.jsonl` 里最近若干天的历史记录比对，命中的新闻
+追加一个 `continuing` 字段（"持续关注第 N 天" + 首次出现日期 + 历史来源家族）。
+展示层由 M5/M9 负责。为什么索引必须落在 `reports/`：`data/` 每次运行开始时被清空
+重建、不跨天留存，而 `reports/` 随 gh-pages 发布并在每轮开始时恢复。
+
 密钥来源: 环境变量 ZAI_API_KEY（不硬编码、不打印）
 """
+import hashlib
 import json
 import os
 import re
 import time
 import urllib.request
+from datetime import datetime, timedelta
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent.parent
-DATA_DIR = BASE / "data"
+DEFAULT_DATA_DIR = BASE / "data"
+DATA_DIR = DEFAULT_DATA_DIR
+_DEFAULT_DATA_DIR = DEFAULT_DATA_DIR   # main() 据此判断 DATA_DIR 是否被外部（离线用例）改写
+REPORTS_DIR = BASE / "reports"
 
 GLM_API = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 GLM_MODEL = "glm-4-flash"
@@ -146,6 +157,759 @@ def apply_cross_verification(rows):
         "distinct_families": len(fams - {""}),
     }
     return rows, stats
+
+
+# ---------------------------------------------------------------------------
+# 跨天事件追踪（2026-10-05 新增）
+# ---------------------------------------------------------------------------
+# 用户痛点：日报每天独立看，看不出"这条新闻昨天已经报过"——同一个事件被当成新消息
+# 反复呈现，早上读的时候只觉得重复，也判断不出进展。
+#
+# 设计原则（按优先级）：
+#   ① **误判的代价远大于漏判**。漏判 = 少写一句"持续第 2 天"，用户看到的和今天一样；
+#      误判 = 告诉用户"这个事件已经连续 3 天了"，而它其实是三件不同的事 —— 用户会
+#      据此以为某条逻辑在被反复验证，这是**编造事实**。所以阈值一律往保守取，
+#      并且用 `confidence` 把"强匹配"和"弱匹配"分开，让展示层自己决定敢不敢写"第 N 天"。
+#   ② 模块化、可离线测：全部是纯函数 + `path=None` 注入，常量模块级（测试可改），
+#      全程不联网、不调 LLM。
+#   ③ **任何失败只能 warn**：M2 挂掉当天就没有结构化新闻，代价远大于这个功能。
+
+# 指纹算法版本。**改了归一化/阈值/比对逻辑就必须把这个数字 +1**——
+# 索引是跨天累积的，新旧指纹混在一份文件里必须能分辨（版本对不上的行会被
+# `known_fp` 跳过，宁漏不误）。
+EVENT_FP_VERSION = 1
+
+# 跨天事件追踪总开关（模块级，便于离线用例把它关掉）。
+#
+# 为什么需要它：离线用例会把 `DATA_DIR` 指到临时目录（见 tests/offline_tests.py
+# 的 M2TimeBudget），但**不会**动本模块的索引路径 —— 于是那 60 条假新闻会被写进
+# **真实的** `reports/event_index.jsonl`，污染跨天数据（这正是我第一版实现踩到的坑：
+# 跑一次 offline_tests 就在仓库里凭空多出 60 行 2026-10-05 的假记录）。
+# `main()` 在 `DATA_DIR` 被外部改写时自动跳过索引维护（不会崩，只是不维护），
+# 所以这个开关平时不需要手动关。
+EVENT_INDEX_ENABLED = True
+
+# 索引保留天数（裁剪口径）：最近 30 天。
+EVENT_INDEX_DAYS = 30
+# 索引总行数上限：超过就丢**最旧**的行（保新）。6000 行 ≈ 每天 200 条 × 30 天，
+# 对本项目当前体量（180 条/天）有 3 倍余量。
+EVENT_INDEX_MAX = 6000
+# 比对窗口：只看 `0 < 今天 - d <= 10` 天，且 `d < 今天`（不含今天）。
+# 为什么 10 天：一个事件连续 10 天还挂在新闻流里已经属于长期主题，再往前的记录
+# 与"今天这条是不是老事件"的相关性已经很弱，而窗口越宽误判概率越高。
+EVENT_WINDOW_DAYS = 10
+# 索引行里 `t` / `x` 的截断长度（`x` 直接参与相似度比对，必须固定，见 known_fp）。
+EVENT_TITLE_CHARS = 80
+EVENT_TEXT_CHARS = 200
+# `continuing.families` 最多给几个来源家族。
+EVENT_FAMILIES_MAX = 4
+
+# ---------------------------------------------------------------------------
+# 指纹阈值（保守值；选值依据、对照样例与真实语料压力测试见 `event_match`）
+# ---------------------------------------------------------------------------
+# 三条**并列**通道（任一成立即算命中，但都要先过"数字冲突硬拒"）：
+#   A 强文本关：去套话 2-gram Jaccard ≥ EVENT_JACCARD_STRONG（0.60）
+#   B 内容关  ：Jaccard ≥ 0.25 且 重叠系数 ≥ 0.45 且 **有实质共享实体**
+#   C 实体关  ：名称骨架覆盖率 ≥ 0.50 且 有同一数字（如都写"12亿元"）
+EVENT_JACCARD_STRONG = 0.60
+EVENT_JACCARD_MIN = 0.25
+EVENT_OVERLAP_MIN = 0.45
+# 通道 D（同名同额）用的稍宽门槛：它必须同时满足"≥4 字共享实体的名称" +
+# "≥4 字的同一金额"，误判面已经很窄，重叠系数放到 0.30 即可。
+EVENT_OVERLAP_WEAK = 0.30
+EVENT_NAME_WEAK = 0.33
+EVENT_NAME_ONE_WAY = 0.50
+# "实质共享实体" = 最长共享汉字串 ≥ 4 字，或名称骨架覆盖率 ≥ 0.70。
+# 为什么是 4 字：3 字只会命中"新一代""亚运会"这类**品类词**，
+# 「宁德时代发布新一代电池」vs「比亚迪发布新一代电池」就卡在 3 字上（ms=3）——
+# 那是两条不同公司、不同产品的新闻，必须拒。
+EVENT_SPAN_MIN = 4
+EVENT_NAME_MIN = 0.50
+EVENT_NAME_HI = 0.70
+# 实体关里"同一个数字"的最小长度：1~2 字的数字（"1家""2月"）到处都是，
+# 只有 ≥4 字（"12亿元""5000亿元""30356.8万人次"）才算证据。
+# 注意 3 字的"18时""9亿元""2亿元"被刻意排除在外 —— 那是**时间/泛指**数字，
+# 真实语料里"自然资源部…10月4日18时"与"水利部…10月4日18时"会因此被误判成同一事件。
+EVENT_NUM_MATCH_MIN = 4
+# 命中强度 → `confidence` 的分界：
+#   exact  = 去套话 Jaccard ≥ 0.90（几乎逐字相同）
+#   strong = 走通道 A 或 B（有长文本骨架 / 长实体的支持）
+#   weak   = 只走通道 C（措辞完全不同，全靠"同一名称 + 同一数字"）
+# 展示层只在 confidence == "high" 时写"持续关注第 N 天"是安全的。
+EVENT_EXACT_JACCARD = 0.90
+
+# 去掉这些**结构套话**后再比内容（不做分词，直接删子串）。
+# 为什么必须要这一步：财经稿的骨架高度雷同（"XX公司发布公告，同比…"），
+# 不删这些，两条讲不同事情的同板块新闻光靠"公司/发布/同比/增长"就能刷到 0.3+ 的
+# 字符相似度，直接把阈值淹掉。表里的词都是"任何一条财经稿都可能出现"的：
+# 动词/连词/时间词/体裁词/公司后缀。行业专有名词**不删**——那才是判定依据。
+EVENT_BOILERPLATE = (
+    "公司", "同比", "环比", "增长", "下降", "发布", "公告", "表示", "记者", "报道",
+    "消息", "相关", "进行", "以及", "已经", "预计", "认为", "指出", "显示", "数据",
+    "方面", "其中", "目前", "情况", "分析", "证券", "新闻", "有限", "股份", "集团",
+    "控股", "中国", "市场", "今日", "昨日", "今年", "去年", "上午", "下午", "晚间",
+    "日电", "称", "将", "已", "或", "和", "与", "及", "等", "为", "在", "的", "了",
+    "是", "有", "就", "对", "从", "到", "据",
+)
+
+# 实体候选里"太泛"的成分：机构名主干（央行/政府/委员会）、国家名、公司后缀、
+# 时间量词。含这些成分的候选串不算"名称"。
+# 为什么必须剔："中国气象局"与"水利部和中国气象局"里真正共享的只是"中国"+体裁，
+# 「国务院部署促进消费」vs「国务院部署秋冬农业生产」更是只共享"国务院"——
+# 泛词共享不能当同一事件的证据。剔掉之后，这些案例的名称覆盖率掉到 0.5 以下
+# 或最长共享串只剩 2~3 字，通道 B/C 都进不去。
+EVENT_GENERIC = (
+    "中国", "美国", "日本", "欧洲", "欧盟", "俄罗斯", "乌克兰", "全球", "国际",
+    "国家", "全国", "全网", "央行", "银行", "政府", "部门", "会议", "委员会",
+    "有限公司", "公司", "集团", "股份", "证券", "基金", "指数", "市场",
+    "月", "日", "号", "年", "时", "分", "电", "第", "届", "次",
+)
+
+# 归一化时剔掉的字符：空白 + 中英文标点（保留字母/数字/汉字，
+# 因为数字是金额/比例这类最重要的实体）。
+_EVENT_PUNCT = re.compile(
+    r"[\s\u3000!-/:-@\[-`{-~！-／：-＠［-｀｛-～、。，；：？！“”‘’"
+    r"（）《》〈〉【】〔〕—…·「」『』]+")
+# 数字实体：数字 + 可选量级词，后面再吃掉一个连续单位序列（元/亿/万/吨/人次…）。
+# 不做这一步的话「12亿元」在字符 2-gram 里只能和「12亿元」逐字相同才算共享，
+# 而实际报道里有「12亿」「12亿元」「12 亿元」三种写法。
+_EVENT_NUM = re.compile(r"\d+(?:\.\d+)?(?:[万亿千百])?(?:%|％)?")
+_EVENT_UNIT_CHARS = "元万亿千百吨人家倍个百分点月日号年季周天次辆架枚"
+_EVENT_CJK_RUN = re.compile(r"[\u4e00-\u9fff]{2,}")
+# 这些数字只是日期/序数（"第3季度"的 3），单独出现不构成"同一实体"的证据，
+# 避免两条新闻仅仅因为都提到"10月""20%"就被判成同一事件。
+_EVENT_NUM_STOP = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
+                   "11", "12", "20", "30", "50", "60", "100", "1000", "10000"}
+
+
+def event_reports_dir():
+    """索引该落在哪个 `reports/`：仓库根的 `reports/`（测试可改写 `REPORTS_DIR`）。"""
+    return REPORTS_DIR
+
+
+def event_index_path():
+    """滚动索引文件路径。每次调用都重算，便于测试改 `REPORTS_DIR`。"""
+    return REPORTS_DIR / "event_index.jsonl"
+
+
+def event_index_default_path():
+    """`main()` 用的索引路径；`EVENT_INDEX_ENABLED=False` 时返回 None（不维护索引）。"""
+    return event_index_path() if EVENT_INDEX_ENABLED else None
+
+
+def normalize_event_text(text, cap=EVENT_TEXT_CHARS):
+    """比对用的规范化文本：去掉全部空白与标点，保留汉字/字母/数字，截前 cap 字。
+
+    不做分词：中文没有空白边界，而这里的要求只是"同一事件的不同措辞要能对上"，
+    字符 n-gram 正好不依赖分词器（也不需要联网装 jieba）。
+    """
+    s = _EVENT_PUNCT.sub("", str(text or ""))
+    return s[:cap]
+
+
+def event_grams(text, n=2):
+    """字符 n-gram 集合（去重）。文本短于 n 时返回空集。"""
+    s = _EVENT_PUNCT.sub("", str(text or ""))
+    return {s[i:i + n] for i in range(0, len(s) - n + 1)}
+
+
+def _event_strip_boilerplate(text):
+    s = _EVENT_PUNCT.sub("", str(text or ""))
+    out = s[:EVENT_TEXT_CHARS]
+    for b in EVENT_BOILERPLATE:
+        out = out.replace(b, "")
+    return out
+
+
+def event_num_tokens(text, cap=EVENT_TEXT_CHARS):
+    """数字实体集合：数字 + 量级 + 连续单位。例：`12亿元` / `5000亿` / `30356.8万人次`。
+
+    超过 `EVENT_TEXT_CHARS` 的部分不参与——与 `x` 的截断口径保持一致，
+    否则会出现"索引里存了前 200 字、指纹却按全文算"的静默错位。
+    """
+    s = _EVENT_PUNCT.sub("", str(text or ""))[:cap]
+    out = set()
+    for m in _EVENT_NUM.finditer(s):
+        j = m.end()
+        while j < len(s) and s[j] in _EVENT_UNIT_CHARS:
+            j += 1
+        tok = s[m.start():j]
+        if tok and tok not in _EVENT_NUM_STOP:
+            out.add(tok)
+    return out
+
+
+def event_name_tokens(text, cap=EVENT_TEXT_CHARS):
+    """名称实体候选：先删结构套话，再取所有连续汉字串（长度 2~12）的 2/3/4-gram，
+    并剔除含 `EVENT_GENERIC` 成分的候选。
+
+    为什么用 n-gram 而不是分词：没有词典也不联网的前提下，"甲公司""宁德时代"
+    "维谛技术"这些词无法靠规则切出来，但它们的 4-gram 一定在集合里 —— 交给下游的
+    "最长共享串 ≥4 字"去筛即可。
+    为什么长度 >12 的连续汉字串整段跳过：那是无标点的长句（标题正文连排），
+    会产生上百个无意义 2-gram，把内存和比对时间都推上去。
+    """
+    s = _event_strip_boilerplate(text)
+    out = set()
+    for m in _EVENT_CJK_RUN.finditer(s):
+        run = m.group(0)
+        if len(run) > 12:
+            continue
+        for n in (4, 3, 2):
+            for i in range(0, len(run) - n + 1):
+                t = run[i:i + n]
+                if any(g in t for g in EVENT_GENERIC):
+                    continue
+                out.add(t)
+    return out
+
+
+def _event_common_span(a, b):
+    """两个串的最长公共连续片段长度。
+
+    为什么要它：线上同一实体写法经常被标点/数字切开——一条写「宁德时代」、
+    另一条因为标题里带了数字被切成「时代」。纯全等比较会把它们算成"没有共享
+    实体"，于是同一事件被判成两个。串都不长（≤12），三重循环完全够快。
+    """
+    best = 0
+    for i in range(len(a)):
+        for j in range(i + best + 1, len(a) + 1):
+            if a[i:j] in b:
+                best = j - i
+            else:
+                break
+    return best
+
+
+def _event_pair_span(a, b):
+    """两个串的"共享长度"：一方包含另一方取较短者，否则取最长公共片段。"""
+    if a in b or b in a:
+        return min(len(a), len(b))
+    return max(_event_common_span(a, b), _event_common_span(b, a))
+
+
+def _event_max_pair_span(set_a, set_b, min_len=2):
+    """两组串里最大的共享长度；都不超过 `min_len` 时返回 0。"""
+    best = 0
+    for a in set_a:
+        for b in set_b:
+            s = _event_pair_span(a, b)
+            if s > best:
+                best = s
+    return best if best >= min_len else 0
+
+
+def _event_cover_ratio(set_a, set_b):
+    """`set_a` 里有多少比例的串能在 `set_b` 里找到（共享 ≥2 字连续片段）。
+
+    2 字门槛是刻意的：1 个字（"铁""桥"）在中文里到处都是，拿它当"同一实体"等于
+    没有门槛。
+    """
+    if not set_a:
+        return 0.0
+    hit = 0
+    for a in set_a:
+        for b in set_b:
+            if _event_pair_span(a, b) >= 2:
+                hit += 1
+                break
+    return hit / len(set_a)
+
+
+def event_fingerprint(text, cap=EVENT_TEXT_CHARS):
+    """事件指纹（sha1 of 规范化文本前 cap 字）。
+
+    ⚠️ **不要用内置 `hash()`**：CPython 对 str 的 `hash()` 带进程随机盐
+    （PYTHONHASHSEED），同一段文本在两个进程里算出来的值不同 —— 索引要跨天、跨进程
+    复用，用 `hash()` 等于每天全量失效，而且这种失效是静默的（看起来只是"没匹配上"）。
+    """
+    return hashlib.sha1(normalize_event_text(text, cap).encode("utf-8")).hexdigest()
+
+
+def event_candidate(text):
+    """一条新闻的全部比对素材（算一次，供 `known_fp` / `event_match` 复用）。"""
+    norm_x = normalize_event_text(text)
+    return {
+        "x": norm_x,
+        "fp": event_fingerprint(text),
+        "g_raw": event_grams(norm_x, 2),                             # 原样 2-gram
+        "g_strip": event_grams(_event_strip_boilerplate(text), 2),    # 去套话 2-gram
+        "nm": event_name_tokens(text),
+        "nu": event_num_tokens(text),
+    }
+
+
+def known_fp(rec):
+    """索引行 → 可直接比对的素材；认不出来的行返回 None。
+
+    兼容策略（跨版本升级的必经之路，写在这里免得被当成死代码删掉）：
+      · `x` 是判定基准，缺了就跳过（旧版行 / 写坏的截断行）；
+      · `fp` 与按 `x` 现算的值不一致时把 `fp` 清空 —— 于是这一行走不到"指纹完全
+        一致"的快通道，退化为纯 n-gram + 实体判定。宁可多算一点，也不能拿旧算法
+        或别人文本的指纹去声称"强匹配"；
+      · `v != EVENT_FP_VERSION` 的行一律跳过：算法都换了，旧行的相似度语义不可比。
+    """
+    if not isinstance(rec, dict):
+        return None
+    if rec.get("v") is not None and rec.get("v") != EVENT_FP_VERSION:
+        return None
+    x = str(rec.get("x") or "")
+    if not x:
+        return None
+    fp = str(rec.get("fp") or "")
+    if fp and fp != event_fingerprint(x, len(x)):
+        fp = ""
+    return {"x": x, "fp": fp, "nm": event_name_tokens(x, len(x)),
+            "nu": event_num_tokens(x, len(x)),
+            "g_raw": event_grams(x, 2),
+            "g_strip": event_grams(_event_strip_boilerplate(x), 2)}
+
+
+def _event_jaccard(sa, sb):
+    return len(sa & sb) / len(sa | sb) if (sa and sb) else 0.0
+
+
+def _event_overlap(sa, sb):
+    return len(sa & sb) / min(len(sa), len(sb)) if (sa and sb) else 0.0
+
+
+def event_match(cand, hist, fp=None):
+    """候选新闻 `cand` 与历史记录 `hist` 是否同一事件。
+
+    返回 `(level, score, detail)`，level ∈ {None, "exact", "strong", "weak"}；
+    `detail` 是判据本身的数字（不是"看着像"），便于事后核查与调阈值。
+
+    ## 判据
+    0. **数字冲突硬拒**：双方都含数字实体，却没有任何一对能互含/共享 2 字以上
+       —— 直接判不匹配。两个不同的事件几乎不可能共用一个金额/比例，
+       而"同一板块"的两条新闻几乎必然带不同的数字。这是最便宜也最有效的一道闸门。
+       反例守卫：「甲公司拟回购2亿元」vs「甲公司拟减持2亿元」→ 数字相同、名称相同，
+       但回购与减持是反向事件，靠下面通道 D 的 Jaccard 下限挡住。
+    1. **通道 A（强文本）**：去套话 2-gram Jaccard ≥ 0.60（`EVENT_JACCARD_STRONG`）。
+       措辞高度一致，多数是同一稿的两次转载。
+    2. **通道 B（内容）**：Jaccard ≥ 0.25 且 重叠系数 ≥ 0.45 且
+       名称骨架覆盖率 ≥ 0.50 且（最长共享名称串 ≥ 4 字 或 覆盖率 ≥ 0.70）。
+    3. **通道 D（同名同额）**：最长共享名称串 ≥ 4 字 且 名称覆盖率（双向取小）≥ 0.33
+       且 单向覆盖率 ≥ 0.50 且 有一对**互含**且 ≥4 字的相同数字，
+       且 Jaccard ≥ 0.25、重叠系数 ≥ 0.30。
+       用于"一条是快讯、一条是详稿"这种措辞差异较大、但公司与金额都对得上的情况
+       （真实案例：「英国国家电网…希舍姆1号核电站…停止运行」vs「…11号核反应堆…
+       已恢复并网」）。为什么要用"单向覆盖率"：短快讯里的实体能全部出现在详稿里，
+       反过来则不成立（详稿多出来的实体不该扣分）。
+
+    ## 阈值是怎么选的
+    在**真实语料**（data/structured_news.json，180 条 × 两两 = 14706 对，
+    其中共享实体的 2720 对）上逐条人眼核对：
+      · 通道 A 命中的每一对都是同一事件（多为同一天 M1 跨源去重后的残留近似稿）；
+      · 反面样例「乙公司发布三季报」vs「丙公司获补贴」的 Jaccard 是 0.00，
+        「国务院部署促进消费」vs「国务院部署秋冬农业生产」是 0.19，
+        都远在 0.25 之下 —— 0.25 落在两者之间很宽的空带里；
+      · 最难的对照「宁德时代发布新一代电池」vs「比亚迪发布新一代电池」：
+        Jaccard 0.364、覆盖率 0.50、最长共享串只有 3 字（"新一代"）→
+        A/B/D 三条通道全部进不去。**这正是把"最长共享串"门槛定在 4 字的原因**；
+      · 「光伏组件价格上涨」vs「光伏组件价格下跌」：Jaccard 0.294、覆盖率 0.50，
+        最长共享串 4 字（"光伏组件"）→ 通道 B 一度误判，所以 B 的名称覆盖率
+        门槛从 0.50 提到 0.70（该例只有 0.50）。同类的「中信证券看好银行板块」vs
+        「看好券商板块」也一并拦下；
+      · 「自然资源部…地质灾害预警」vs「水利部…山洪灾害预警」：两条预警同一天发布、
+        时间窗与落区都不同 —— 通道 D 的"数字 ≥4 字"门槛就是为了不让"18时/20时"
+        这种 3 字时间数字把它们撮合到一起。
+    用**已落地的实现**重跑真实语料（172 条 / 14706 对，其中共享实体 2720 对）：
+    **15 对命中**，逐条人眼核对全部是同一事件的不同报道（多数是 M1 跨源去重后
+    同一天残留的近似稿），**没有一条误判**。
+
+    ## 会漏判什么（已知，且接受）
+      · 「甲公司中标12亿元订单」vs「甲公司获12亿元大单，机构看好」这种**极短**标题
+        （双方正文都只有 10 来字）：Jaccard 0.19、名称覆盖率 0.16、最长共享名称串
+        2 字（"公司"）—— 三条通道全部进不去。原因是**删结构套话时"公司后缀"被删掉**，
+        共享的"甲公司"在字面上变成了"甲中"/"甲获"。要救它只能把"公司"重新算作实体，
+        而那样做会让「乙公司发布三季报」这类只共享泛化后缀的对也能通过，
+        真实语料上的误判会立刻涨起来。取舍是**故意放弃**这一类超短标题。
+      · 同一事实用不同数字口径（"净利 +20%" vs "净利增两成"）——数字冲突硬拒。
+      · 「国家能源局发布新型储能政策」vs「新型储能政策落地：能源局明确…」这类
+        只有品类词重叠、没有公司名/金额的行业稿。
+    这些都是"少标一天持续关注"，代价远小于把三件不同的事说成同一件。
+    """
+    if not isinstance(cand, dict) or not isinstance(hist, dict):
+        return None, 0.0, ""
+    nu_a, nu_b = cand.get("nu") or set(), hist.get("nu") or set()
+    # 只有**互含**才算"同一个数字"：'12亿元' 与 '12亿元' 互含；'18时' 与 '10月4日18时'
+    # 也互含，所以再用下面的长度门槛把它挡住。
+    nu_span = max([min(len(t), len(x)) if (t in x or x in t) else 0
+                   for t in nu_a for x in nu_b] or [0])
+    if nu_a and nu_b and not (nu_a & nu_b) and nu_span == 0:
+        return None, 0.0, ""                      # 0. 数字冲突
+    gs_a, gs_b = cand.get("g_strip") or set(), hist.get("g_strip") or set()
+    jb = _event_jaccard(gs_a, gs_b)
+    ov = _event_overlap(gs_a, gs_b)
+    jr = _event_jaccard(cand.get("g_raw") or set(), hist.get("g_raw") or set())
+    nm_a, nm_b = cand.get("nm") or set(), hist.get("nm") or set()
+    nm_a_to_b = _event_cover_ratio(nm_a, nm_b)
+    nm = min(nm_a_to_b, _event_cover_ratio(nm_b, nm_a))
+    ms = _event_max_pair_span(nm_a, nm_b, min_len=3)
+    fp = fp if fp is not None else cand.get("fp")
+    fp_hit = bool(fp) and fp == hist.get("fp")
+    detail = (f"jb={jb:.2f} ov={ov:.2f} nm={nm:.2f} nm1={max(nm_a_to_b, _event_cover_ratio(nm_b, nm_a)):.2f} "
+              f"ms={ms} nu={nu_span} jr={jr:.2f} fp={'hit' if fp_hit else 'miss'}")
+    if fp_hit and jr >= EVENT_EXACT_JACCARD:
+        return "exact", 1.0, detail
+    if jb >= EVENT_JACCARD_STRONG:
+        return ("exact" if jb >= EVENT_EXACT_JACCARD and ov >= EVENT_EXACT_JACCARD
+                else "strong"), jb, detail
+    if (jb >= EVENT_JACCARD_MIN and ov >= EVENT_OVERLAP_MIN
+            and nm >= EVENT_NAME_MIN and (ms >= EVENT_SPAN_MIN or nm >= EVENT_NAME_HI)):
+        return "strong", jb, detail
+    if (jb >= EVENT_JACCARD_MIN and ov >= EVENT_OVERLAP_WEAK
+            and nm >= EVENT_NAME_WEAK and max(nm_a_to_b, _event_cover_ratio(nm_b, nm_a)) >= EVENT_NAME_ONE_WAY
+            and ms >= EVENT_SPAN_MIN and nu_span >= EVENT_NUM_MATCH_MIN):
+        return "weak", nm, detail
+    return None, 0.0, detail
+
+
+# ---------------------------------------------------------------------------
+# 滚动索引的读写（唯一跨天留存手段）
+# ---------------------------------------------------------------------------
+
+def _event_index_load_raw(path):
+    """读索引 → 行 dict 列表。文件不存在/读不到 → []（**静默**，不是错误）。"""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:                                     # noqa: BLE001
+        return []
+    out = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        try:
+            o = json.loads(s)
+        except json.JSONDecodeError:
+            continue            # 坏行静默丢弃：旁路数据，不值得每天刷 warn
+        if isinstance(o, dict):
+            out.append(o)
+    return out
+
+
+def _event_index_write(path, recs):
+    """整文件重写（先写 .tmp 再 replace，与 picks.py::write_status 同风格）。
+
+    失败**只 warn**，绝不抛出：索引写不进去的后果只是"明天认不出今天"，
+    而 M2 主流程失败的后果是当天没有结构化新闻。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    try:
+        tmp.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in recs) + "\n",
+                       encoding="utf-8")
+        tmp.replace(path)
+    except Exception as e:                                # noqa: BLE001
+        print(f"[warn] 事件索引写入失败（不影响 M2 主流程，今天的事件明天认不出来）: "
+              f"{type(e).__name__}: {str(e)[:60]}")
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except Exception:                                 # noqa: BLE001
+            pass
+
+
+def _event_index_retain(lines, today_s):
+    """索引行 → (要保留的行, 是否需要重写文件)。
+
+    规则：**最近 EVENT_INDEX_DAYS 天** 且 **总数不超过 EVENT_INDEX_MAX**；
+    超上限时丢**最旧**的（保新）。与 picks.py::_news_roll_retain 同口径，
+    但这里不补字段——索引行是当场写出来的，格式自己说了算。
+
+    边界：`EVENT_INDEX_MAX <= 0` 视为"不设上限"（避免把整个文件裁成空）；
+    日期解析不出来的行一并丢弃（它的 `d` 不可信，且会污染窗口判断）。
+    """
+    try:
+        newest = datetime.strptime(str(today_s), "%Y-%m-%d").date()
+    except Exception:                                     # noqa: BLE001
+        newest = datetime.now().date()
+    oldest = newest - timedelta(days=EVENT_INDEX_DAYS - 1)
+    keep = []
+    for it in lines:
+        if not isinstance(it, dict):
+            continue
+        try:
+            day = datetime.strptime(str(it.get("d") or ""), "%Y-%m-%d").date()
+        except Exception:                                 # noqa: BLE001
+            continue
+        if day > newest or day < oldest:
+            continue
+        keep.append(it)
+    trimmed = len(keep) != len(lines)
+    limit = int(EVENT_INDEX_MAX or 0)
+    if limit > 0 and len(keep) > limit:
+        keep = keep[-limit:]                              # 保新丢旧
+        trimmed = True
+    return keep, trimmed
+
+
+def event_index_read(today_s, path=None, days=EVENT_WINDOW_DAYS):
+    """取"参与比对"的历史记录：`d < today_s` 且 `today_s - d <= days` 天。
+
+    不含今天：拿今天的记录跟今天比对，只会把**同一天**的多篇报道算成"持续关注"。
+    按日期降序（最近的在最前）。同 `(d, fp)` 只留一条。
+    """
+    path = Path(path) if path is not None else event_index_path()
+    try:
+        newest = datetime.strptime(str(today_s), "%Y-%m-%d").date()
+    except Exception:                                     # noqa: BLE001
+        return []
+    oldest = newest - timedelta(days=int(days))
+    out, seen = [], set()
+    for it in _event_index_load_raw(path):
+        d = str(it.get("d") or "")
+        try:
+            day = datetime.strptime(d, "%Y-%m-%d").date()
+        except Exception:                                 # noqa: BLE001
+            continue
+        if not (oldest <= day < newest):
+            continue
+        key = (d, str(it.get("fp") or ""))
+        if key in seen:
+            continue           # 同一天同一指纹只留一条（索引本身也不该重复写）
+        seen.add(key)
+        out.append(it)
+    out.sort(key=lambda r: str(r.get("d") or ""), reverse=True)
+    return out
+
+
+def event_index_append(rows, today_s, path=None):
+    """把今天的事件记录**追加**进索引；`(d, fp)` 已存在则跳过。
+
+    `rows` 是 `[{"fp":…, "t":…, "f":[…], "fn":[…], "x":…}, …]`（见 `event_record`）。
+    返回实际新增行数。
+
+    写入策略：能纯追加就纯追加（`open(path,"a")`，索引是每天增长的小文件）；
+    只有需要**裁剪**（超 30 天 / 超 EVENT_INDEX_MAX）时才整文件重写
+    （.tmp → replace）。两种情况都在 try 里，写失败只 warn、返回 0 ——
+    上层绝不能因为这个功能挂掉。
+    """
+    path = Path(path) if path is not None else event_index_path()
+    lines = _event_index_load_raw(path)
+    existing = {(str(it.get("d") or ""), str(it.get("fp") or "")) for it in lines}
+    added = 0
+    today = str(today_s)
+    try:
+        # 日期必须可解析：写进去的行最终要过 _event_index_retain 的日期裁剪，
+        # 脏日期会在下一次追加时凭空把**整个文件**裁空（实测过一次，很吓人）。
+        if today:
+            datetime.strptime(today, "%Y-%m-%d")
+    except Exception:                                     # noqa: BLE001
+        print(f"[warn] 事件索引未写入：today_s 不是合法日期（{today_s!r}）"
+              f"—— 不影响 M2 主流程")
+        return 0
+    fresh = []
+    for r in (rows or []):
+        if not isinstance(r, dict):
+            continue
+        fp = str(r.get("fp") or "")
+        x = str(r.get("x") or "")
+        if not fp or not x:
+            continue
+        if today and str(r.get("d") or today) > today:
+            continue                    # 未来日期（脏数据）不进索引
+        if (today, fp) in existing:
+            continue                    # 同一 (d, fp) 不重复写
+        rec = {"d": today, "fp": fp, "v": EVENT_FP_VERSION,
+               "t": str(r.get("t") or "")[:EVENT_TITLE_CHARS],
+               "f": [str(s)[:24] for s in (r.get("f") or [])][:4],
+               # 家族**展示名**（"新浪财经"），与 `f` 的内部 ID（"sina"）并存：
+               # 展示层要的是前者，跨版本兼容判断仍可用后者。
+               "fn": [str(s)[:40] for s in (r.get("fn") or [])][:4],
+               "x": x[:EVENT_TEXT_CHARS]}
+        lines.append(rec)
+        fresh.append(rec)
+        existing.add((today, fp))
+        added += 1
+    keep, need_rewrite = _event_index_retain(lines, today_s)
+    if not added and not need_rewrite:
+        return 0
+    try:
+        if added and not need_rewrite:
+            path.parent.mkdir(parents=True, exist_ok=True)     # reports/ 不存在时自动建
+            with open(path, "a", encoding="utf-8") as f:
+                f.write("\n".join(json.dumps(r, ensure_ascii=False) for r in fresh) + "\n")
+        else:
+            _event_index_write(path, keep)                     # 只有裁剪才整文件重写
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[warn] 事件索引追加失败（不影响 M2 主流程，今天的事件明天认不出来）: "
+              f"{type(e).__name__}: {str(e)[:60]}")
+        return 0
+    return added
+
+
+def _event_family_display(source):
+    """来源名 → 家族**展示名**。
+
+    `families` 要给用户看，所以不能塞内部 ID（"sina"）。做法：命中
+    `FAMILY_PREFIXES` 时截出对应的主干前缀，未知源用它自己的规范化名字
+    （与 `source_family` 的保守默认一致）。
+    """
+    s = (source or "").strip()
+    if not s:
+        return ""
+    flat = s
+    for joiner in _FAMILY_JOINERS:
+        flat = flat.replace(joiner, "")
+    low = flat.lower()
+    for prefix, _family in FAMILY_PREFIXES:
+        if low.startswith(prefix.lower()):
+            return flat[:len(prefix)]
+    return flat[:24]
+
+
+def _event_families_of(names):
+    """来源名列表 → 去重后的家族展示名列表（保序）。"""
+    out, seen = [], set()
+    for s in (names or []):
+        if not isinstance(s, str) or not s.strip():
+            continue
+        fam = source_family(s)
+        if not fam or fam in seen:
+            continue
+        seen.add(fam)
+        disp = _event_family_display(s) or fam
+        if disp not in out:
+            out.append(disp)
+    return out
+
+
+def event_record(n, today_s):
+    """一条新闻 → 索引行素材。文本为空时返回 None（这种条目进不了索引）。"""
+    text = str(n.get("text") or "").strip()
+    if not text:
+        return None
+    return {"d": str(today_s), "fp": event_fingerprint(text),
+            "t": text[:EVENT_TITLE_CHARS], "x": normalize_event_text(text),
+            "f": [source_family(s) for s in event_sources(n)][:4],
+            "fn": _event_families_of(event_sources(n))[:4]}
+
+
+def continuing_for(cand, hist, today_s):
+    """候选新闻 → `continuing` 字段内容；没有命中任何历史事件时返回 None。
+
+    ## 口径（三个日期必须能互相解释）
+      · `days` = 历史里匹配到的**不同日期数** + 1（含今天）。同一天命中 3 条只算 1 天。
+      · `first_date` = 其中**最早**的日期。注意这是**索引建立以来**能看到的首次日期
+        （索引只留 30 天、窗口只比 10 天），不是"这个事件在世界上第一次出现"的日期 ——
+        展示层写"持续关注第 N 天"是对的，写"该事件始于 X 日"就过度解读了。
+      · `prev_date` = 其中**最近**的日期，必然 < 今天（窗口本身不含今天）。
+      · `families` = 历史命中记录里出现过的独立来源家族展示名，最多
+        `EVENT_FAMILIES_MAX` 个。
+      · `confidence` = 只要有一条命中是 `exact`/`strong` 就是 "high"，全是 `weak`
+        才是 "low"。规则刻意简单：展示层只需要回答"敢不敢写第 N 天"，
+        而 weak 意味着两条新闻措辞差异大到只能靠"同一名称 + 同一数字"判定 ——
+        那种情况误判概率明显更高。
+    """
+    if not isinstance(cand, dict) or not hist:
+        return None
+    matched, levels = [], []
+    for h in hist:
+        rec = known_fp(h)
+        if rec is None:
+            continue
+        level, _score, _detail = event_match(cand, rec, fp=cand.get("fp"))
+        if level is None:
+            continue
+        matched.append(h)
+        levels.append(level)
+    if not matched:
+        return None
+    today = str(today_s)
+    days = sorted({str(r.get("d") or "") for r in matched if str(r.get("d") or "")})
+    days = [d for d in days if d and d < today]
+    if not days:
+        return None
+    fams, seen = [], set()
+    for r in matched:
+        names = r.get("fn") or r.get("f") or []
+        if isinstance(names, str):
+            names = [names]
+        for nm in names:
+            nm = str(nm or "")
+            if nm and nm not in seen:
+                seen.add(nm)
+                fams.append(nm)
+    return {
+        "days": len(days) + 1,
+        "first_date": days[0],
+        "prev_date": days[-1],
+        "families": fams[:EVENT_FAMILIES_MAX],
+        "confidence": "high" if any(l in ("exact", "strong") for l in levels) else "low",
+    }
+
+
+def compute_continuing(rows, hist, today_s):
+    """**纯计算**：给保留下来的新闻打 `continuing`，并算出今天要写进索引的记录。
+
+    返回 `(stats, records)`。stats 只有 {new, continuing, max_days}；
+    `records` 是待写索引的行（不去重、不落盘，落盘由 `event_index_append` 负责）。
+
+    拆出来是为了让"只要字段、不要落盘"的场景（离线用例、以后可能的只读模式）
+    复用同一套判定，而不是各写一份。
+    """
+    new_cnt = cont_cnt = 0
+    max_days = 0
+    records, seen_fp = [], set()
+    for n in (rows or []):
+        if not isinstance(n, dict):
+            continue
+        text = str(n.get("text") or "").strip()
+        if not text:
+            continue
+        cand = event_candidate(text)
+        conf = continuing_for(cand, hist, today_s)
+        if conf:
+            n["continuing"] = conf
+            cont_cnt += 1
+            max_days = max(max_days, conf["days"])
+        else:
+            # 首次出现：**不加** `continuing` 键（不是写 null）。理由：180 条新闻里
+            # 只有少数是持续事件，写 null 会让输出体积凭空多出上百个空字段。
+            n.pop("continuing", None)
+            new_cnt += 1
+        if cand["fp"] in seen_fp:
+            continue                      # 同一天同一指纹只写一条
+        seen_fp.add(cand["fp"])
+        rec = event_record(n, today_s)
+        if rec:
+            records.append(rec)
+    return {"new": new_cnt, "continuing": cont_cnt, "max_days": max_days}, records
+
+
+def track_continuing_events(rows, today_s, path=None):
+    """对**保留下来的**新闻逐条做跨天事件追踪，并维护滚动索引。
+
+    必须在 `apply_cross_verification` **之后**调用：那时每条新闻已经有
+    `verified` / `sources`，`families` 才能反映"这个事件历史上被哪几家独立来源报道过"。
+
+    返回 `(rows, stats)`：
+      stats = {"new": 新事件条数, "continuing": 持续关注条数, "max_days": 最长第 N 天,
+               "index_added": 实际写入索引的行数}
+
+    先读后写（读的是"今天以前"的记录，所以不会被本轮的写入影响）。
+    同一天内多条命中同一历史事件：**都标**（它们确实是对同一事件的多篇报道），
+    但索引里只写一条 `(d, fp)` —— 由 `event_index_append` 的去重保证。
+
+    ⚠️ `path=None` 的含义是"用默认索引路径"，**不是**"不落盘"。想只算字段不写文件
+    的调用方请直接用 `compute_continuing`（`main()` 在离线环境下就是这么做的）。
+    """
+    path = Path(path) if path is not None else event_index_path()
+    hist = event_index_read(today_s, path=path)
+    stats, records = compute_continuing(rows, hist, today_s)
+    added = 0
+    try:
+        added = event_index_append(records, today_s, path=path)
+    except Exception as e:                                # noqa: BLE001
+        # 理论上 append 内部已经吞掉异常；这里再兜一层，防止将来有人往上面加东西。
+        print(f"[warn] 事件索引维护失败（不影响 M2 主流程）: "
+              f"{type(e).__name__}: {str(e)[:60]}")
+    stats["index_added"] = added
+    return rows, stats
+
 
 # prefilter 的优先组：先占 max_for_llm 的名额，再由其余类别按时间倒序补满。
 # `announcement` 是 M1 巨潮公告的 category 提示（不是 M2 的最终分类，最终仍由
@@ -632,6 +1396,31 @@ def main():
     out, verify_stats = apply_cross_verification(out)
     out.sort(key=lambda x: x["time"], reverse=True)
 
+    # 跨天事件追踪（2026-10-05 新增）：位置必须在 apply_cross_verification **之后**
+    # （那时才有 verified/sources），且只处理保留下来的（keep=true）新闻。
+    # 整块套 try：它是**附加信息**，失败绝不能连累当天有没有结构化新闻。
+    #
+    # ⚠️ `DATA_DIR` 被外部改写（离线用例）时**整块跳过**，不是把 path 传成 None：
+    # 本模块的约定是"path=None → 用默认路径"，传 None 等于照样写进真实索引。
+    # 这个坑我踩过一次 —— 跑一遍 offline_tests 就在仓库的 reports/ 里凭空多出
+    # 60 行 `测试源` 的假新闻。见 EVENT_INDEX_ENABLED 的注释。
+    today_s = time.strftime("%Y-%m-%d")
+    idx_path = event_index_default_path() if DATA_DIR == _DEFAULT_DATA_DIR else None
+    try:
+        if idx_path is None:
+            # 只算字段、不落盘：直接走纯计算版（不能传 path=None，那是"用默认路径"）
+            print("[warn] DATA_DIR 被改写（离线/测试环境）→ 本轮不维护事件索引，"
+                  "只计算 continuing 字段")
+            stats, _records = compute_continuing(out, [], today_s)
+            track_stats = {"new": stats["new"], "continuing": stats["continuing"],
+                           "max_days": stats["max_days"], "index_added": 0}
+        else:
+            out, track_stats = track_continuing_events(out, today_s, path=idx_path)
+    except Exception as e:                                # noqa: BLE001
+        print(f"[warn] 跨天事件追踪整体失败（不影响 M2 主流程与输出文件）: "
+              f"{type(e).__name__}: {str(e)[:80]}")
+        track_stats = {"new": 0, "continuing": 0, "max_days": 0, "index_added": 0}
+
     out_path = DATA_DIR / "structured_news.json"
     out_path.write_text(json.dumps({
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -645,6 +1434,12 @@ def main():
         "llm_skipped_by_budget": budget_skipped,
         "unmatched_rows": unmatched_rows,
         "verify_stats": verify_stats,
+        # 2026-10-05 新增（纯附加）：跨天事件追踪口径。
+        # continuing_* 供展示层与体检直接用；event_index_added 反映索引到底写进去没有
+        # （写不进去时它会低于当天新闻数 —— 那是"明天认不出今天"的唯一可见信号）。
+        "continuing_count": track_stats["continuing"],
+        "continuing_max_days": track_stats["max_days"],
+        "event_index_added": track_stats["index_added"],
         "news": out,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -673,6 +1468,11 @@ def main():
     print(f"LLM 批次: {llm_batches} 批，失败 {llm_failed_batches} 批，"
           f"未匹配行 {unmatched_rows} 条")
     print(f"交叉验证: {verify_stats}")
+    # 事件追踪摘要（2026-10-05）：一行说清"今天多少条是老事件"。
+    # 索引写入数与当天条数不一致时说明索引没写全（写失败只 warn，这里再暴露一次）。
+    print(f"事件追踪: 新事件 {track_stats['new']} 条 / 持续关注 "
+          f"{track_stats['continuing']} 条（最长第 {track_stats['max_days']} 天）"
+          f"[索引新增 {track_stats['index_added']} 行 → {idx_path or '（本轮未维护索引）'}]")
     print(f"输出 → {out_path}")
 
 

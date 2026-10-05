@@ -72,6 +72,16 @@ M10 候选清单与事后复盘模块 — 把 M3 的判断变成可检验的记�
       最早一档，所以通常只有 1~6 条）；没有待复查候选时**一次都不调**。
     · 失败（ds_chat 抛错 / 解析不出）一律 null + 一行 warn，**绝不让 M10 失败**；
       `--probe` 不碰它（probe 不依赖 DeepSeek）。
+14. **相关板块的成分股**（2026-10-05 用户第三优先级，轻量版）：候选原先只能从
+    "今天新闻里提到的个股"里挑 → 天然偏向事件驱动/情绪票，并系统性错过"板块在动、
+    但这家公司今天没上新闻"的票。故：新闻 `board` 字段按频次取前
+    CONSTITUENT_MAX_BOARDS(3) 个 → match_board 匹配 90.BKxxxx → 取该板块成分股
+    （沪深 A 股、剔 ST/退市、按成交额降序取前 10）→ 作为**额外候选来源**加进
+    pm/am 两个 prompt（各一节，带"依据不强的宁可不选 + 选中必须在 logic 里说明
+    它与哪条新闻/板块动向有关"的硬约束；新增体积 ≤ CONSTITUENT_SECTION_MAX_BYTES）。
+    **不接量化筛选器**（那是重量版，本次不做）。三道保险：只增材料不放闸门、
+    失败只 warn（prompt 里不含该板块）、当天缓存 reports/picks/constituents_<日期>.json
+    命中即零请求（与 boards.json 同目录、随 gh-pages 跨天留存、reports/ 本就 gitignore）。
 
 密钥来源: 环境变量 DEEPSEEK_API_KEY
 """
@@ -145,6 +155,56 @@ BOARD_LIST_API = ("https://push2.eastmoney.com/api/qt/clist/get"
 # M4._get_json 不打备用域名（那层循环在 fetch_quote 自己身上），故这里自己走一遍
 BOARD_LIST_MIRROR = BOARD_LIST_API.replace("//push2.eastmoney.com", "//push2delay.eastmoney.com")
 BOARD_TYPES = ("2", "3")      # 2=行业板块 3=概念板块
+
+# ---------------------------------------------------------------- 板块成分股
+# 「新闻里提到的板块 → 该板块的成分股」作为**额外候选来源**喂给选股 prompt
+# （2026-10-05 用户第三优先级，轻量版：**不接量化筛选器**）。
+# 动机：候选原先只能从"今天新闻里提到的个股"里挑 —— 系统因此只能在"今天有新闻的
+# 票"里选，天然偏向事件驱动/情绪票，且系统性错过"板块在动、但这家公司今天没上
+# 新闻"的票。
+# 三条底线（实现见 get_constituents / _constituents_section）：
+#   ① 成分股只是**新增材料**，不放开"只能从给定材料里选"那道闸门；
+#   ② 不为了凑数而降质：prompt 里写明"依据不强的宁可不选"，且选中的成分股必须在
+#      logic 里说明它与哪条新闻/板块动向有关（可追溯）；
+#   ③ 任何取数失败只 warn + 该板块不进 prompt，**绝不让 M10 失败**。
+CONSTITUENT_MAX_BOARDS = 3     # 取新闻 board 字段里出现频次最高的 3 个板块。
+# 为什么是 3：① prompt 体积（3×10 只 ≈ 2KB，见 CONSTITUENT_SECTION_MAX_BYTES）；
+# ② 频次第 4 名往后普遍只有 1~2 条新闻提到，板块动向本身没有"多来源"支撑，喂进去
+# 只是噪声；③ 与 MAX_STOCKS=6 配比合理（每板块最多 10 只备选，6 条候选不至于被
+# 单一板块垄断）。
+CONSTITUENT_PER_BOARD = 10     # 每板块按成交额降序取前 10 只（10 > MAX_STOCKS，够挑）
+CONSTITUENT_FETCH_PZ = 40      # 一页取 40 只再本地排序：接口按 fid=f6 降序返回，
+                               # 40 只足够在剔除 ST/退市/非沪深后仍凑满 10 只
+CONSTITUENT_NET_MAX = 8        # 单次调用最多 8 次成分股请求（3 板块 + 备用域名/容错）
+CONSTITUENT_SECTION_MAX_BYTES = 2560   # prompt 新增部分的体积上限（2.5KB）
+
+# 盘前（am）**默认不喂**成分股 —— 这是 Lead 看了实测证据后的决定，不是遗漏：
+#
+# 东财板块成分股是「**概念标签**」集合，不等于产业链相关。实测 `核能（BK0577）`
+# 按成交额排序的前 10 只里只有中国核电算核能，其余是光智科技（光学）、
+# 康强电子（半导体封装）、长江电力（水电）、巨轮智能（轮胎）、杰瑞股份（油服）…
+#
+# 而 am 那批对外叫「今日潜力个股（推荐）」、当天开盘前就要被用户拿去用、当天收盘
+# 就被回填评分 —— 给它喂一份"板块在动但公司今天没上新闻"的名单，模型只能写出
+# 板块动向（写不出"哪条新闻"），正好削弱了盘前清单最要紧的**可追溯性**。
+# pm 那批是收盘后的事后记录、允许"逻辑链"，容错更高，所以只喂 pm。
+#
+# 想打开：把下面改成 True 即可（并在 CHANGELOG/README 里说明理由）。
+CONSTITUENT_FOR_AM = False
+# 东财板块成分股接口（2026-10-05 本机实测）：
+#   GET 该 URL(fs=b:BK1036+f:!50) → data.total=187、data.diff=40 行；行内字段
+#   f12=代码 f14=名称 f2=现价 f3=涨跌幅(%) f6=成交额(元) f20=总市值(元)，且服务端
+#   已按 f6 降序（寒武纪 86.9亿 > 兆易创新 86.5亿 > 长鑫科技 64.1亿）。
+# 只走 M4._get_json（主域名 + push2delay 备用域名），**不新写 HTTP 客户端**。
+# 关于 ut 参数：实测不带 ut 的同一条 URL 首次 RemoteDisconnected、随后重试也成功，
+#   带 ut 那次一次就返回 187 行 —— 失败更像 push2 按 IP 的间歇性限流，ut 是东财
+#   web 端的常规参数、带上无副作用，故保留（与 build_board_map 一样自己走备用域名）。
+CONSTITUENT_API = ("https://push2.eastmoney.com/api/qt/clist/get"
+                   "?pn=1&pz={pz}&po=1&np=1&fltt=2&invt=2&fid=f6"
+                   "&fs=b:{bk}+f:!50&fields=f12,f14,f2,f3,f6,f20"
+                   "&ut=bd1d9ddb04089700cf9c27f6f7426281")
+CONSTITUENT_API_MIRROR = CONSTITUENT_API.replace(
+    "//push2.eastmoney.com", "//push2delay.eastmoney.com")
 
 # ---------------------------------------------------------------- 交易日历常量
 # 交易日历取数端点（东方财富沪深300日K线）：
@@ -1115,6 +1175,304 @@ def is_sh_sz_a(code):
     return bool(re.fullmatch(r"[603]\d{5}", code or ""))
 
 
+# ------------------------------------------------------------ 板块成分股取数
+
+def board_freq(news, k=CONSTITUENT_MAX_BOARDS):
+    """新闻 → [(板块名, 出现条数)]，按频次降序取前 k 个。
+
+    板块名只认 `data/structured_news.json` 里每条新闻的 `board` 字段：它是 M2 用
+    normalize_boards() 清洗过的结构化标签（公司名/事件类型/占位符都已被剔掉），
+    比从正文里抽词可靠得多。空值跳过。
+    频次相同时按名字排序 —— 同一份材料每次取到的板块必须完全一样，否则当天缓存
+    的命中率与"为什么这几个板块"都无法复现。
+    """
+    freq = {}
+    for n in news or []:
+        if not isinstance(n, dict):
+            continue
+        for b in (n.get("board") or []):
+            b = str(b or "").strip()
+            if b:
+                freq[b] = freq.get(b, 0) + 1
+    return sorted(freq.items(), key=lambda kv: (-kv[1], kv[0]))[:k]
+
+
+def _num(v):
+    """接口字段 → float；'-'、''、None 等一律 None（停牌/无成交时东财给 '-'）。"""
+    try:
+        if v is None or v == "" or v == "-":
+            return None
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pick_constituents(rows):
+    """接口行 → 过滤 + 成交额降序、每板块最多 CONSTITUENT_PER_BOARD 只。
+
+    过滤（缺一不可）：
+      · 沪深 A 股 —— 复用 is_sh_sz_a（北交所 4/8、B 股 2/9、港股 5 位码、美股字母
+        一律剔除），这条与 record() 的入账闸门同一判据；
+      · 非 ST/*ST/退市 —— 名称含 "ST" 或 "退"（`*ST 某股`、`某某退`）；
+      · 成交额（f6）可解析 —— 停牌给 '-'，排序与"有多活跃"都用不上它。
+    排序：成交额降序，同额按代码升序（可复现）。
+    """
+    out = []
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        code = str(r.get("f12") or "").strip()
+        name = str(r.get("f14") or "").strip()
+        if not code or not name or not is_sh_sz_a(code):
+            continue
+        if "ST" in name or "退" in name:
+            continue
+        amount = _num(r.get("f6"))
+        if amount is None:
+            continue
+        out.append({"code": code, "name": name,
+                    "price": _num(r.get("f2")),
+                    "change_pct": _num(r.get("f3")),
+                    "amount": amount,
+                    "mktcap": _num(r.get("f20"))})
+    out.sort(key=lambda s: (-s["amount"], s["code"]))
+    return out[:CONSTITUENT_PER_BOARD]
+
+
+def fetch_constituents(bkcode):
+    """板块代码（BKxxxx）→ 成分股列表（已过滤排序，最多 CONSTITUENT_PER_BOARD 只）。
+
+    与 build_board_map 同一条取数风格：主域名失败就自己走一遍备用域名（M4._get_json
+    不打备用域名，那层循环在 fetch_quote 自己身上）。两个域名都失败返回 [] —— 调用方
+    只 warn，绝不让 M10 失败。
+    """
+    err = None
+    for api in (CONSTITUENT_API, CONSTITUENT_API_MIRROR):
+        try:
+            d = M4._get_json(api.format(bk=bkcode, pz=CONSTITUENT_FETCH_PZ))
+        except Exception as e:
+            err = e
+            continue
+        rows = ((d or {}).get("data") or {}).get("diff") or []
+        picked = _pick_constituents(rows)
+        if picked:
+            return picked
+        err = ValueError(f"接口返回 {len(rows)} 行，过滤后为空")
+    print(f"[warn] 板块成分股取数失败 {bkcode}（含备用域名）: "
+          f"{type(err).__name__}: {str(err)[:60]}")
+    return []
+
+
+def _constituents_cache_path(day):
+    """当天成分股缓存路径。**取 PICKS_DIR 全局**（不缓存成模块级常量路径）：
+    与 write_status 同一条理由 —— 测试会把 PICKS_DIR 指到临时目录。"""
+    return PICKS_DIR / f"constituents_{day}.json"
+
+
+def _load_constituents_cache(day):
+    """当天缓存 → {板块名: {code, stocks}}；缺失/坏掉/结构不对一律 {}。
+
+    **坏缓存不抛异常**：调用方据此走"重新取数"，取数失败再降级（该板块不进
+    prompt）。缓存文件坏掉绝不能变成 M10 的失败路径。
+    空 stocks 是**有效值**（该板块过滤后确实没有可用的沪深 A 股）。
+    """
+    try:
+        d = json.loads(_constituents_cache_path(day).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(d, dict):
+        return {}
+    boards = d.get("boards")
+    if not isinstance(boards, dict):
+        return {}
+    out = {}
+    for name, v in boards.items():
+        if not isinstance(v, dict) or not v.get("code"):
+            continue
+        stocks = v.get("stocks")
+        if not isinstance(stocks, list):
+            continue
+        out[str(name)] = {"code": str(v["code"]),
+                          "stocks": [s for s in stocks if isinstance(s, dict)]}
+    return out
+
+
+def _save_constituents_cache(day, boards):
+    """合并写回当天缓存（先 .tmp 再 replace）。写失败只 warn。"""
+    path = _constituents_cache_path(day)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"date": day,
+                   "generated_at": now_cst().strftime("%Y-%m-%d %H:%M:%S"),
+                   "boards": boards}
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                       encoding="utf-8")
+        tmp.replace(path)
+    except Exception as e:
+        print(f"[warn] 成分股缓存写入失败（不影响本轮 prompt）: {str(e)[:50]}")
+
+
+# 取数失败的**同进程**记忆：key=(日期, PICKS_DIR, BK代码)。
+# 为什么要有它：失败不落盘（见 get_constituents 的说明），于是同一进程里重复调用
+# 会反复重试同一批请求 —— 这里把"本轮已经试过且失败"的代码挡住，失败最多花
+# CONSTITUENT_NET_MAX 次，不会随调用次数线性膨胀。key 带 PICKS_DIR 与日期，
+# 换目录/换天自动失效（测试里改 PICKS_DIR 不会串味）。
+_CONSTITUENT_FAILED = set()
+
+
+def get_constituents(day, news, board_map=None, k=CONSTITUENT_MAX_BOARDS):
+    """今日相关板块 → {板块名: {"code", "secid", "stocks": [...]}}。
+
+    只含**真的取到数据**的板块；每一步失败都只降级，**永不抛异常给主流程**。
+    流程：
+      ① 新闻 board 字段按频次取前 k 个（board_freq）；
+      ② 读当天缓存 reports/picks/constituents_<day>.json —— 命中的板块一次网络
+         都不发（这就是"同一天同一板块不重复取"）；
+      ③ 未命中的板块用 match_board 匹配 BK 代码（**复用既有匹配逻辑，不新写**）；
+         匹配不上 → warn + 跳过（不换名再猜，猜错等于把无关板块的成分股喂进去）；
+      ④ 只对**BK 代码**取数：同一代码只请求一次（两个名字可能匹配到同一板块），
+         成功即落缓存；失败 warn + 跳过该板块。
+
+    为什么"先查缓存、后要板块表"：板块名 → BK 代码要走 build_board_map()（联网抓
+    整张板块表）。当天缓存已覆盖这些板块时，这一步整个省掉 —— 于是当天第二次调用
+    连板块表都不再抓。
+
+    失败的板块**不落盘**（只在 _CONSTITUENT_FAILED 里记一次）：一次抽风不该废掉
+    一整天（am 失败、pm 还有一次机会），代价只是同一天多花一两次请求。
+    """
+    try:
+        ranked = board_freq(news, k)
+        if not ranked:
+            return {}
+        result, todo = {}, []
+        cached = _load_constituents_cache(day)
+        for name, cnt in ranked:
+            hit = cached.get(name)
+            if hit is None:
+                todo.append((name, cnt))
+            elif hit["stocks"]:
+                result[name] = {"code": hit["code"], "secid": f"90.{hit['code']}",
+                                "stocks": hit["stocks"]}
+            else:
+                print(f"[warn] 成分股缓存里「{name}」为空（该板块无可用沪深 A 股），跳过")
+        if not todo:
+            return result
+        bm = board_map if board_map is not None else build_board_map()
+        merged = dict(cached)
+        fetched = {}
+        for name, cnt in todo:
+            hit = match_board(name, bm)
+            if not hit:
+                print(f"[warn] 板块「{name}」（新闻 {cnt} 条）匹配不上 BK 代码，"
+                      "本轮不提供该板块的成分股")
+                continue
+            code = str(hit.get("code") or "")
+            if not code:
+                print(f"[warn] 板块「{name}」没有 BK 代码，跳过")
+                continue
+            if code in fetched:
+                stocks = fetched[code]
+            elif (day, str(PICKS_DIR), code) in _CONSTITUENT_FAILED:
+                print(f"[warn] 板块「{name}」（{code}）本轮已取数失败过，跳过")
+                continue
+            elif len(fetched) >= CONSTITUENT_NET_MAX:
+                print(f"[warn] 成分股请求数已达上限 {CONSTITUENT_NET_MAX}，"
+                      f"跳过「{name}」（{code}）")
+                continue
+            else:
+                stocks = fetch_constituents(code)
+                fetched[code] = stocks
+            if not stocks:
+                _CONSTITUENT_FAILED.add((day, str(PICKS_DIR), code))
+                continue
+            merged[name] = {"code": code, "stocks": stocks}
+            result[name] = {"code": code, "secid": f"90.{code}", "stocks": stocks}
+        if fetched and any(s for s in fetched.values()):
+            _save_constituents_cache(day, merged)
+        return result
+    except Exception as e:
+        # 最后一道保险：本功能任何意外都只能降级（调用点还有一层外壳，见
+        # _constituents_or_empty），绝不能把 M10 主流程掐了。
+        print(f"[warn] 板块成分股获取异常（本轮 prompt 不含该节）: "
+              f"{type(e).__name__}: {str(e)[:60]}")
+        return {}
+
+
+def _constituents_or_empty(day, news, board_map=None):
+    """get_constituents 的**永不抛异常**外壳，供调用点使用。
+
+    调用点（main / record_premarket）都在 try 里，而那层 try 会把异常归到
+    llm_error 并**跳过选股** —— 本功能要是从那里漏出去，就等于"板块成分股取不到"
+    把主流程掐了。外壳把它变成 warn + 空 dict（prompt 里不含该节）。
+    """
+    try:
+        return get_constituents(day, news, board_map)
+    except Exception as e:
+        print(f"[warn] 板块成分股获取异常（本轮 prompt 不含该节）: "
+              f"{type(e).__name__}: {str(e)[:60]}")
+        return {}
+
+
+def _fmt_amount(v):
+    """成交额（元）→ 人读串：≥1 亿用「x.x亿」，否则「xxxx万」；取不到写「—」。"""
+    if not isinstance(v, (int, float)):
+        return "—"
+    if abs(v) >= 1e8:
+        return f"{v / 1e8:.1f}亿"
+    return f"{v / 1e4:.0f}万"
+
+
+def _constituents_section(constituents):
+    """成分股 → prompt 里那一节；没有可用数据时返回 ""（prompt 里就不出现这一节）。
+
+    体积上限 CONSTITUENT_SECTION_MAX_BYTES（**UTF-8 字节**）：超了就从尾部逐个去掉
+    成分股（先走的必是成交额最小的），标题与那句硬约束**永不裁剪**。
+    为什么按字节而不是字数：这一节是中英数字混排，同样"字数"的中文与数字在字节/
+    token 上差 3 倍，只有字节数兜得住上限。
+    形态（与挂在上面的 prompt 骨架一致）：
+        ## 相关板块的成分股（可选来源，行情为本轮快照）
+        以上只是候选来源；依据不强的宁可不选；若选中其中一只，必须在 logic 里说明
+        它与哪条新闻/板块动向有关。
+        - 半导体（BK1036）：中芯国际 688981 现价 88.10 +1.20% 成交额 32.1亿；…
+    """
+    head = "## 相关板块的成分股（可选来源，行情为本轮快照）"
+    # 硬约束那句与用户给的措辞逐字一致（"依据不强的宁可不选"是它的可断言锚点）。
+    rule = ("以上只是候选来源；依据不强的宁可不选；若选中其中一只，"
+            "**必须在 logic 里说明它与哪条新闻/板块动向有关**（只写「热门」不合格）。")
+    blocks = []
+    for name, v in (constituents or {}).items():
+        items = []
+        for s in v.get("stocks") or []:
+            p, c = s.get("price"), s.get("change_pct")
+            items.append(
+                f"{s.get('name')} {s.get('code')} 现价 "
+                f"{f'{p:.2f}' if isinstance(p, (int, float)) else '—'} "
+                f"{f'{c:+.2f}%' if isinstance(c, (int, float)) else '—'} "
+                f"成交额 {_fmt_amount(s.get('amount'))}")
+        if items:
+            blocks.append((name, v.get("code") or "?", items))
+    # 一个板块都没取到（None/{}/全空）→ **整节不出现**：这是"失败只降级"的形态，
+    # 也是旧调用方（不传 constituents）的行为 —— prompt 与改造前逐字相同。
+    # 光有标题和那句硬约束、底下一只票都没有的"空节"只会白占体积并干扰模型。
+    if not blocks:
+        return ""
+
+    def render():
+        lines = [head, rule]
+        for nm, code, its in blocks:
+            lines.append(f"- {nm}（{code}）：" + "；".join(its) + "；")
+        return "\n".join(lines)
+
+    text = render()
+    while blocks and len(text.encode("utf-8")) > CONSTITUENT_SECTION_MAX_BYTES:
+        blocks[-1][2].pop()          # 只动 render 用的临时列表，不回写调用方数据
+        if not blocks[-1][2]:
+            blocks.pop()
+        text = render()
+    return text
+
+
 PROMPT_HEAD = """你是 A 股研究助理。下面是今日新闻摘要、一份已完成的市场分析、以及相关个股的当日行情。
 
 请从中挑出 2-{max_stocks} 只个股 + 0-{max_boards} 个板块，作为「今日候选观察清单」。
@@ -1152,22 +1510,26 @@ kind 取 "stock" 或 "board"；code_hint 只在个股且你知道沪深 A 股 6 
 {analysis}
 
 ## 相关个股当日行情
-{quotes}
+{quotes}{constituents}
 
 ## 今日新闻（共 {digest_count} 条精选，编号@[]用于引用）
 {digest}"""
 
 
-def build_prompt(digest, digest_count, analysis_md, quotes):
+def build_prompt(digest, digest_count, analysis_md, quotes, constituents=None):
     # 行情清单只给沪深 A 股：新闻里偶尔会带港股/美股，喂进去就是给 LLM 递刀
     # （prompt 第 7 条要求它不选，但材料里根本不出现才最稳）。
     a_quotes = [q for q in quotes if is_sh_sz_a(str(q.get("code") or ""))]
     q_lines = "\n".join(
         f"- {q['name']}({q.get('code','')}) 现价 {q.get('price')} 涨跌 {q.get('change_pct')}%"
         for q in a_quotes[:60]) or "（今日未取到行情）"
+    # 板块成分股是**可选的新增材料**：constituents 为 None/{}（旧调用方、取数失败）
+    # 时这里给空串，prompt 与改造前**逐字相同**，不含该节。
+    sec = _constituents_section(constituents or {})
     return PROMPT_HEAD.format(
         max_stocks=MAX_STOCKS, max_boards=MAX_BOARDS,
         analysis=analysis_md[:12000], quotes=q_lines,
+        constituents=("\n\n" + sec) if sec else "",
         digest_count=digest_count, digest=digest)
 
 
@@ -1229,22 +1591,29 @@ kind 固定填 "stock"；code_hint 只在你知道沪深 A 股 6 位代码时填
 {analysis}
 
 ## 相关个股行情（昨收 = 上一交易日收盘价）
-{quotes}
+{quotes}{constituents}
 
 ## 今日新闻（共 {digest_count} 条精选，编号@[]用于引用）
 {digest}"""
 
 
-def build_am_prompt(digest, digest_count, analysis_md, quotes):
-    """盘前版 prompt。行情清单同样只给沪深 A 股（与 build_prompt 同一条理由）。"""
+def build_am_prompt(digest, digest_count, analysis_md, quotes, constituents=None):
+    """盘前版 prompt。行情清单同样只给沪深 A 股（与 build_prompt 同一条理由）。
+
+    constituents 与 build_prompt 同义：新增的「相关板块成分股」一节，默认 None →
+    不含该节（旧调用方行为逐字不变）。两个 prompt 都必须带这一节，且这一节自带的
+    硬约束（依据不强的宁可不选）是同一份文本 —— 见 _constituents_section。
+    """
     a_quotes = [q for q in quotes if is_sh_sz_a(str(q.get("code") or ""))]
     q_lines = "\n".join(
         f"- {q['name']}({q.get('code','')}) 昨收 {q.get('price')}"
         f"（上一交易日涨跌 {q.get('change_pct')}%）"
         for q in a_quotes[:60]) or "（今日未取到行情）"
+    sec = _constituents_section(constituents or {})
     return AM_PROMPT_HEAD.format(
         max_stocks=MAX_STOCKS,
         analysis=analysis_md[:12000], quotes=q_lines,
+        constituents=("\n\n" + sec) if sec else "",
         digest_count=digest_count, digest=digest)
 
 
@@ -1618,7 +1987,8 @@ def _pick_reason(llm):
     return "all_rejected", f"解析到 {llm['extracted']} 条候选，全部未通过校验"
 
 
-def ask_candidates(digest, digest_count, analysis_md, quotes, am=False):
+def ask_candidates(digest, digest_count, analysis_md, quotes, am=False,
+                   constituents=None):
     """调用一次 DeepSeek；解析出 0 条且原文非空时**带原文重问一次**。
 
     重问用的是同一 ds_chat、同一 max_tokens；重问本身失败（网络等）不算主流程
@@ -1626,12 +1996,17 @@ def ask_candidates(digest, digest_count, analysis_md, quotes, am=False):
 
     am=True 走盘前版 prompt 与盘前校验链（build_am_prompt / parse_candidates(am=True)），
     其余（重问、LAST_LLM 状态归类）完全共用一条路径 —— 重问逻辑只该有一份实现。
+
+    constituents：板块成分股（get_constituents 的结果），默认 None → 两个 prompt 都
+    不含该节（**向后兼容**：旧调用方一字不改）。注意**重问不带材料**（只带原文 +
+    修语法要求），所以这一节不影响重问链。
     """
     LAST_LLM.update(parse_failed=False, extracted=0, kept=0, raw_len=0,
                     retry="", error="")
 
     prompt = (build_am_prompt if am else build_prompt)(digest, digest_count,
-                                                       analysis_md, quotes)
+                                                       analysis_md, quotes,
+                                                       constituents=constituents)
     print(f"{'盘前' if am else '候选'} prompt {len(prompt)} 字符，调用 DeepSeek…")
     text = M3.ds_chat([{"role": "user", "content": prompt}], max_tokens=MAX_CAND_TOKENS)
     cands = parse_candidates(text, max_tokens=MAX_CAND_TOKENS, am=am)
@@ -2593,6 +2968,36 @@ def probe():
         hit = match_board(name, bm)
         print(f"       匹配「{name}」→ {hit['secid'] if hit else '未匹配'}")
 
+    # 板块成分股（2026-10-05 新增）：本轮会喂给 prompt 的板块与成分股数量。
+    # 取数失败只 warn、**不改 ok** —— probe 的 FAIL 清单只该由"主链路依赖的东西"
+    # 构成（本功能取不到数时 prompt 少一节，M10 照常跑完）。
+    # 这里会**真的联网**取一次（probe 本来就是接口自检）；命中的板块会落当天缓存，
+    # 于是随后那次真实运行不再重复取。
+    print("-" * 52)
+    try:
+        _news = json.loads(
+            (DATA_DIR / "structured_news.json").read_text(encoding="utf-8")).get("news") or []
+    except Exception:
+        _news = []
+    if not _news:
+        print("[warn] 无 data/structured_news.json 材料，跳过板块成分股自检")
+    else:
+        _ranked = board_freq(_news)
+        print(f"       新闻板块频次前 {CONSTITUENT_MAX_BOARDS}: "
+              + (", ".join(f"{n}×{c}" for n, c in _ranked) or "（无 board 标签）"))
+        _cons = _constituents_or_empty(today.strftime("%Y-%m-%d"), _news, bm)
+        for _name, _v in _cons.items():
+            print(f"[OK]   成分股 {_name}（{_v['code']}）{len(_v['stocks'])} 只，例: "
+                  + "、".join(s["name"] for s in _v["stocks"][:3]))
+        if not _cons:
+            print("[warn] 本轮未取到任何板块成分股（缓存/接口不可用）"
+                  "—— 两个 prompt 都将不含该节")
+        _sec = _constituents_section(_cons)
+        print(f"       prompt 新增节体积 {len(_sec.encode('utf-8'))} 字节"
+              f"（上限 {CONSTITUENT_SECTION_MAX_BYTES}）"
+              f"　缓存文件 {_constituents_cache_path(today.strftime('%Y-%m-%d'))}"
+              f"（存在={_constituents_cache_path(today.strftime('%Y-%m-%d')).exists()}）")
+
     # 交易日历：来源 + 最近 10 个交易日（排查 due(k)/span 用）。
     # 取不到不是 FAIL —— 有内置近似日历兜底，但要把来源打清楚。
     print("-" * 52)
@@ -2734,8 +3139,14 @@ def record_premarket(rows, today_s, bench, by_code, by_name, base_date, state,
 
     try:
         digest, count = M3.build_news_digest(news)
+        # 板块成分股：**盘前默认不喂**（见 CONSTITUENT_FOR_AM 的理由）。
+        # 取数与缓存逻辑 am/pm 本来是同一条（同一天共享 constituents_<日期>.json），
+        # 这里只是决定"要不要把结果放进盘前 prompt"。
+        constituents = (_constituents_or_empty(today_s, news)
+                        if CONSTITUENT_FOR_AM else {})
         cands = ask_candidates(digest, count, analysis_md,
-                               quotes_json.get("quotes", []), am=True)
+                               quotes_json.get("quotes", []), am=True,
+                               constituents=constituents)
     except Exception as e:
         # 可选产出：盘前选股失败不该掐断主链路（复盘在 pm 那次运行里）
         state.update(reason="llm_error", detail=f"{type(e).__name__}: {str(e)[:80]}")
@@ -2918,8 +3329,13 @@ def main():
                           "非今日：基准价将现抓，且本轮不做 secid 兜底")
                 try:
                     digest, count = M3.build_news_digest(news)
+                    # 相关板块的成分股（2026-10-05）：只是**新增材料**，取不到就不给
+                    # 这一节。外壳保证它永不抛异常 —— 否则会被下面那个 except 归到
+                    # llm_error，等于本功能把选股整条掐了。
+                    constituents = _constituents_or_empty(today_s, news)
                     cands = ask_candidates(digest, count, analysis_md,
-                                           quotes_json.get("quotes", []))
+                                           quotes_json.get("quotes", []),
+                                           constituents=constituents)
                 except Exception as e:
                     # 可选产出：选股失败不该影响复盘，也不该掐断主链路
                     state.update(reason="llm_error",
