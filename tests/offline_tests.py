@@ -1099,5 +1099,189 @@ class TwoBenchmarks(unittest.TestCase):
         self.assertRegex(p, r"中证1000\s*[—–-]", "缺第二口径要显示破折号，不能显示 0%")
 
 
+class InvalidationCheck(unittest.TestCase):
+    """推翻条件**自动核查**（2026-10-05）。
+
+    动机：每条候选都写了推翻条件（"若公司公告否认订单"），但复盘**只看价格** ——
+    一条逻辑已破产、价格却恰好涨了的判断会被记成"成功"。现在复盘时把记录日之后
+    新出现的新闻与该条的推翻条件做一次匹配，给出 triggered / not_triggered / unclear，
+    并把"逻辑破产却价格跑赢"单独点出来。
+    另一条不能破的规矩：**没查到 ≠ 未触发**（`null` 展示为「未核查」）。
+    """
+
+    def setUp(self):
+        self.pk = load("m10_picks", "modules/m10_picks/picks.py")
+        self.rep = load("m5_report", "modules/m5_report/report.py")
+        import tempfile
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="snd-inv-"))
+        self.roll = self.tmp / "news_roll.jsonl"
+
+    def tearDown(self):
+        self.pk._cal_reset() if hasattr(self.pk, "_cal_reset") else None
+
+    # ── 新闻窗口留存 ────────────────────────────────────────────
+    def _news(self, text, d="2026-10-05", source="新浪财经", t="10:23"):
+        # 留存行的日期取自 time 字段（不是入参 d），所以这里必须把日期写进 time
+        return {"time": f"{d} {t}:00", "source": source, "text": text,
+                "category": "finance", "url": "", "keep": True}
+
+    def test_roll_append_dedupes_and_truncates(self):
+        n1 = self.pk.news_roll_append([self._news("甲公司公告：否认此前订单传闻")],
+                                      "2026-10-05", path=self.roll)
+        self.assertEqual(n1, 1)
+        # 同内容再追加一次不应产生第二行（用内容哈希，不是每次新 id）
+        n2 = self.pk.news_roll_append([self._news("甲公司公告：否认此前订单传闻")],
+                                      "2026-10-05", path=self.roll)
+        self.assertEqual(n2, 0)
+        lines = [json.loads(x) for x in self.roll.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(set(lines[0]), {"d", "t", "s", "x", "h"})
+        # 正文截断
+        self.pk.news_roll_append([self._news("很长的新闻" * 100)], "2026-10-05", path=self.roll)
+        last = json.loads(self.roll.read_text(encoding="utf-8").splitlines()[-1])
+        self.assertEqual(len(last["x"]), self.pk.NEWS_ROLL_TEXT_CHARS)
+
+    def test_roll_read_window_and_order(self):
+        for d in ("2026-09-30", "2026-10-01", "2026-10-03", "2026-10-05"):
+            self.pk.news_roll_append([self._news(f"{d} 的消息", d)], d, path=self.roll)
+        got = self.pk.news_roll_read("2026-10-01", "2026-10-05", path=self.roll)
+        days = [g["d"] for g in got]
+        self.assertEqual(days, ["2026-10-05", "2026-10-03"], "窗口是 (记录日, 今天]，且最新在前")
+        self.assertNotIn("2026-09-30", days)
+        self.assertNotIn("2026-10-01", days, "记录日当天的新闻不算『之后新出现』")
+
+    def test_roll_write_failure_is_only_warn(self):
+        bad = pathlib.Path("Z:/nonexistent-xyz/news_roll.jsonl")
+        self.assertEqual(self.pk.news_roll_append([self._news("x")], "2026-10-05", path=bad), 0)
+
+    # ── 批量核查 ───────────────────────────────────────────────
+    def _cand(self, cid, name="甲股份"):
+        return {"id": cid, "name": name,
+                "invalidation": "若公司公告否认该订单或产线未按期投产",
+                "reviews": {"1": None, "3": None, "5": None}}
+
+    def test_one_llm_call_covers_all_candidates(self):
+        """三条候选必须共用**一次**调用（每轮一次批量核查，不是每条一次）。"""
+        calls = []
+        self.pk.M3.ds_chat = lambda msgs, max_tokens=None: calls.append(msgs) or json.dumps(
+            {"checks": [{"id": "A", "verdict": "triggered", "reason": "窗口[1]公告否认该订单",
+                         "basis": [1]},
+                        {"id": "B", "verdict": "not_triggered",
+                         "reason": "窗口[2]三季报毛利率 26.4%，未低于 20%", "basis": [2]},
+                        {"id": "C", "verdict": "unclear", "reason": "窗口内无相关信息",
+                         "basis": []}]}, ensure_ascii=False)
+        news = [{"d": "2026-10-03", "t": "10:00", "s": "新浪财经", "x": "公告否认该订单"},
+                {"d": "2026-10-04", "t": "10:00", "s": "财联社", "x": "三季报毛利率 26.4%"}]
+        checks, note = self.pk.check_invalidations(
+            [self._cand("A"), self._cand("B", "乙股份"), self._cand("C", "丙股份")], news)
+        self.assertEqual(len(calls), 1, "三条候选必须共用一次调用")
+        self.assertEqual({c: v["verdict"] for c, v in checks.items()},
+                         {"A": "triggered", "B": "not_triggered", "C": "unclear"})
+
+    def test_fabricated_basis_is_stripped_or_nulled(self):
+        news = [{"d": "2026-10-03", "t": "10:00", "s": "新浪财经", "x": "只有一条新闻"}]
+        self.pk.M3.ds_chat = lambda msgs, max_tokens=None: json.dumps({"checks": [
+            {"id": "A", "verdict": "triggered", "reason": "编的依据", "basis": [99]}]},
+            ensure_ascii=False)
+        checks, _note = self.pk.check_invalidations([self._cand("A")], news)
+        self.assertEqual(checks, {}, "全编造的 basis 应判无效（宁可不给结论）")
+
+    def test_llm_failure_yields_null_and_keeps_ledger(self):
+        def boom(msgs, max_tokens=None):
+            raise RuntimeError("模拟网络炸了")
+        self.pk.M3.ds_chat = boom
+        self.pk.fetch_any = lambda secid: ({"price": 11.0, "prev_close": 10.0}, "stub")
+        self.pk._inject_trading_days(["2026-09-14"])
+        # 有可用的新闻窗口，否则会在"窗口为空"那道闸门就返回，测不到 LLM 失败路径
+        self.pk.news_roll_append([self._news("公告否认该订单", "2026-09-13")],
+                                 "2026-09-13", path=self.roll)
+        row = {"id": "2026-09-11-pm-s-甲股份", "date": "2026-09-11", "slot": "pm",
+               "kind": "stock", "name": "甲股份", "code": "600001", "secid": "1.600001",
+               "market": "沪A", "base_price": 10.0, "base_prev_close": 9.9,
+               "bench_level": 4000.0, "logic": "x" * 30,
+               "invalidation": "若公司公告否认该订单或产线未按期投产",
+               "confidence": "中", "basis_refs": [1],
+               "reviews": {str(k): None for k in self.pk.REVIEW_DAYS}}
+        rows = [row]
+        today = datetime.strptime("2026-09-14", "%Y-%m-%d").replace(tzinfo=hc.CST)
+        filled = self.pk.score_pending(rows, today, 4040.0)
+        self.pk.review_pending(filled, today, news_path=self.roll)
+        rev = row["reviews"]["1"]
+        self.assertIn("invalidation_check", rev, "键必须存在")
+        self.assertIsNone(rev["invalidation_check"], "核查失败写 null，不冒充 unclear")
+        self.assertIsNotNone(rev["alpha"], "价格口径必须照常算出来")
+
+    def test_no_rows_no_llm_call(self):
+        calls = []
+        self.pk.M3.ds_chat = lambda msgs, max_tokens=None: calls.append(1) or "{}"
+        today = datetime.strptime("2026-09-12", "%Y-%m-%d").replace(tzinfo=hc.CST)
+        self.assertEqual(self.pk.review_pending([], today, news_path=self.roll), 0)
+        self.assertEqual(calls, [], "没有待复查的行时一次 LLM 都不许调")
+        # 窗口为空同样不调（"没查到"不等于 unclear）
+        row = {"id": "X", "date": "2026-09-11", "name": "甲股份",
+               "invalidation": "若公司公告否认该订单或产线未按期投产"}
+        self.assertEqual(self.pk.review_pending([row], today, news_path=self.roll), 0)
+        self.assertEqual(calls, [])
+
+    # ── 展示与关键统计 ──────────────────────────────────────────
+    def _row_with(self, verdict, alpha=0.09, alpha2=None):
+        ic = None if verdict is None else {"verdict": verdict, "reason": "窗口[1]公告否认该订单",
+                                          "basis": [1], "checked_at": "2026-10-05 15:49:00"}
+        return {"id": "2026-09-29-pm-s-甲股份", "date": "2026-09-29", "slot": "pm",
+                "kind": "stock", "name": "甲股份", "code": "600001", "market": "沪A",
+                "base_price": 10.0, "board": "", "logic": "x" * 30,
+                "invalidation": "若公司公告否认订单", "confidence": "中", "basis_refs": [1],
+                "reviews": {"1": {"due": "2026-09-30", "done": "2026-10-05", "price": 11.0,
+                                  "ret": 0.1, "bench": 4040.0, "bench_ret": 0.01,
+                                  "alpha": alpha, "status": "ok", "span": 6,
+                                  "span_kind": "trading",
+                                  "bench2": 7333.0, "bench2_ret": 0.0045, "alpha2": alpha2,
+                                  "invalidation_check": ic}, "3": None, "5": None}}
+
+    def test_four_states_and_never_confuse_null_with_not_triggered(self):
+        cases = {
+            "triggered": "疑似触发",
+            "not_triggered": "未触发",
+            "unclear": "无法判断",
+            None: "未核查",
+        }
+        for verdict, expect in cases.items():
+            html = self.rep.inv_check_html(self._row_with(verdict))
+            self.assertIn(expect, html, f"{verdict} → {expect}")
+            if verdict is None:
+                self.assertNotIn("未触发", html, "未核查绝不能显示成未触发")
+        # 核查结论与当初写的推翻条件原文是两件事，原文照旧显示
+        card = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ",
+                      self.rep.render_picks([self._row_with("triggered")], "2026-10-05")))
+        self.assertIn("若公司公告否认订单", card)
+
+    def test_key_stat_counts_bankrupt_logic(self):
+        rows = [self._row_with("triggered"), self._row_with("triggered"),
+                self._row_with("not_triggered"), self._row_with(None)]
+        st = self.rep.inv_check_stats(rows)
+        self.assertEqual(st["sample"], 3, "只数已核查的档")
+        self.assertEqual(st["triggered"], 2)
+        line = self.rep.inv_check_stat_line(st)
+        self.assertIn("2 档逻辑破产", line)
+        self.assertIn("已复核 3 档", line)
+        # 样本为 0 时不显示这条（"0 条"会让人以为核查没在跑）
+        self.assertEqual(self.rep.inv_check_stat_line(self.rep.inv_check_stats([])), "")
+
+    def test_m9_surfaces_verdicts_and_stays_flat_rows(self):
+        """M9 要透出核查口径与四态文案，且**文案只有一份来源**（复用 M5 常量）。
+
+        行内的 `invalidation_check` 随 `reviews` 原样透传（所以不在这里出现字面量）；
+        四态文案与统计口径都从 M5 复用，避免同一结论两处说法不同。
+        """
+        src = (ROOT / "modules/m9_web/aggregate.py").read_text(encoding="utf-8")
+        self.assertIn('"inv"', src)
+        self.assertIn("INV_CHECK_CN", src, "四态文案必须复用 M5 常量的单一定义")
+        self.assertIn("inv_check_stats", src)
+        app = (ROOT / "modules/m9_web/web/app.js").read_text(encoding="utf-8")
+        self.assertIn("invalidation_check", app, "前端要读这个字段")
+        for cn in ("未核查", "推翻条件：未触发", "无法判断"):
+            self.assertIn(cn, app, f"前端缺少文案：{cn}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

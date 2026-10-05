@@ -575,6 +575,123 @@ PICK_BENCH_NOTE = (f"超额同时给{PICK_BENCH_CN} 与{PICK_BENCH2_CN}："
 
 _STATUS_CN = {"no_quote": "未匹配到行情", "no_bench": "基准缺失", "expired": "未取到行情"}
 
+# 推翻条件核查（invalidation_check，2026-10-05）：M10 每轮复盘时用"记录日之后
+# 新出现的新闻"复核一次当初写的推翻条件，结果落在 reviews[k]["invalidation_check"]。
+# 逐条展示与统计文案在这里定义一次；M6 推送、M9 网页各有一份**同口径**的短文案
+# （三个模块各自独立运行，不为一句文案互相 import）。
+# 四态必须严格区分，尤其是**没核查 ≠ 未触发**：
+#   triggered     疑似触发（逻辑破产），给原因与依据编号
+#   not_triggered 窗口里确有能证伪推翻条件的消息
+#   unclear       窗口里没有相关信息（"没有消息"不等于"证明没触发"）
+#   None          没核查（老账本行 / 本轮没查 / LLM 失败）—— 绝不说成"未触发"
+INV_CHECK_CN = {"triggered": "推翻条件：疑似触发",
+                "not_triggered": "推翻条件：未触发",
+                "unclear": "推翻条件：无法判断（窗口内无相关信息）"}
+INV_UNCHECKED_CN = "推翻条件核查：未核查"
+INV_REASON_MAX = 60            # 逐条里的原因截断（完整原文在账本里）
+
+
+def pick_inv_check(row):
+    """账本行 → 该条的推翻条件核查结论（取**已核查过**的那一档）。
+
+    一条候选有多档复盘（T+1/T+3/T+5），核查是随每档补录各做一次：只要任意一档
+    给出了 verdict，就用它（取最严重的那档 —— triggered > not_triggered > unclear，
+    同级别取最新补录的那档）。**全为 None（老账本行 / 没查过）时返回 None**，
+    展示层据此说「未核查」，不能混成"未触发"。
+
+    返回 (verdict, reason, basis[, done]) 或 None；done 是该档的补录日，
+    用于在逐条里标出"这条结论是哪天查的"。
+    """
+    best = None
+    for k in (1, 3, 5):
+        rev = (row.get("reviews") or {}).get(str(k))
+        if not isinstance(rev, dict):
+            continue
+        ic = rev.get("invalidation_check")
+        if not isinstance(ic, dict):
+            continue
+        v = str(ic.get("verdict") or "").strip().lower()
+        if v not in INV_CHECK_CN:
+            continue
+        rank = {"triggered": 2, "not_triggered": 1, "unclear": 0}[v]
+        cand = (rank, str(rev.get("done") or ""), v, ic)
+        if best is None or cand[:2] > best[:2]:
+            best = cand
+    if best is None:
+        return None
+    _rank, done, v, ic = best
+    basis = [int(b) for b in (ic.get("basis") or [])
+             if isinstance(b, (int, float)) or str(b).lstrip("-").isdigit()]
+    return v, str(ic.get("reason") or ""), basis, done
+
+
+def inv_check_html(row):
+    """一条候选的「推翻条件核查」那一行（HTML）。**核查结论与 invalidation 原文
+    是两件事**：前者是"后来查过了、结论如何"，后者是"当初写下的那句话"，
+    两者都要显示（原文由 _pick_card 照旧渲染）。"""
+    got = pick_inv_check(row)
+    if not got:
+        return f'<p class="pick-inval-check muted">{INV_UNCHECKED_CN}</p>'
+    v, reason, basis, _done = got
+    label = INV_CHECK_CN[v]
+    if v == "triggered":
+        detail = []
+        if reason:
+            detail.append(esc(reason[:INV_REASON_MAX]
+                              + ("…" if len(reason) > INV_REASON_MAX else "")))
+        if basis:
+            # 编号体系要写清：这里的 #n 是**核查时的新闻窗口位置**（1-based），
+            # 与卡片上「依据 [n]」引用的 M3 新闻编号是两套东西 ——
+            # 同一个号会指到两条不同的新闻，不标明就是误导。
+            detail.append("核查窗口 " + "、".join(f"#{b}" for b in basis[:6]))
+        tail = ("：" + "　".join(detail)) if detail else ""
+        return (f'<p class="pick-inval-check inv-triggered"><b>⚠️ {label}</b>'
+                f'{tail}</p>')
+    return f'<p class="pick-inval-check muted">{label}</p>'
+
+
+def inv_check_stats(rows):
+    """**关键统计**：已复核档里有多少条逻辑破产、其中多少条价格仍为正超额。
+
+    口径（用户指定）：只在 verdict 非 null 的档里数 triggered；lucky 是这些
+    triggered 档里 alpha > 0 的条数。sample 为 0 时调用方**不显示这条**
+    （"0 条"会让读者以为这套核查没在跑）。
+    """
+    sample = trig = lucky = 0
+    for r in (rows or []):
+        for k in (1, 3, 5):
+            rev = (r.get("reviews") or {}).get(str(k))
+            if not isinstance(rev, dict):
+                continue
+            ic = rev.get("invalidation_check")
+            if not isinstance(ic, dict):
+                continue
+            v = str(ic.get("verdict") or "").strip().lower()
+            if v not in INV_CHECK_CN:
+                continue
+            sample += 1
+            if v != "triggered":
+                continue
+            trig += 1
+            a = rev.get("alpha")
+            if isinstance(a, (int, float)) and a > 0:
+                lucky += 1
+    return {"sample": sample, "triggered": trig, "lucky": lucky}
+
+
+def inv_check_stat_line(st, scope=""):
+    """关键统计 → 一行文案。sample == 0 时返回空串（不显示）。
+
+    用词刻意是「蒙对」而不是"胜率"：这些条目的判断逻辑已经被推翻，价格跑赢只是
+    恰好，把它算进判断能力就是这套复盘最想避免的错觉。
+    scope 是可选的口径后缀（如「（口径：近 14 天往期回填）」）——每个出口统计的
+    行集不同（M5 只统计展示窗口内的往期行），不写清会让人把 N 当成整本账本。
+    """
+    if not st or not st.get("sample"):
+        return ""
+    return (f'⚠️ 已复核 {st["sample"]} 档中有 {st["triggered"]} 档逻辑破产'
+            f'（价格仍跑赢 {st["lucky"]} 档）—— 这类"蒙对"不计入判断能力{scope}')
+
 # 盘前/盘后两个批次分开显示（2026-10-04 盘前通道）：
 #   am = 08:10 那轮生成的「今日可执行观察清单」，基准是**昨收**，当天即可对照执行；
 #   pm = 收盘后那轮记录，基准是当日收盘价，属于事后判断。
@@ -718,6 +835,10 @@ def _pick_card(r):
     `logic` 的**标签按 slot 分**（2026-10-05）：am 行是推荐，标签为「为什么推荐」
     （内容由 M10 的 prompt + 校验保证写了依据/传导机制/预期差）；pm 行已经复盘过，
     仍叫「逻辑」。两处都显式写出标签，读者一眼能分清这条是推荐还是事后记录。
+
+    **推翻条件的两个层次**（2026-10-05）：`invalidation` 是当初写下的那句话，
+    `invalidation_check` 是后来复核的结论 —— 两句都显示，且**核查列的措辞必须
+    与原文的「推翻条件」区分开**（前者是"当初写了什么"，后者是"后来查得怎样"）。
     """
     tag = '<span class="pick-tag">板块</span>' if r.get("kind") == "board" else ""
     refs = "".join(f'<span class="pick-ref">[{n}]</span>'
@@ -740,11 +861,13 @@ def _pick_card(r):
         base = f"昨收 {esc(price)}"
     else:
         base = esc(price)
+    inv_check = inv_check_html(r)
     return f"""<div class="pick-card">
   <div class="pick-head"><b>{esc(r.get("name"))}</b>{tag}
     <span class="pick-conf">置信度 {esc(r.get("confidence") or "—")}</span></div>
   <p class="pick-logic"><b>{PICK_LOGIC_LABEL["am" if is_am else "pm"]}</b>：{esc(r.get("logic"))}</p>
   {plan}<p class="pick-inval"><b>推翻条件</b>：{esc(r.get("invalidation"))}</p>
+  {inv_check}
   <div class="pick-foot">基准 {base}
     {("· 所属板块 " + esc(r["board"])) if r.get("board") and r.get("kind") == "stock" else ""}
     {("· 新闻依据 " + refs) if refs else ""}</div>
@@ -849,6 +972,8 @@ def render_picks(picks, date_str):
   <div class="pick-row-head">{esc(r.get("date"))} · <b>{esc(r.get("name"))}</b>{tag}
     <span class="pick-base">基准 {esc(r.get("base_price") if r.get("base_price") else "—")}</span></div>
   <div class="pick-tiers">{tiers}</div>
+  <p class="pick-inval"><b>推翻条件</b>：{esc(r.get("invalidation"))}</p>
+  {inv_check_html(r)}
 </div>""")
 
     # 汇总行：均值与样本数**必须同时出现**，且**两个基准并列**（沪深300 / 中证1000）
@@ -860,6 +985,11 @@ def render_picks(picks, date_str):
             continue
         parts.append(_tier_stat_line(k, d))
     stats_html = ("<p class=\"pick-stats\">" + "　".join(parts) + "</p>") if parts else ""
+    # **关键统计**（2026-10-05）：逻辑被推翻却因价格跑赢而被记成"成功"的那几条。
+    # 与均值同处统计区，读者一眼能看到"这种蒙对不算本事"；样本为 0（还没复核过
+    # 任何一档，如老账本）时**整条不显示** —— 写"0 条"会让人以为核查没在跑。
+    inv_line = inv_check_stat_line(inv_check_stats(hist), "（口径：本版块展示窗口内的往期回填）")
+    inv_html = f'<p class="pick-stats pick-inval-warn">{inv_line}</p>' if inv_line else ""
     # 固定一行解释（用户要求）：为什么同时给两个口径。它跟着候选版块走，
     # 与统计行同处一段，读者看到两个数就知道差别在哪。
     bench_note = f'<p class="pick-note">{PICK_BENCH_NOTE}</p>'
@@ -887,6 +1017,7 @@ def render_picks(picks, date_str):
   <b>不是买入指令</b>，决策权归您本人。</p>
   {today_html}
   {stats_html}
+  {inv_html}
   {bench_note}
   {hist_html}
 </section>"""
@@ -1157,6 +1288,14 @@ section.block > details > summary > h3{
 .pick-logic{font-size:14px; line-height:1.65; margin:8px 0 6px;}
 .pick-inval{font-size:13px; line-height:1.6; margin:0; color:var(--muted);}
 .pick-inval b{color:var(--text);}
+/* 推翻条件核查（2026-10-05）：triggered 是"逻辑破产"，要一眼看见；
+   未核查/未触发/无法判断都归为弱提示。沿用既有 token（--up 在浅色里就是红）。 */
+.pick-inval-check{font-size:13px; line-height:1.6; margin:4px 0 0; color:var(--muted);}
+.pick-inval-check b{color:var(--text);}
+.pick-inval-check.inv-triggered{color:var(--up); border-left:3px solid currentColor;
+  padding-left:8px;}
+.pick-inval-check.inv-triggered b{color:var(--up);}
+.pick-inval-warn{color:var(--up) !important; font-weight:600;}
 .pick-foot{font-size:12px; color:var(--muted); margin-top:8px;
   display:flex; flex-wrap:wrap; gap:6px; align-items:center;}
 .pick-ref{background:var(--bg2); border:0;

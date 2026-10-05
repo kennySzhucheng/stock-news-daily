@@ -330,7 +330,9 @@ def resolve_report_name(date_str, slot):
 
 
 def load_picks(date_str):
-    """reports/picks/ledger.jsonl → {"today": [...], "stats": "..."}，读不到返回 None。
+    """reports/picks/ledger.jsonl → {"today": [...], "stats": "...", "inv_stats": "..."}。
+
+    读不到返回 None。
 
     **故意不 import m10_picks**：那个模块在 import 期就会加载 M4/M3 并连网，
     为了读一个文件把整条依赖链拖进推送模块不值得（推送是最后一步，最该轻）。
@@ -400,6 +402,33 @@ def load_picks(date_str):
             stats = (f"（超额双口径：相对{BENCH_CN} 与相对{BENCH2_CN}；"
                      f"本账本暂时只有 {BENCH_CN} 口径的样本）{stats}")
 
+        # 推翻条件核查（2026-10-05）：逻辑已被推翻、价格却仍跑赢的那几条 —— **蒙对**。
+        # 微信正文长度敏感（Server酱），故只加**一句短提示**：实测整块比改造前
+        # 只长 ≤60 字符（见 INV_STAT_PREFIX + inv_stat_line 的构造）。
+        # 口径与 M5/M9 一致：只在 verdict 非 null 的档里数 triggered，lucky = alpha>0。
+        # sample 为 0（老账本 / 还没复核过任何一档）时**一个字符都不加**。
+        sample = trig = lucky = 0
+        for r in rows:
+            for k in (1, 3, 5):
+                rev = (r.get("reviews") or {}).get(str(k))
+                if not isinstance(rev, dict):
+                    continue
+                ic = rev.get("invalidation_check")
+                if not isinstance(ic, dict):
+                    continue
+                v = str(ic.get("verdict") or "").strip().lower()
+                if v not in INV_VERDICTS:
+                    continue
+                sample += 1
+                if v == "triggered":
+                    trig += 1
+                    if isinstance(rev.get("alpha"), (int, float)) and rev["alpha"] > 0:
+                        lucky += 1
+        inv_line = ""
+        if sample:
+            inv_line = (f'⚠️ {sample} 档中 {trig} 档逻辑破产'
+                        f'（价格仍跑赢 {lucky} 档）——"蒙对"不计入判断能力')
+
         # 最近一批（供"今天没有产出推荐"的空态用）：优先**盘前（推荐）批**的最近日期，
         # 一条 am 都没有（老账本）时退回最近一条记录并把用词降级为"候选记录"。
         # 日期取不到就留空串/None，_latest_note 会整段不写。
@@ -415,7 +444,7 @@ def load_picks(date_str):
                                - datetime.strptime(latest, "%Y-%m-%d")).days
             except Exception:
                 latest_days = None
-        return {"today": today, "stats": stats,
+        return {"today": today, "stats": stats, "inv_stats": inv_line,
                 "latest": latest, "latest_days": latest_days,
                 "latest_is_am": bool(am_dates)}
     except Exception as e:
@@ -527,6 +556,8 @@ SLOT_GROUP_CN = {"am": "今日潜力个股（推荐）", "pm": "盘后（收盘�
 # 明细在候选块里只出现一次图例，正文长度因此只增加几十个字符。
 BENCH_CN = "沪深300"
 BENCH2_CN = "中证1000"
+# 推翻条件核查的 verdict 枚举（与 M10 picks.INVALIDATION_VERDICTS、M5 日报同一口径）。
+INV_VERDICTS = ("triggered", "not_triggered", "unclear")
 # `logic` 的字段标签（与 M5/M9 同一口径）：am 行是推荐 → 「为什么推荐」；
 # pm 行是收盘后的事后记录 → 「逻辑」。
 PICK_LOGIC_LABEL = {"am": "为什么推荐", "pm": "逻辑"}
@@ -613,6 +644,11 @@ def build_picks_block(picks, slot="", status=None):
                                        picks.get("latest_is_am", True)))
     if picks.get("stats"):
         parts.append(f"📊 已回填：{picks['stats']}")
+    # 推翻条件核查的短提示（2026-10-05）：紧跟在"已回填"后面 —— 读者先看到超额，
+    # 再看到"其中 N 档逻辑已经破产、价格却仍跑赢"，这个顺序才有冲击力。
+    # ⚠️ 已在 load_picks 的文案里，这里不再重复一个；sample 为 0 时该字段不存在。
+    if picks.get("inv_stats"):
+        parts.append(picks["inv_stats"])
     parts.append("（候选为观察清单，非买入指令；历史表现不代表未来）")
     return parts
 

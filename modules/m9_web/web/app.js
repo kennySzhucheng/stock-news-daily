@@ -113,6 +113,31 @@
     '以上是 AI 依据当日新闻给出的观察建议（含关注区间与触发条件），' +
     '不是买入指令、不构成投资建议；新闻≠股价，已被消化的利好可能“利好出尽”；' +
     '每条都写了推翻条件，跑输的记录不会删。';
+  // 推翻条件核查（2026-10-05）：M10 复盘时用"记录日之后新出现的新闻"复核当初写的
+  // 推翻条件，结果在 reviews[k].invalidation_check。**四态必须分开**，尤其
+  // **没核查 ≠ 未触发** —— 老账本行/没查过的是 unchecked，绝不能说成"未触发"。
+  // 标签优先用后端（aggregate.picks_view 的 inv.labels）给的，旧静态导出没有时
+  // 回退到这份内置常量（与 m5_report.INV_CHECK_CN 同一口径）。
+  var INV_LABELS_FALLBACK = {
+    triggered: '推翻条件：疑似触发',
+    not_triggered: '推翻条件：未触发',
+    unclear: '推翻条件：无法判断（窗口内无相关信息）'
+  };
+  function invLabels(p) {
+    var got = (p && p.inv && p.inv.labels) || {};
+    return {
+      triggered: got.triggered || INV_LABELS_FALLBACK.triggered,
+      not_triggered: got.not_triggered || INV_LABELS_FALLBACK.not_triggered,
+      unclear: got.unclear || INV_LABELS_FALLBACK.unclear
+    };
+  }
+  function invUnchecked(p) {
+    return (p && p.inv && p.inv.unchecked) || '推翻条件核查：未核查';
+  }
+  function invReasonMax(p) {
+    var n = (p && p.inv && p.inv.reason_max);
+    return (typeof n === 'number' && n > 0) ? n : 60;
+  }
 
   // 该行是不是「推荐」批：优先用后端给的 is_recommendation（判据只在 aggregate 里
   // 定义一次），旧导出没有这个字段时退回 slot。
@@ -740,7 +765,49 @@
       alphaLine(names.bench2, rev.alpha2) + lag + '</td>';
   }
 
-  function pickCard(r) {
+  // 该行的推翻条件核查结论：取**已核查过**的那一档里最严重的一条
+  // （triggered > not_triggered > unclear）。一条候选有多档复盘，核查是随每档
+  // 补录各做一次的；全为 null 时返回 null → 展示「未核查」（**不是**「未触发」）。
+  function pickInvCheck(r) {
+    var RANK = { triggered: 2, not_triggered: 1, unclear: 0 };
+    var best = null;
+    PICK_TIERS.forEach(function (k) {
+      var rev = (r.reviews || {})[String(k)];
+      if (!rev || typeof rev !== 'object') return;
+      var ic = rev.invalidation_check;
+      if (!ic || typeof ic !== 'object') return;
+      var v = String(ic.verdict || '').trim().toLowerCase();
+      if (!(v in RANK)) return;
+      var cand = [RANK[v], String(rev.done || ''), v, ic];
+      if (!best || cand[0] > best[0] ||
+          (cand[0] === best[0] && cand[1] > best[1])) best = cand;
+    });
+    return best ? { verdict: best[2], ic: best[3] } : null;
+  }
+
+  function invCheckHtml(r, p) {
+    var got = pickInvCheck(r);
+    if (!got) return '<p class="pick-inval-check muted">' + esc(invUnchecked(p)) + '</p>';
+    var labels = invLabels(p);
+    var label = labels[got.verdict] || ('推翻条件：' + got.verdict);
+    if (got.verdict !== 'triggered') {
+      return '<p class="pick-inval-check muted">' + esc(label) + '</p>';
+    }
+    var reason = String(got.ic.reason || '');
+    var max = invReasonMax(p);
+    var detail = [];
+    if (reason) detail.push(esc(reason.length > max ? reason.slice(0, max - 1) + '…' : reason));
+    var basis = (got.ic.basis || []).slice(0, 6);
+    if (basis.length) {
+      // 编号体系要写清：这是**核查时的新闻窗口位置**，与卡片上「依据 [n]」
+      // 引用的 M3 新闻编号是两套东西，同一个号会指到两条不同的新闻。
+      detail.push('核查窗口 ' + basis.map(function (b) { return '#' + b; }).join('、'));
+    }
+    return '<p class="pick-inval-check inv-triggered"><b>⚠️ ' + esc(label) + '</b>' +
+      (detail.length ? '：' + detail.join('　') : '') + '</p>';
+  }
+
+  function pickCard(r, p) {
     var conf = r.confidence ? '<span class="pick-conf">置信度 ' + esc(r.confidence) + '</span>' : '';
     var board = r.board ? '<span class="pick-tag">' + esc(r.board) + '</span>' : '';
     var refs = (r.basis_ids || []).filter(function (i) { return i < S.news.length; });
@@ -766,17 +833,26 @@
       // 盘前清单的可执行信息（2026-10-04 新增字段；空则不渲染该项）
       (r.entry_zone ? '<p class="pick-plan"><b>关注区间</b>' + esc(r.entry_zone) + '</p>' : '') +
       (r.trigger ? '<p class="pick-plan"><b>触发条件</b>' + esc(r.trigger) + '</p>' : '') +
+      // 当初写下的那句推翻条件（原文）与**后来复核的结论**是两件事，都要显示
       (r.invalidation
         ? '<p class="pick-inval"><b>推翻条件</b>' + esc(r.invalidation) + '</p>' : '') +
+      invCheckHtml(r, p) +
       '<div class="pick-foot">' + base + ref + '</div></div>';
   }
 
-  function pickRow(r, names) {
+  function pickRow(r, names, p) {
     return '<tr><td class="pick-date">' + esc(r.date) +
       '<span class="muted small">' + esc(SLOT_CN[r.slot] || r.slot || '') + '</span></td>' +
       '<td>' + esc(r.name) +
       '<span class="muted small">' + esc(KIND_CN[r.kind] || '') +
       (r.board ? ' · ' + esc(r.board) : '') + '</span></td>' +
+      // 推翻条件核查：与"当初写的推翻条件"**同格但两行**——原文是记录时写下的
+      // 那句话，核查结论是后来用新新闻复核的结果，两者不能混为一谈，也不能互相
+      // 取代（历史明细里不显示原文的话，读者只看到"未核查"就丢了当初的判断依据）
+      '<td class="pick-inval-cell">' +
+      (r.invalidation
+        ? '<p class="pick-inval"><b>推翻条件</b>' + esc(r.invalidation) + '</p>' : '') +
+      invCheckHtml(r, p) + '</td>' +
       PICK_TIERS.map(function (k) { return revCell((r.reviews || {})[String(k)], names); }).join('') +
       '</tr>';
   }
@@ -845,24 +921,40 @@
         groups.map(function (g) {
           return (groups.length > 1
             ? '<h3 class="pick-sub">' + g.label + '（' + g.rows.length + ' 条）</h3>' : '') +
-            '<div class="pick-cards">' + g.rows.map(pickCard).join('') + '</div>' +
+            '<div class="pick-cards">' + g.rows.map(function (r) { return pickCard(r, p); }).join('') + '</div>' +
             (g.slot === 'am' ? recNote : '');
         }).join('')
       : '<p class="pick-empty">今天没有产出推荐（休市日不产出；盘前 08:10 那轮给出推荐，' +
         '收盘后那轮记录当日候选）。' + esc(latestBatchNote(today)) +
         '以下是跟踪中候选的表现。</p>';
 
+    // **关键统计**：逻辑已被推翻、价格却仍跑赢的条数。文案由后端给出（判据与口径
+    // 只在 M5 定义一次）；旧静态导出没有这个字段时退回本地拼一句。
+    // 样本为 0 时整条不显示 —— 写"0 档"会让读者以为核查没在跑。
+    var invLine = (p.inv && p.inv.line) || '';
+    if (!invLine && p.inv && p.inv.stats && p.inv.stats.sample) {
+      invLine = '⚠️ 已复核 ' + p.inv.stats.sample + ' 档中有 ' + p.inv.stats.triggered +
+        ' 档逻辑破产（价格仍跑赢 ' + p.inv.stats.lucky + ' 档）—— 这类“蒙对”不计入判断能力';
+    }
+    var invStat = invLine
+      ? '<p class="pick-stat inv-triggered">' + esc(invLine) + '</p>' : '';
+
     $('#picksBody').innerHTML =
       '<div class="pick-stats">' + (statParts ||
         '<span class="muted small">还没有到期回填的表现数据</span>') + '</div>' +
+      invStat +
       '<p class="muted small">' + esc(benchNote(p)) + '</p>' +
       cards +
       '<h3 class="pick-sub">历史明细（含跑输的，共 ' + p.total + ' 条）</h3>' +
       '<div class="table-wrap"><table class="tbl pick-tbl"><thead><tr>' +
-      '<th>记录日</th><th>候选</th><th>T+1</th><th>T+3</th><th>T+5</th>' +
-      '</tr></thead><tbody>' + rows.map(function (r) { return pickRow(r, names); }).join('') +
+      '<th>记录日</th><th>候选</th><th>推翻核查</th><th>T+1</th><th>T+3</th><th>T+5</th>' +
+      '</tr></thead><tbody>' +
+      rows.map(function (r) { return pickRow(r, names, p); }).join('') +
       '</tbody></table></div>' +
-      '<p class="muted small">每格两行超额：相对' + esc(names.bench) + ' 与 相对' +
+      '<p class="muted small">推翻核查＝用该条记录日之后新出现的新闻复核当初写下的推翻条件：' +
+      '「疑似触发」表示逻辑已破产（依据编号是复核时引用的新闻窗口编号）；' +
+      '**未核查 ≠ 未触发**（老账本行与没查过的档一律显示「未核查」）。' +
+      '每格两行超额：相对' + esc(names.bench) + ' 与 相对' +
       esc(names.bench2) + '；缺第二个口径的旧记录显示「—」（不计入均值）。' +
       '收益率为未复权口径，除权除息期间会有偏差。' +
       '「补」表示该档实际取价日迟于计划日期（周末/停牌/休市）。</p>';

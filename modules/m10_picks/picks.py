@@ -61,10 +61,22 @@ M10 候选清单与事后复盘模块 — 把 M3 的判断变成可检验的记�
     `alpha2 = ret − bench2_ret`。**既有 bench_level/bench/bench_ret/alpha 语义与
     写法一个字未动**。两个基准互不阻塞：任一口径缺端点只让它自己写 null，另一口径
     照常算；bench2 取数失败只 warn，绝不阻断记录与复盘。动机见 BENCH2_SECID 的注释。
+13. **推翻条件核查 invalidation_check**（2026-10-05 用户第二优先级）：T+1/T+3/T+5
+    只看价格，于是"逻辑已经破产、价格恰好涨了"会被记成成功。故每档 reviews[k] 新增
+    `invalidation_check`（**纯附加**：verdict/reason/basis/checked_at，取不到或没查
+    一律写 **null**，且键必须存在）；展示层据此把"蒙对"单独点出来。
+    · 素材是 `reports/picks/news_roll.jsonl`（**滚动留存**，见 NEWS_ROLL_* 的注释）：
+      `data/structured_news.json` 每次运行都被覆盖，不留一份就永远没有"记录日之后的
+      新闻"可查。am/pm **两条通道**都要追加。
+    · 每轮复盘只做**一次** LLM 调用，覆盖本轮实际要补的那一档的所有候选（一轮只补
+      最早一档，所以通常只有 1~6 条）；没有待复查候选时**一次都不调**。
+    · 失败（ds_chat 抛错 / 解析不出）一律 null + 一行 warn，**绝不让 M10 失败**；
+      `--probe` 不碰它（probe 不依赖 DeepSeek）。
 
 密钥来源: 环境变量 DEEPSEEK_API_KEY
 """
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -89,7 +101,20 @@ BOARD_CACHE_PATH = PICKS_DIR / "boards.json"    # 板块代码表缓存
 # 交易日历缓存（与 boards.json 同目录，随 gh-pages 一起跨天留存）。
 # 自检: probe() 会打印它的来源与最近几个交易日。
 TRADING_DAYS_CACHE_PATH = PICKS_DIR / "trading_days.json"
+# 新闻滚动留存（2026-10-05）。data/structured_news.json 每轮被覆盖，事后复查
+# 「记录日之后新出现的新闻」就没有素材了，故把每轮看到的新闻**追加**成一份
+# 跨天留存的历史（与 ledger.jsonl 同目录 → 随 gh-pages 一起跨天留存）。
+# 与账本的区别：它是**旁路数据**，任何一步失败都只 warn，绝不阻断主流程。
+NEWS_ROLL_PATH = PICKS_DIR / "news_roll.jsonl"
+NEWS_ROLL_DAYS = 30           # 只保留最近 30 天
+NEWS_ROLL_PER_DAY = 150       # 每天最多 150 条（一天的 structured_news 上限就是 180）
+NEWS_ROLL_TEXT_CHARS = 140    # 每条只留正文前 140 字（prompt 体积与文件体积都要控）
+NEWS_ROLL_READ_MAX = 120      # 复查时最多取 120 条（prompt 体积上限）
 RAW_DUMP_PATH = DATA_DIR / "llm_candidates_raw.txt"   # LLM 候选原文快照（诊断用）
+
+# 推翻条件核查的 verdict 枚举（**冻结**：写进账本，展示层三个出口共用同一份）。
+INVALIDATION_VERDICTS = ("triggered", "not_triggered", "unclear")
+INVALIDATION_REASON_MAX = 200     # 一句话说明，超长只截断（不因此丢结果）
 
 CST = timezone(timedelta(hours=8))
 
@@ -1379,17 +1404,21 @@ def _dump_raw(text, max_tokens=None, err=None, mode="w"):
         print(f"[warn] LLM 原文落盘失败: {type(e).__name__}: {str(e)[:60]}")
 
 
-def _extract_items(text, max_tokens=None, dump_mode="w"):
+def _extract_items(text, max_tokens=None, dump_mode="w", key="candidates"):
     """LLM 原文 → list[dict]：**只做「文本 → JSON 条目」**，不做业务校验。
 
     解析策略（修正后的真实语义）：
     1. 围栏与花括号**两步都做**：剥离围栏 → 全角结构标点归一 → 裁到 {...}
     2. 整体 json.loads 成功就用它；**整体失败则按花括号配平逐条抢救**，抢回来的
-       条目照常进入后续校验 —— 一次字符级失误不再让整天样本归零
+       条目照常进入后续校验 —— 一次字符级失误不再让整条样本归零
     3. 无论成败都落盘原始输出（见 _dump_raw）
 
     抽成独立函数是为了让 pm/am 两条通道共用同一份抢救实现（2026-10-04）：09-30 那种
     「一个字符失误 = 整天样本归零」的解药只能有一份，否则新通道会悄悄退化成整批丢弃。
+
+    key（2026-10-05 新增，默认 "candidates"）是顶层数组的键名：**推翻条件核查**那路
+    的输出形状是 {"checks":[...]}，若沿用写死的 "candidates"，整批会被判成
+    「解析成功但没有数组」而全部丢掉 —— 抢救链必须共用，键名必须能传。
     同时更新 _PARSE_STATE 的 json_ok / extracted / error（kept 由 _validate_items 填）。
     """
     raw = text if isinstance(text, str) else ""
@@ -1397,7 +1426,7 @@ def _extract_items(text, max_tokens=None, dump_mode="w"):
     _dump_raw(raw, max_tokens, mode=dump_mode)
     if not raw.strip():
         # 空原文不是「语法错误」：状态归类交给 ask_candidates/main 判成 empty
-        print("[warn] LLM 原文为空，没有可解析的候选")
+        print("[warn] LLM 原文为空，没有可解析的条目")
         return []
 
     t = _strip_fence(raw.strip())
@@ -1418,10 +1447,10 @@ def _extract_items(text, max_tokens=None, dump_mode="w"):
 
     if data is not None:
         _PARSE_STATE["json_ok"] = True
-        items = data.get("candidates") if isinstance(data, dict) else data
+        items = data.get(key) if isinstance(data, dict) else data
         if not isinstance(items, list):
             items = []
-            print("[warn] 候选 JSON 解析成功但没有 candidates 数组")
+            print(f"[warn] JSON 解析成功但没有 {key} 数组")
     else:
         items = []
         for v in variants:              # 保守变体先试，全角引号兜底变体后试
@@ -1432,12 +1461,12 @@ def _extract_items(text, max_tokens=None, dump_mode="w"):
         if items:
             _PARSE_STATE["json_ok"] = True
             _dump_raw(raw, max_tokens, err=last_err, mode=dump_mode)
-            print(f"[warn] 候选 JSON 整体解析失败（{detail}），"
+            print(f"[warn] JSON 整体解析失败（{detail}），"
                   f"按花括号配平逐条抢救出 {len(items)} 条")
         else:
             _PARSE_STATE["error"] = detail
             _dump_raw(raw, max_tokens, err=last_err, mode=dump_mode)
-            print(f"[warn] 候选 JSON 解析失败: {detail}")
+            print(f"[warn] JSON 解析失败: {detail}")
 
     _PARSE_STATE["extracted"] = len(items)
     return items
@@ -1649,6 +1678,229 @@ def ask_candidates(digest, digest_count, analysis_md, quotes, am=False):
                     kept=max(kp1, kp2), error=_PARSE_STATE["error"] or err1,
                     retry="done")
     return cands2
+
+
+# ------------------------------------------------- 推翻条件核查（一次调用）
+
+def build_check_prompt(cands, news_rows):
+    """复查 prompt：①候选列表（id + 名称 + invalidation 原文）②新闻窗口（编号+日期+来源+摘要）。
+
+    窗口正文按 NEWS_ROLL_TEXT_CHARS（140 字）截断，最多 NEWS_ROLL_READ_MAX（120）条 ——
+    实测上限约 120 × 约 110 字符 ≈ 13k 字符，加候选后约 15k，是 MAX_CAND_TOKENS=4000
+    输出预算的几十倍余量，也是**输入** side 可控的关键（正文不截断时一条新闻就能到
+    600 字，120 条会顶到 70k+，白花 token 且稀释注意力）。
+    """
+    lines = []
+    for i, n in enumerate(news_rows):
+        lines.append(f"[{_news_win_id(i)}] {n.get('d') or '?'} {n.get('t') or '  :  '} "
+                     f"{n.get('s') or '未知来源'}｜{n.get('x') or ''}")
+    win = "\n".join(lines) if lines else "（无）"
+    items = []
+    for c in cands:
+        items.append(json.dumps({"id": c.get("id"), "name": c.get("name"),
+                                 "记录日": c.get("date") or "",
+                                 "invalidation": c.get("invalidation")},
+                                ensure_ascii=False))
+    clist = "\n".join(items) if items else "（无）"
+    return f"""你在做**事后复核**：下面每条候选当初都写了一个「推翻条件」（invalidation，什么消息出现就说明这条判断的逻辑破产了）。现在给你**记录日之后**新出现的新闻窗口，请判断每条候选的推翻条件**是否疑似被触发**。
+
+【待复核候选】（共 {len(cands)} 条）
+{clist}
+
+【记录日之后的新增新闻窗口】（共 {len(news_rows)} 条，编号即引用编号）
+{win}
+
+判据（必须逐条遵守）：
+1. 只输出 JSON，不要解释、不要 markdown 围栏。
+2. `basis` 里的编号**必须来自上面窗口的编号**，不许编造、不许写窗口外的数字；没有依据就给空数组。只能引用**该条候选自己的记录日之后**的新闻（窗口里更早的日期不属于那条候选，不得引用）。
+3. **窗口里没有相关信息时必须给 `unclear`**，不许猜 —— 「没有消息」不等于「证明没触发」。
+4. 只有能说清「哪条消息、为什么构成推翻」时才给 `triggered`；`triggered` 的 reason 必须包含那条消息的关键事实。
+5. `not_triggered` 只在窗口里确有**能证伪该推翻条件**的消息时使用（例如推翻条件是"公告否认订单"，而窗口里有公告确认订单）。
+6. 判断依据是**消息本身**，与股价涨跌无关；股价涨了也可能逻辑已经破产。
+7. 每条候选都要给出一条结果，id 必须与上面给的 id 逐字一致。
+
+输出格式：
+{{"checks":[{{"id":"<候选 id>","verdict":"triggered|not_triggered|unclear","reason":"一句话，必须说明依据（引用窗口编号）","basis":[1,3]}}]}}"""
+
+
+def _validate_check_item(o, valid):
+    """一条 LLM 复核结果 → {"verdict","reason","basis"}；无效返回 (None, 原因)。
+
+    **basis 是硬闸**（与 prompt 第 2 条一一对应）：
+      · 不是列表 → 整条无效（宁可不写，也不写一个没依据的判定）
+      · 列表里出现给定窗口之外的编号 → **剔掉编造的编号**并 warn；剔完为空时
+        triggered / not_triggered **一律判无效**（"有依据"是这两种判定的前提），
+        unclear 允许 basis 为空（它本来就是"看不出"）
+    verdict 不在枚举内 → 整条无效。reason 为空 → 整条无效；过长只截断，不丢结果。
+    """
+    if not isinstance(o, dict):
+        return None, "结果不是对象"
+    verdict = str(o.get("verdict") or "").strip().lower()
+    if verdict not in INVALIDATION_VERDICTS:
+        return None, f"verdict 不在枚举内({verdict or '空'})"
+    reason = " ".join(str(o.get("reason") or "").split())
+    if not reason:
+        return None, "reason 为空"
+    raw = o.get("basis")
+    if raw is None:
+        raw = []
+    if not isinstance(raw, list):
+        return None, f"basis 不是数组({type(raw).__name__})"
+    kept, bad = [], []
+    for b in raw:
+        try:
+            n = int(b)
+        except Exception:
+            bad.append(str(b)[:12])
+            continue
+        (kept.append(n) if n in valid else bad.append(n))
+    if bad:
+        print(f"[warn] 推翻条件核查：剔掉 {len(bad)} 个编造/越界的新闻编号 "
+              f"{bad[:5]}（verdict={verdict}）")
+    if not kept and verdict in ("triggered", "not_triggered"):
+        return None, f"{verdict} 却没有一条合法依据（basis 全是编造的编号）"
+    return {"verdict": verdict, "reason": reason[:INVALIDATION_REASON_MAX],
+            "basis": sorted(set(kept))}, ""
+
+
+def check_invalidations(cands, news_rows, max_tokens=MAX_CAND_TOKENS):
+    """对本轮待复查的候选做**一次**批量核查。
+
+    返回 ({id: {"verdict","reason","basis"}}, 备注文本)。**任何失败都返回 {}** ——
+    调用方把每条写成 null 并 warn，绝不让 M10 失败（与"选股失败不影响复盘"同级）。
+
+    先决条件（调用方与这里各守一道，见 review_pending）：
+      · 没有候选 → 不调用；没有新闻窗口 → **不调用**（调用必然只能给 unclear，
+        而"没查到"按冻结 schema 应该写 null，不是 unclear）。
+    """
+    if not cands or not news_rows:
+        return {}, ""
+    valid = {_news_win_id(i) for i in range(len(news_rows))}
+    prompt = build_check_prompt(cands, news_rows)
+    print(f"推翻条件核查 prompt {len(prompt)} 字符（{len(cands)} 条候选 / "
+          f"{len(news_rows)} 条新闻），调用 DeepSeek…")
+    try:
+        text = M3.ds_chat([{"role": "user", "content": prompt}], max_tokens=max_tokens)
+    except Exception as e:
+        print(f"[warn] 推翻条件核查失败（本轮全部写 null）: "
+              f"{type(e).__name__}: {str(e)[:80]}")
+        return {}, f"llm_error: {type(e).__name__}"
+    items = _extract_items(text, max_tokens, key="checks")   # 沿用既有 JSON 抢救链
+    out, rejected = {}, 0
+    for o in items:
+        cid = str((o or {}).get("id") or "").strip()
+        if not cid:
+            rejected += 1
+            print("[warn] 推翻条件核查：有一条结果没有 id，丢弃")
+            continue
+        got, why = _validate_check_item(o, valid)
+        if got is None:
+            rejected += 1
+            print(f"[warn] 推翻条件核查：id={cid[:40]} 的结果无效（{why}），写 null")
+            continue
+        out[cid] = got
+    if not out:
+        print("[warn] 推翻条件核查：没有解析出任何有效结果，本轮全部写 null"
+              + (f"（原文 {len(text or '')} 字符）" if text else "（原文为空）"))
+    elif rejected:
+        print(f"[warn] 推翻条件核查：{rejected} 条结果被判无效（写 null）")
+    return out, ""
+
+
+def apply_invalidation_checks(picks, checks, sent_ids=None):
+    """{id: 结果} 落到各档 reviews[k]["invalidation_check"]，返回落格条数。
+
+    每条**只落它自己的 id**（绝不按位置对齐 —— 账本行是追加的，位置一旦错位就会
+    把别条的依据写到这条上）。匹配不上的丢弃并 warn：宁可少一条，不可错一条。
+
+    sent_ids（可选）：**本轮送审过的**全部候选 id。结果被判无效的那些（编造的依据、
+    verdict 不合法…）在这份集合里、却不在 checks 里 —— 它们的档位要显式写 **null**，
+    因为"查了但没结论"与"根本没法判断"在账本上都记 null，而**键必须存在**是冻结
+    schema 的一条（见 _review）。没送审的行一个字段都不碰。
+
+    写入范围：**只写已经是 dict 的档位**（那是 score_pending 真实填过的档）。
+    """
+    checks = dict(checks or {})
+    sent = set(sent_ids) if sent_ids is not None else set(checks)
+    unmatched = set(checks)
+    n = 0
+    for row in (picks or []):
+        cid = str(row.get("id") or "")
+        # 非空 = 解析出的结果；None 且 cid 在 sent 里 = **送审过但被判无效**（写 null）
+        got = checks.pop(cid, None)
+        unmatched.discard(cid)
+        rv = row.get("reviews")
+        if not isinstance(rv, dict):
+            continue
+        touched = 0
+        for k in REVIEW_DAYS:
+            rev = rv.get(str(k))
+            if not isinstance(rev, dict):
+                continue
+            if got:
+                rev["invalidation_check"] = dict(got, checked_at=_checked_at())
+            elif cid in sent:
+                # 键必须存在且为 null：账本 schema 只允许新增，**不能省略键**
+                rev["invalidation_check"] = None
+            else:
+                continue                   # 这条本来就没送审：一概不碰（维持原值）
+            touched += 1
+        if not got:
+            continue
+        if touched:
+            n += 1
+        else:
+            print(f"[warn] 推翻条件核查：id={cid[:40]} 三档都还没有复盘记录，结果丢弃")
+    if unmatched:
+        print(f"[warn] 推翻条件核查：{len(unmatched)} 条结果没有匹配上账本候选 id，已丢弃"
+              f"（{list(unmatched)[:3]}）")
+    return n
+
+
+def review_pending(rows, today, news_path=None, max_news=NEWS_ROLL_READ_MAX):
+    """本轮新填了复盘档位的候选 → **一次**批量核查 → 落格。返回落格条数。
+
+    **闸门（都在这里，main 只调用一次）**：
+      · rows 为空 → 直接返回 0（**一次 LLM 都不调**）；
+      · 没有 invalidation 原文 / 没有 id 的行不送（没有推翻条件就无从核查）；
+      · 新闻窗口为空（老仓库没有 news_roll.jsonl、或记录日之后没有任何留存）→
+        **不调用 LLM**，全部维持 null（"没查到"不等于 unclear）。
+
+    **只读一次窗口、只调一次 LLM**：起点取所有候选里**最早**的记录日，于是窗口是
+    各条所需窗口的**超集**。多出来的那部分（早于某条自己记录日的新闻）由 prompt
+    里的第 2 条约束兜住 —— 每条候选都带着自己的记录日，模型只许引用该日之后的编号。
+    之所以不按记录日分组各调一次：一轮里不同行的记录日可能不同（迟到补跑的历史行
+    同轮到期），分组会让"一次调用"退化成 N 次，而**只有 1 次**是这一版写死的约束。
+    """
+    pairs = []
+    for row in (rows or []):
+        inv = str(row.get("invalidation") or "").strip()
+        if not (row.get("id") and inv):
+            continue
+        pairs.append((row, str(row["id"]), inv))
+    if not pairs:
+        return 0
+    today_s = today.strftime("%Y-%m-%d")
+    after = min(str(r.get("date") or "") for r, _cid, _inv in pairs)
+    news = news_roll_read(after, today_s, limit=max_news, path=news_path)
+    if not news:
+        print(f"[warn] 推翻条件核查：记录日 {after} 之后没有可用新闻窗口"
+              f"（{NEWS_ROLL_PATH.name} 缺失或为空），本轮 {len(pairs)} 条写 null")
+        return 0
+    cands = [{"id": cid, "name": row.get("name"), "invalidation": inv,
+              "date": str(row.get("date") or "")} for row, cid, inv in pairs]
+    # 每条只送**自己记录日之后**的新闻：早于该条记录日的消息不可能推翻一条当时
+    # 还没写下的判断，留在窗口里只会增加"引错时间"的机会（prompt 里也再声明一遍）。
+    win = [it for it in news if str(it.get("d") or "") > after]
+    checks, _note = check_invalidations(cands, win)
+    if not checks:
+        print("[warn] 推翻条件核查：本轮没有拿到任何有效结果，全部维持 null")
+        return 0
+    # **落格必须按账本行走**：cands 是按 id 生成的送审快照（没有 reviews），
+    # 拿它去 apply_invalidation_checks 会一条都对不上（id 在，但没有 reviews 档位）。
+    # sent_ids 传本轮送审的全部 id：被判无效的那些也要把键写成 null（schema 要求）。
+    return apply_invalidation_checks([r for r, _cid, _inv in pairs], checks,
+                                     sent_ids=[cid for _r, cid, _inv in pairs])
 
 
 # ---------------------------------------------------------------- 记录候选
@@ -1863,6 +2115,216 @@ def _load_quotes_maps(today_s):
             {q["name"]: q for q in qs if q.get("name")})
 
 
+# ------------------------------------------------- 新闻滚动留存（复查素材）
+
+def _news_hash(source, text):
+    """一条新闻的内容指纹（去重键）：来源 + 去空白后的正文。
+
+    用 sha1 只取前 16 位十六进制 —— 一行的额外开销是固定的，且不把正文再抄一遍。
+    不用 Python 内置 hash()：它有进程级随机盐，跨进程不稳定，用它去重等于每次
+    运行都把同一批新闻再追加一遍。
+    """
+    raw = (str(source or "").strip() + "\u0001"
+           + re.sub(r"\s+", "", str(text or "")))
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _news_roll_line(item):
+    """structured_news 的一条 → 紧凑行 dict，不带该条时返回 None。"""
+    if not isinstance(item, dict):
+        return None
+    text = str(item.get("text") or "").strip()
+    if not text:
+        return None
+    t = str(item.get("time") or "").strip()
+    m = re.match(r"(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})", t)
+    if m:
+        d, hm = m.group(1), m.group(2)
+    else:
+        # 没有时刻字段的历史行：**不丢**，日期退回本轮日期、时刻留空。
+        # 丢掉等于在复查窗口里凭空少一条证据，而"哪天看到的"比"几点"重要得多。
+        d, hm = "", ""
+    return {"d": d, "t": hm, "s": str(item.get("source") or "")[:40],
+            "x": text[:NEWS_ROLL_TEXT_CHARS],
+            "h": _news_hash(item.get("source"), text)}
+
+
+def _news_roll_retain(lines, today_s):
+    """行 dict 列表 → (裁剪后要保留的行, 是否需要改写文件)。
+
+    规则：**最近 NEWS_ROLL_DAYS 天**、**每天最多 NEWS_ROLL_PER_DAY 条**；同一天超限时
+    丢**最旧**的（保新），日期解析不出来的行一并丢弃（它们的 d 本来就不可信）。
+    返回 keep 时把需要补的新字段（如历史文件里没有的 h）一并算进 need_rewrite。
+    """
+    try:
+        newest = datetime.strptime(str(today_s), "%Y-%m-%d").date()
+    except Exception:
+        newest = _today()
+    oldest = newest - timedelta(days=NEWS_ROLL_DAYS - 1)
+    by_day, order = {}, []
+    need_rewrite = False
+    for it in lines:
+        if not isinstance(it, dict):
+            need_rewrite = True
+            continue
+        d = str(it.get("d") or "")
+        try:
+            day = datetime.strptime(d, "%Y-%m-%d").date()
+        except Exception:
+            need_rewrite = True
+            continue
+        if day > newest:
+            need_rewrite = True
+            continue
+        if day < oldest:
+            need_rewrite = True
+            continue
+        rec = {"d": d, "t": str(it.get("t") or "")[:5],
+               "s": str(it.get("s") or "")[:40],
+               "x": str(it.get("x") or "")[:NEWS_ROLL_TEXT_CHARS]}
+        h = str(it.get("h") or "")
+        if not h:                       # 08-? 之前写下的行（当时没有 h）：现算
+            h = _news_hash(rec["s"], rec["x"])
+            need_rewrite = True
+        rec["h"] = h
+        if d not in by_day:
+            by_day[d] = []
+            order.append(d)
+        by_day[d].append(rec)
+    keep = []
+    for d in order:
+        got = by_day[d]
+        if len(got) > NEWS_ROLL_PER_DAY:
+            need_rewrite = True
+        keep.extend(got[-NEWS_ROLL_PER_DAY:])      # 超限丢最旧的
+    return keep, need_rewrite
+
+
+def _news_roll_load(path):
+    """读滚动文件 → (行 dict 列表, 原行数)。文件不存在/读不到 → ([], 0)。"""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:
+        return [], 0
+    out = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        try:
+            o = json.loads(s)
+        except json.JSONDecodeError:
+            continue                     # 坏行静默丢弃：这是旁路数据，不值得刷 warn
+        if isinstance(o, dict):
+            out.append(o)
+    return out, len(text.splitlines())
+
+
+def _news_roll_write(path, lines):
+    """整文件重写（先写 .tmp 再 replace，与 write_status 同风格）。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text("\n".join(json.dumps(x, ensure_ascii=False) for x in lines) + "\n",
+                   encoding="utf-8")
+    tmp.replace(path)
+
+
+def news_roll_append(news, today_s, path=None):
+    """把本轮 structured_news.json 里的新闻**追加**进滚动文件（幂等）。
+
+    返回新增条数。**任何失败只 warn**：它是复查用的旁路数据，绝不能因为写不进去
+    而掐断记录与复盘（写不进 → 复查时窗口为空 → invalidation_check 写 null）。
+
+    追加而不是重写：这个文件要跨天累积。**只有**需要裁剪（超 30 天 / 每天超 150 条 /
+    行内的指纹要补）时才整文件重写一次。
+    """
+    path = Path(path) if path is not None else NEWS_ROLL_PATH
+    lines, before = _news_roll_load(path)
+    seen = {str(x.get("h") or "") for x in lines}
+    added = 0
+    for item in (news or []):
+        rec = _news_roll_line(item)
+        if not rec:
+            continue
+        if rec["d"] and rec["d"] > str(today_s):
+            continue                     # 未来日期（脏数据）：不进窗口
+        if rec["h"] in seen:             # 同一条新闻再次出现只留一条
+            continue
+        seen.add(rec["h"])
+        lines.append(rec)
+        added += 1
+    keep, need_rewrite = _news_roll_retain(lines, today_s)
+    trimmed = len(keep) != before + added
+    use_tmp = path.with_suffix(".tmp")
+    try:
+        if added and not need_rewrite and not trimmed:
+            # 快路径：只追加，不重写整个文件
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write("\n".join(json.dumps(x, ensure_ascii=False)
+                                  for x in lines[before:]) + "\n")
+        else:
+            _news_roll_write(path, keep)
+        if added:
+            print(f"[OK] 新闻窗口已留存 {added} 条 → {path}"
+                  f"（现 {len(keep) if (need_rewrite or trimmed) else before + added} 条）")
+    except Exception as e:
+        print(f"[warn] 新闻窗口留存失败（不影响主流程，复查将只能看到已有历史）: "
+              f"{type(e).__name__}: {str(e)[:60]}")
+        return 0
+    finally:
+        # 走到重写分支却只写了一半（异常中断）时留下的 .tmp：顺手清掉，避免误导
+        try:
+            if use_tmp.exists():
+                use_tmp.unlink()
+        except Exception:
+            pass
+    return added
+
+
+def news_roll_read(after_day, today_s, limit=NEWS_ROLL_READ_MAX, path=None):
+    """复查用的新闻窗口：**记录日 < d <= 今天**，最新在前，最多 limit 条。
+
+    after_day 是**记录日**（不是基准日）——复查问的是"这条判断记下之后，世界上
+    又发生了什么"，所以 am 行（基准日=上一交易日）用的仍是它的记录日。
+    窗口为空时返回 []，调用方据此把 invalidation_check 写成 null（"没查到"
+    绝不能伪装成 unclear —— 那是"查过了、看不出"）。
+    """
+    path = Path(path) if path is not None else NEWS_ROLL_PATH
+    lines, _n = _news_roll_load(path)
+    try:
+        lo = datetime.strptime(str(after_day), "%Y-%m-%d").date()
+    except Exception:
+        lo = None
+    try:
+        hi = datetime.strptime(str(today_s), "%Y-%m-%d").date()
+    except Exception:
+        hi = _today()
+    out = []
+    for it in lines:
+        d = str(it.get("d") or "")
+        try:
+            day = datetime.strptime(d, "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if lo is not None and not (day > lo):
+            continue
+        if not (day <= hi):
+            continue
+        out.append(it)
+    out.sort(key=lambda x: (str(x.get("d") or ""), str(x.get("t") or "")), reverse=True)
+    return out[:limit]
+
+
+def _news_win_id(i):
+    """窗口编号：**从 1 开始的整数**，与冻结 schema 的 `basis: [12, 37]` 同一口径。
+
+    刻意用"纯数字"而不是 A1/B2：`basis` 的类型被冻结成整数数组，模型也就照数字写；
+    判据只有一条 —— 编号必须来自给定列表（见 _validate_check_item）。
+    """
+    return i + 1
+
+
 def _resolve_offline(row, by_name, by_code, cache=None):
     """账本行 → secid 的**不联网**兜底解析，返回 (secid, code, market, 来源)。
 
@@ -1928,8 +2390,14 @@ def score_pending(rows, today, bench_now, by_name=None, by_code=None, cache=None
     任一口径缺端点都只让**那一个**口径写 null，另一口径照常算 —— 早期把两者绑在
     一起会让"中证1000 取不到"把沪深300 的样本也一起吃掉（均值样本数白白缩水）。
     接口挂/超时的处理与"个股行情取不到"同级：只 warn，绝不让 M10 整体失败。
+
+    **返回值（2026-10-05 改）**：本轮**实际写进某一档 reviews[k]** 的账本行列表。
+    旧版返回 int（填了几档），改列表是为了让 main 把「本轮要复查推翻条件的候选」
+    精确地传给 review_pending —— 只有这些行是新填了档位的，也只有它们需要一次
+    复核；没填档的行多调一次 LLM 纯属浪费（见 review_pending 的闸门）。
+    len(返回值) 与旧版的计数**完全相等**（每条最多写一档、写成功才进列表）。
     """
-    scored = 0
+    checked = []
     by_name = by_name or {}
     by_code = by_code or {}
     for row in rows:
@@ -2018,18 +2486,23 @@ def score_pending(rows, today, bench_now, by_name=None, by_code=None, cache=None
             bench2=bench2_now, bench2_ret=b2ret, alpha2=alpha2,
             status="ok" if alpha is not None else "no_bench",
             span=span, span_kind=kind)
-        scored += 1
+        checked.append(row)         # 本轮真的写了一档（供 main 做推翻条件核查）
         a = f"{alpha:+.2%}" if alpha is not None else "—"
         a2 = f"{alpha2:+.2%}" if alpha2 is not None else "—"
         print(f"  ~ {row['name']} T+{k} 收 {price} 收益 {ret:+.2%}"
               f" 超额 {BENCH_NAME} {a} / {BENCH2_NAME} {a2}"
               f"（实际跨度 {span} 个{'交易日' if kind == 'trading' else '自然日'}）")
-    return scored
+    return checked
+
+
+def _checked_at():
+    """核查时刻（账本里的生证据）：与 write_status/now_cst 同一口径的本地时间串。"""
+    return now_cst().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _review(due_day, done, price=None, ret=None, bench=None, bench_ret=None,
             alpha=None, status="ok", span=None, span_kind=None,
-            bench2=None, bench2_ret=None, alpha2=None):
+            bench2=None, bench2_ret=None, alpha2=None, invalidation_check=None):
     """一档复盘记录。**已有字段名/类型一律不变**（账本 schema 只允许新增）。
 
     参数 due_day 就是模块级 due() 的返回值（CST 零点 datetime），写进账本时
@@ -2042,6 +2515,10 @@ def _review(due_day, done, price=None, ret=None, bench=None, bench_ret=None,
       bench2    观察日的中证1000 点位（与既有 `bench` 对称；取不到为 null）
       bench2_ret 该档观察日相对基准日的中证1000 涨跌幅（float 或 null）
       alpha2    ret − bench2_ret（float 或 null；与 alpha 各自独立，互不阻塞）
+      invalidation_check（2026-10-05）推翻条件是否疑似被触发的**复核结果**，
+                形状 {"verdict","reason","basis","checked_at"}；**键必须存在**，
+                没查/取不到一律 null（绝不编一个 "unclear" 冒充"查过了"）。
+                本函数先写 null，本轮核查成功后再由 apply_invalidation_checks 就地覆盖。
     展示层可据此说清"这条 T+3 其实是第 5 个交易日的价"，以及"超额到底赢的是
     沪深300 还是中证1000"。注：expired / no_quote 的 span 是"基准日 → 判该档作废那天"，
     不是补录跨度（没有补录）。
@@ -2051,7 +2528,8 @@ def _review(due_day, done, price=None, ret=None, bench=None, bench_ret=None,
             "alpha": alpha,
             "bench2": bench2, "bench2_ret": bench2_ret, "alpha2": alpha2,
             "status": status,
-            "span": span, "span_kind": span_kind}
+            "span": span, "span_kind": span_kind,
+            "invalidation_check": invalidation_check}
 
 
 def _date(s):
@@ -2325,6 +2803,19 @@ def main():
         rows = load_ledger(LEDGER_PATH)
         print(f"账本 {len(rows)} 条 → {LEDGER_PATH}")
 
+        # 0a) 新闻窗口**每轮都留存**（am/pm 都要）：data/structured_news.json 每轮被
+        #     覆盖，不留一份滚动历史，事后复查就没有"记录日之后的新闻"可查。
+        #     它是旁路数据（失败只 warn，见 news_roll_append），且必须排在选股/复盘
+        #     之前 —— 今天的新闻不能等到下一轮才进窗口。文件缺失/读不到一律当空，
+        #     主流程照常（老仓库第一次跑就是空 → invalidation_check 写 null）。
+        try:
+            _roll_news = json.loads(
+                (DATA_DIR / "structured_news.json").read_text(encoding="utf-8")).get("news")
+        except Exception:
+            _roll_news = None
+        if _roll_news:
+            news_roll_append(_roll_news, today_s)
+
         # 当日 quotes.json 的 name/code 索引：选股复用行情，复盘兼做 secid 兜底
         by_code, by_name = _load_quotes_maps(today_s)
 
@@ -2462,9 +2953,21 @@ def main():
             if not ok_close:
                 print("闸门未开，本轮不打分（到期即补，下次运行会补上）")
             elif any(_has_due(r, today) for r in rows):
-                n = score_pending(rows, today, bench, by_name=by_name,
-                                  by_code=by_code, cache={}, bench2_now=bench2)
-                print(f"[OK] 回填 {n} 档复盘")
+                filled = score_pending(rows, today, bench, by_name=by_name,
+                                       by_code=by_code, cache={}, bench2_now=bench2)
+                print(f"[OK] 回填 {len(filled)} 档复盘")
+                # 2b) 推翻条件核查（一次 LLM 调用覆盖本轮全部待复查候选）：
+                #     只对本轮**真的填了档位**的行做，没有这样的行时 review_pending
+                #     直接返回 0、**一次都不调**（见其 docstring 的三道闸门）。
+                #     失败一律只是 null + warn，绝不影响上面已经算好的价格口径。
+                if filled:
+                    try:
+                        m = review_pending(filled, today)
+                        if m:
+                            print(f"[OK] 推翻条件核查落格 {m} 条")
+                    except Exception as e:
+                        print(f"[warn] 推翻条件核查失败（不影响复盘与账本）: "
+                              f"{type(e).__name__}: {str(e)[:80]}")
             else:
                 print("今日无到期复盘")
         except Exception as e:

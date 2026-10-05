@@ -539,6 +539,11 @@ class Bundle:
         # picks_stats 现在同时给两个口径：n/alpha（沪深300）与 n2/alpha2（中证1000），
         # 两者样本数各算各的（老账本行只进第一个口径）—— 前端据此分别显示。
         stats = self.m5.picks_stats(rows)
+        # 推翻条件核查（2026-10-05）：逐条结论的标签表 + **关键统计**（逻辑破产却
+        # 价格跑赢的条数）。判据与口径只在 M5 里定义一次，这里原样透传 —— 静态导出
+        # 把整个 dict 序列化，前端不必自己认 verdict 的取值，也不必自己写统计文案。
+        inv = self.m5.inv_check_stats(rows)
+        inv_line = self.m5.inv_check_stat_line(inv)
         groups = []
         for s in ("am", "pm"):
             grp = [r for r in rows if pick_slot(r) == s]
@@ -554,6 +559,17 @@ class Bundle:
             "bench": BENCH_CN,
             "bench2": BENCH2_CN,
             "bench_note": PICK_BENCH_NOTE,
+            # 推翻条件核查（纯附加字段，2026-10-05）：labels 是四态文案（**没核查 ≠
+            # 未触发**，故 null 单独一条 unchecked），stats 是数字口径，line 是渲染好
+            # 的一句关键统计（sample 为 0 时为空串 → 前端整条不显示）。
+            "inv": {
+                "labels": dict(self.m5.INV_CHECK_CN),
+                "unchecked": self.m5.INV_UNCHECKED_CN,
+                # 逐条原因在网格里截断的宽度（前端不自己硬编码截断长度）
+                "reason_max": self.m5.INV_REASON_MAX,
+                "stats": {str(k): v for k, v in inv.items()},
+                "line": inv_line,
+            },
             "total": len(rows),
         }
 

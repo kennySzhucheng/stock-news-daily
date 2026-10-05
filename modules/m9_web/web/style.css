@@ -347,6 +347,18 @@ a.cite:hover{background:none; border-bottom-style:solid; text-decoration:none;}
 /* 非沪深 A 股的那张表：降饱和，避免与主表混为一谈（2026-10-04） */
 .muted-table{opacity:.72;}
 
+/* 推翻条件核查（2026-10-05）：四态视觉份量拉开 ——
+   triggered 是"逻辑破产"，要一眼看见；未核查/未触发/无法判断归为弱提示。
+   只用既有 token（--up 在浅色里是红、深色里自动换色），不引入新颜色。 */
+.pick-inval-check{margin-top:6px; font-size:13.5px; line-height:1.6;}
+.pick-inval-check b{font-weight:600;}
+.pick-inval-check.inv-triggered{
+  color:var(--up); border-left:3px solid currentColor; padding-left:8px;
+}
+.pick-inval-check.muted{color:var(--muted);}
+.pick-inval-warn{color:var(--up); font-weight:600;}
+.pick-inval-cell{white-space:normal; font-size:12.5px; line-height:1.5;}
+
 /* 盘前清单的关注区间 / 触发条件（与 M5 日报同名类，不引入新颜色） */
 .pick-plan{margin-top:7px; font-size:13.5px; line-height:1.6;}
 .pick-plan b{color:var(--text); margin-right:6px; font-weight:600;}
