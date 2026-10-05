@@ -1002,5 +1002,102 @@ class RecommendationSection(unittest.TestCase):
         self.assertEqual([c["name"] for c in pm], ["短逻辑股份"])
 
 
+class TwoBenchmarks(unittest.TestCase):
+    """复盘同时给两个基准：沪深300 与 **中证1000**（2026-10-05）。
+
+    动机：候选天然偏向中小盘（prompt 里明确"同等依据优先单价更低"），只用沪深300
+    当基准会**系统性高估**这套判断的水平 —— 小盘股整体跑赢时，"判断对"是假的。
+    所以每档同时写 `bench_ret/alpha`（沪深300）与 `bench2_ret/alpha2`（中证1000），
+    **两个口径互不阻塞**：任一缺失只让那一个写 null，另一个照常算。
+    """
+
+    def setUp(self):
+        self.pk = load("m10_picks", "modules/m10_picks/picks.py")
+        self.rep = load("m5_report", "modules/m5_report/report.py")
+        self.psh = load("m6_push", "modules/m6_push/push.py")
+
+    def _d(self, s):
+        return datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=hc.CST)
+
+    def _row(self, base_date=None, bench2=7300.0, name="甲股份"):
+        r = {"id": f"2026-09-11-pm-s-{name}", "date": "2026-09-11", "slot": "pm",
+             "kind": "stock", "name": name, "code": "600001", "secid": "1.600001",
+             "market": "沪A", "base_price": 10.0, "base_prev_close": 9.9,
+             "bench_level": 4000.0, "board": "", "logic": "x" * 30,
+             "invalidation": "若公司公告订单延期或取消", "confidence": "中",
+             "basis_refs": [1], "reviews": {str(k): None for k in self.pk.REVIEW_DAYS}}
+        if bench2 is not None:
+            r["bench2_level"] = bench2
+            r["bench2_name"] = "中证1000"
+        return r
+
+    def _stub(self):
+        self.pk.fetch_any = lambda secid: ({"price": 11.0, "prev_close": 10.0}, "stub")
+        self.pk.fetch_bench = lambda: (None, {"level": 4000.0, "qdate": "20260914"})
+        self.pk._inject_trading_days(["2026-09-14", "2026-09-16", "2026-09-18"])
+
+    def test_index_secid_is_csi1000(self):
+        self.assertEqual(self.pk.BENCH2_SECID, "1.000852", "中证1000 = 000852.SH")
+        self.assertEqual(self.pk.BENCH2_NAME, "中证1000")
+
+    def test_alpha2_computed_next_to_alpha(self):
+        self._stub()
+        row = self._row()
+        # 沪深300 +1%、中证1000 +2%、个股 +10% → 两个口径都算出来且互不覆盖
+        self.pk.score_pending([row], self._d("2026-09-14"), 4040.0, bench2_now=7446.0)
+        rev = row["reviews"]["1"]
+        self.assertAlmostEqual(rev["ret"], 0.1, places=4)
+        self.assertAlmostEqual(rev["alpha"], 0.09, places=3)
+        self.assertAlmostEqual(rev["bench2_ret"], 0.02, places=3)
+        self.assertAlmostEqual(rev["alpha2"], 0.08, places=3)
+        self.assertAlmostEqual(rev["alpha2"], rev["ret"] - rev["bench2_ret"], places=4)
+
+    def test_missing_bench2_does_not_block_alpha(self):
+        self._stub()
+        row = self._row(bench2=None)          # 老账本行：没有第二基准
+        self.pk.score_pending([row], self._d("2026-09-14"), 4040.0, bench2_now=7446.0)
+        rev = row["reviews"]["1"]
+        self.assertIsNotNone(rev["alpha"], "沪深300 口径必须照常算")
+        self.assertIsNone(rev["alpha2"], "缺第二基准端点 → alpha2 为 null，不许编数")
+        self.assertEqual(rev["status"], "ok")
+
+    def test_missing_first_bench_still_gives_alpha2(self):
+        """反方向也要成立：两个口径互不阻塞。"""
+        self._stub()
+        row = self._row()
+        row["bench_level"] = None             # 沪深300 基准日缺失
+        self.pk.score_pending([row], self._d("2026-09-14"), 4040.0, bench2_now=7446.0)
+        rev = row["reviews"]["1"]
+        self.assertIsNone(rev["alpha"])
+        self.assertIsNotNone(rev["alpha2"])
+
+    def test_display_names_both_benchmarks(self):
+        rows = [self._row()]
+        rows[0]["reviews"]["1"] = {"due": "2026-09-14", "done": "2026-09-14",
+                                   "price": 11.0, "ret": 0.1, "bench": 4040.0,
+                                   "bench_ret": 0.01, "alpha": 0.09, "status": "ok",
+                                   "span": 1, "span_kind": "trading",
+                                   "bench2": 7446.0, "bench2_ret": 0.02, "alpha2": 0.08}
+        html = self.rep.render_picks(rows, "2026-10-09")
+        p = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html))
+        self.assertIn("沪深300", p)
+        self.assertIn("中证1000", p)
+        self.assertIn("只用沪深300 会高估水平", p, "必须解释为什么给两个基准")
+
+    def test_missing_alpha2_shows_dash_not_zero(self):
+        # 日期要在"往期候选"的展示窗口内（太旧的行走的是另一条分支）
+        rows = [self._row(bench2=None)]
+        rows[0]["date"] = "2026-10-06"
+        rows[0]["reviews"]["1"] = {"due": "2026-09-14", "done": "2026-09-14",
+                                   "price": 11.0, "ret": 0.1, "bench": 4040.0,
+                                   "bench_ret": 0.01, "alpha": 0.09, "status": "ok",
+                                   "span": 1, "span_kind": "trading",
+                                   "bench2_ret": None, "alpha2": None}
+        p = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", self.rep.render_picks(rows, "2026-10-09")))
+        self.assertIn("甲股份", p, "该行应在往期回填里渲染")
+        self.assertIn("中证1000", p)
+        self.assertRegex(p, r"中证1000\s*[—–-]", "缺第二口径要显示破折号，不能显示 0%")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -56,6 +56,11 @@ M10 候选清单与事后复盘模块 — 把 M3 的判断变成可检验的记�
     日K兜底），落缓存 reports/picks/trading_days.json；取不到则退化为「周一~周五
     − 内置 2026 休市表」的近似日历并打醒目 warn。due(k) 与 reviews[k]["span"] 都走
     这个日历 —— 「自然日 +1 天」在周末/长假上是错的（周五记录 T+1 会算成周六）
+12. **两个基准并列**（2026-10-05）：账本行新增 `bench2_level`（记录时的中证1000
+    点位，取不到写 null）、`bench2_name`；每档 reviews[k] 新增 `bench2_ret` 与
+    `alpha2 = ret − bench2_ret`。**既有 bench_level/bench/bench_ret/alpha 语义与
+    写法一个字未动**。两个基准互不阻塞：任一口径缺端点只让它自己写 null，另一口径
+    照常算；bench2 取数失败只 warn，绝不阻断记录与复盘。动机见 BENCH2_SECID 的注释。
 
 密钥来源: 环境变量 DEEPSEEK_API_KEY
 """
@@ -90,6 +95,20 @@ CST = timezone(timedelta(hours=8))
 
 BENCH_SECID = "1.000300"      # 沪深300，与个股同一端点同一字段结构，实测可用
 BENCH_NAME = "沪深300"
+
+# 第二基准：中证1000（000852.SH）。
+# 为什么需要（2026-10-05 用户第一优先级）：候选天然偏向**中小盘 + 事件驱动**
+# （prompt 第 8 条还明确要求"同等依据优先单价更低"的标的），只用沪深300 当基准会
+# **系统性高估**这套判断的水平 —— 小盘股整体跑赢的阶段，alpha 为正可能只是风格红利。
+# 两个基准并列，读者才能看出"是真本事还是风格红利"。既有 bench_* 语义一个字不动。
+# 依据（2026-10-05 本机实测，只用 M4 已有的取数函数，未新写 HTTP 客户端）：
+#   M4.fetch_quote_tencent("1.000852") → name=中证1000 price=7298.82
+#                                        time=20260930161500
+#   M4.fetch_quote("1.000852")         → name=中证1000 price=7298.82（东财无时刻字段）
+#   返回的 name 就是「中证1000」，secid 与标的对得上，故不换备选的国证2000
+#   （0.399303 实测同样可取到 9648.50，但它覆盖的是深市小盘，中证1000 更贴候选池）。
+BENCH2_SECID = "1.000852"
+BENCH2_NAME = "中证1000"
 
 # 板块指数：东财板块代码前缀 90（实测 secid=90.BK0447 可取到行情）。
 # pz 服务端钳在 100（传 1000 也只回 100），且按 fid=f3 涨跌幅排序 ——
@@ -313,6 +332,33 @@ def fetch_bench():
         print("[warn] 沪深300 基准取数失败（腾讯源）")
         return None, None
     print(f"[OK] 基准 {BENCH_NAME} {q['price']} ({q['change_pct']}%) 源=tencent")
+    return q["price"], q
+
+
+def fetch_bench2():
+    """中证1000 → (点位, 报价字典)。取不到返回 (None, None)。
+
+    与 fetch_bench 同形状、同口径（点位 + 带报价时刻的行情字典），差别只有两处：
+      · 首选腾讯（有 [30] 报价时刻，与沪深300 同源同口径），
+        **东财兜底**：这个基准只是并列展示的第二个口径，多一条腿比"少一个数"划算，
+        而 fetch_bench 不能这么干 —— 收盘闸门靠时刻字段，兜底源给不出时刻，
+        拿一个无法自证时刻的价去开闸门会把 T+1 写成 0%（见 close_ready）。
+      · **任何失败都只是 warn**：调用方把 None 原样写进 bench2_level / alpha2，
+        绝不阻断记录与复盘（两个基准互不阻塞）。
+    """
+    q = M4.fetch_quote_tencent(BENCH2_SECID)
+    src = "tencent"
+    if not q or not q.get("price"):
+        # 兜底源：无时刻字段，只有点位。**retries=1**：这是辅助口径，最坏情况下
+        # （两个源都不通）也不想让它比 fetch_bench 多拖十几秒 —— 本轮取不到就写 null，
+        # 下一次运行自然会重试（与"个股行情取不到就留待下次"同一处理）。
+        q = M4.fetch_quote(BENCH2_SECID, retries=1, timeout=5)
+        src = "eastmoney"
+    if not q or not q.get("price"):
+        print(f"[warn] {BENCH2_NAME} 基准取数失败（腾讯与东财都试过）—— "
+              "第二口径超额将写 null，沪深300 口径照常")
+        return None, None
+    print(f"[OK] 基准2 {BENCH2_NAME} {q['price']} ({q.get('change_pct')}%) 源={src}")
     return q["price"], q
 
 
@@ -1687,7 +1733,7 @@ def _bump(stats, key):
 
 
 def record(rows, today, slot, cands, bench, board_map, cache, by_code, by_name,
-           am=False, base_date=None, stats=None):
+           am=False, base_date=None, stats=None, bench2=None):
     """把今日候选追加进账本。已存在的 id 跳过 —— 幂等保险。
 
     am=True 走盘前通道：基准价换成上一交易日收盘价（见 am_base_quote / base_date），
@@ -1695,10 +1741,20 @@ def record(rows, today, slot, cands, bench, board_map, cache, by_code, by_name,
     类型）；锁不到昨收的候选**整条丢弃** —— 盘前清单的价值就在于"以昨收为基准"，
     一条没有基准的记录既指导不了今天，也永远打不了分。
 
+    bench2（可选）：第二基准（中证1000）在**同一时刻**的点位，写进新增字段
+    `bench2_level` 与 `bench2_name`。取不到（None）照记不误 —— 记的是"当时中证1000
+    在什么位置"，缺了只是这一条没有第二口径，绝不是不记这条候选的理由
+    （见 fetch_bench2 与模块 docstring 的说明）。
+
     stats（可选 dict）：回填 added/dup/no_market/no_base 计数，供 main 分类 reason
     （am 通道 0 条时要能说清是"已在账本里（幂等）"还是"全被丢弃"）。
     """
     existing = {r.get("id") for r in rows}
+    if bench2 is None:
+        # 一行 warn 说清"这一批没有第二口径"，但**绝不阻断记录**（与 fetch_bench2
+        # 的失败提示同级，只是这里覆盖"调用方压根没传 bench2"的情况）。
+        print(f"[warn] 本轮无 {BENCH2_NAME} 点位：bench2_level 写 null，"
+              "候选照常入账（第二口径超额留待有数据的轮次再算）")
     prev_d = None
     if am:
         try:
@@ -1758,6 +1814,10 @@ def record(rows, today, slot, cands, bench, board_map, cache, by_code, by_name,
             "code_hint": cand.get("code_hint") or "",
             "base_price": price, "base_prev_close": prev,
             "quote_source": src, "bench_level": bench,
+            # 第二基准（2026-10-05 新增，纯附加）：同一时刻的中证1000 点位。
+            # 取不到写 null（**不阻断记录**）；bench2_name 只为展示，老账本没有它
+            # 也不许报错（展示层按常量 BENCH2_NAME 兜底）。
+            "bench2_level": bench2, "bench2_name": BENCH2_NAME,
             "board": cand["board"],
             "logic": cand["logic"], "invalidation": cand["invalidation"],
             "confidence": cand["confidence"], "basis_refs": cand["basis_refs"],
@@ -1837,7 +1897,8 @@ def _resolve_offline(row, by_name, by_code, cache=None):
     return None, None, "", ""
 
 
-def score_pending(rows, today, bench_now, by_name=None, by_code=None, cache=None):
+def score_pending(rows, today, bench_now, by_name=None, by_code=None, cache=None,
+                  bench2_now=None):
     """到期即补：today >= 基准日之后的第 k 个交易日 且该档未填 → 现在就打分。
 
     **基准日 d0 = row["base_date"] or row["date"]**（2026-10-04）：pm 行没有
@@ -1859,6 +1920,14 @@ def score_pending(rows, today, bench_now, by_name=None, by_code=None, cache=None
 
     by_name / by_code / cache 都是可选的：不传就是旧行为（不做兜底解析），
     其它调用点不受影响。
+
+    bench2_now（可选）：观察日的中证1000 点位。两个基准**互不阻塞**：
+      · 沪深300 两个端点（基准日 bench_level / 观察日 bench_now）齐 → bench_ret/alpha，
+        缺失 → 这两个字段 null；
+      · 中证1000 同理独立算 bench2_ret/alpha2。
+    任一口径缺端点都只让**那一个**口径写 null，另一口径照常算 —— 早期把两者绑在
+    一起会让"中证1000 取不到"把沪深300 的样本也一起吃掉（均值样本数白白缩水）。
+    接口挂/超时的处理与"个股行情取不到"同级：只 warn，绝不让 M10 整体失败。
     """
     scored = 0
     by_name = by_name or {}
@@ -1935,22 +2004,32 @@ def score_pending(rows, today, bench_now, by_name=None, by_code=None, cache=None
         b0 = row.get("bench_level")
         bret = round((bench_now - b0) / b0, 4) if (b0 and bench_now) else None
         alpha = round(ret - bret, 4) if (ret is not None and bret is not None) else None
+        # 第二基准（中证1000）：端点取**行里的 bench2_level**（记录时锁下的点位，
+        # 老账本没有这个字段 → 自然为 None → alpha2 写 null）。任一端点缺失只让
+        # 这一个口径为 null，上面的 bench_ret/alpha 不受影响（两个基准互不阻塞）。
+        b20 = row.get("bench2_level")
+        b2ret = round((bench2_now - b20) / b20, 4) if (b20 and bench2_now) else None
+        alpha2 = round(ret - b2ret, 4) if (ret is not None and b2ret is not None) else None
 
         span, kind = _span_of(d0, today)
         rv[str(k)] = _review(
             k_due, today, price=price, ret=ret, bench=bench_now,
             bench_ret=bret, alpha=alpha,
+            bench2=bench2_now, bench2_ret=b2ret, alpha2=alpha2,
             status="ok" if alpha is not None else "no_bench",
             span=span, span_kind=kind)
         scored += 1
         a = f"{alpha:+.2%}" if alpha is not None else "—"
-        print(f"  ~ {row['name']} T+{k} 收 {price} 收益 {ret:+.2%} 超额 {a}"
+        a2 = f"{alpha2:+.2%}" if alpha2 is not None else "—"
+        print(f"  ~ {row['name']} T+{k} 收 {price} 收益 {ret:+.2%}"
+              f" 超额 {BENCH_NAME} {a} / {BENCH2_NAME} {a2}"
               f"（实际跨度 {span} 个{'交易日' if kind == 'trading' else '自然日'}）")
     return scored
 
 
 def _review(due_day, done, price=None, ret=None, bench=None, bench_ret=None,
-            alpha=None, status="ok", span=None, span_kind=None):
+            alpha=None, status="ok", span=None, span_kind=None,
+            bench2=None, bench2_ret=None, alpha2=None):
     """一档复盘记录。**已有字段名/类型一律不变**（账本 schema 只允许新增）。
 
     参数 due_day 就是模块级 due() 的返回值（CST 零点 datetime），写进账本时
@@ -1960,12 +2039,18 @@ def _review(due_day, done, price=None, ret=None, bench=None, bench_ret=None,
       span      基准日 → 本次判定日之间的**实际交易日数**（int）；日历不可用时是
                 自然日天数，由 span_kind 指出
       span_kind "trading"（真实交易日历）/ "natural"（降级为自然日）
-    展示层可据此说清"这条 T+3 其实是第 5 个交易日的价"。
-    注：expired / no_quote 的 span 是"基准日 → 判该档作废那天"，不是补录跨度（没有补录）。
+      bench2    观察日的中证1000 点位（与既有 `bench` 对称；取不到为 null）
+      bench2_ret 该档观察日相对基准日的中证1000 涨跌幅（float 或 null）
+      alpha2    ret − bench2_ret（float 或 null；与 alpha 各自独立，互不阻塞）
+    展示层可据此说清"这条 T+3 其实是第 5 个交易日的价"，以及"超额到底赢的是
+    沪深300 还是中证1000"。注：expired / no_quote 的 span 是"基准日 → 判该档作废那天"，
+    不是补录跨度（没有补录）。
     """
     return {"due": due_day.strftime("%Y-%m-%d"), "done": done.strftime("%Y-%m-%d"),
             "price": price, "ret": ret, "bench": bench, "bench_ret": bench_ret,
-            "alpha": alpha, "status": status,
+            "alpha": alpha,
+            "bench2": bench2, "bench2_ret": bench2_ret, "alpha2": alpha2,
+            "status": status,
             "span": span, "span_kind": span_kind}
 
 
@@ -1999,6 +2084,16 @@ def probe():
     else:
         print("[FAIL] 沪深300 取数失败 —— 超额无法计算，且闸门 fail-closed")
         ok = False
+
+    # 第二基准（中证1000）：**取不到不算 FAIL** —— 它是并列展示的第二个口径，
+    # 缺了只是少一列（写 null），既不参与闸门也不阻断记录/复盘。
+    bench2, bench2_q = fetch_bench2()
+    if bench2_q:
+        print(f"[OK]   中证1000 {bench2_q['price']} ({bench2_q.get('change_pct')}%) "
+              f"报价时刻={bench2_q.get('time') or '无（东财源无时刻字段）'}")
+    else:
+        print("[warn] 中证1000 取数失败 —— 第二口径（bench2_level/alpha2）将写 null；"
+              "沪深300 口径与记录、复盘均不受影响")
 
     q, src = fetch_any("0.001216")
     if q:
@@ -2119,7 +2214,8 @@ def write_status(today_s, slot, state):
 
 # ---------------------------------------------------------------- 盘前通道
 
-def record_premarket(rows, today_s, bench, by_code, by_name, base_date, state):
+def record_premarket(rows, today_s, bench, by_code, by_name, base_date, state,
+                     bench2=None):
     """盘前通道的「选股 → 入账」（main 在 am 且闸门已开时调用）。state 就地更新。
 
     与 pm 那条路的三点不同，全部收在这里（main 只在槽位上分叉一次）：
@@ -2177,7 +2273,7 @@ def record_premarket(rows, today_s, bench, by_code, by_name, base_date, state):
     stats = {}
     try:
         n = record(rows, today_s, "am", cands, bench, {}, {}, by_code, by_name,
-                   am=True, base_date=base_date, stats=stats)
+                   am=True, base_date=base_date, stats=stats, bench2=bench2)
     except Exception as e:
         state.update(reason="empty",
                      detail=f"入账失败: {type(e).__name__}: {str(e)[:60]}")
@@ -2276,6 +2372,21 @@ def main():
             save_ledger(LEDGER_PATH, rows)
             return 0
 
+        # 第二基准（中证1000）：与沪深300 并列展示的第二个口径。
+        # **只在这一轮真的会用到它时才取** —— 闸门未开的那些运行（周末/节假日/盘中）
+        # 既不记录也不复盘，多花一次请求没有意义（这个模块对联网次数一向抠得很紧，
+        # 见 CAL_NET_MAX 的注释）。判定：pm 收盘后（ok_close）要做记录与复盘；
+        # am 盘前闸门开着要做记录（am 的 ok_close 恒为 False，从不复盘）。
+        # **取数失败绝不能阻断任何一步** —— 异常一律吞成 warn + None（两个基准互不
+        # 阻塞，见 score_pending）。
+        bench2 = None
+        if ok_close or (slot == "am" and gate_ok):
+            try:
+                bench2, _bench2_q = fetch_bench2()
+            except Exception as e:
+                print(f"[warn] {BENCH2_NAME} 基准取数异常（不影响沪深300 口径、"
+                      f"不阻断记录与复盘）: {type(e).__name__}: {str(e)[:60]}")
+
         # 1) 记录今日候选：pm 只在盘后、且今日已收盘；am 走盘前通道
         if args.score_only:
             state.update(detail="--score-only：本轮不选股，只做到期复盘")
@@ -2287,7 +2398,7 @@ def main():
                 print(f"盘前闸门未开，本轮不产出观察清单（{why}）")
             else:
                 record_premarket(rows, today_s, bench, by_code, by_name,
-                                 base_date, state)
+                                 base_date, state, bench2=bench2)
         elif not ok_close:
             state.update(reason="gate_closed", detail=why)
             print("闸门未开，本轮不记录新候选（只在今日收盘后记录）")
@@ -2333,7 +2444,7 @@ def main():
                             board_map = build_board_map() if any(
                                 c["kind"] == "board" for c in cands) else {}
                             n = record(rows, today_s, slot, cands, bench, board_map, {},
-                                       by_code, by_name)
+                                       by_code, by_name, bench2=bench2)
                         except Exception as e:
                             state.update(reason="empty",
                                          detail=f"入账失败: {type(e).__name__}: {str(e)[:60]}")
@@ -2352,7 +2463,7 @@ def main():
                 print("闸门未开，本轮不打分（到期即补，下次运行会补上）")
             elif any(_has_due(r, today) for r in rows):
                 n = score_pending(rows, today, bench, by_name=by_name,
-                                  by_code=by_code, cache={})
+                                  by_code=by_code, cache={}, bench2_now=bench2)
                 print(f"[OK] 回填 {n} 档复盘")
             else:
                 print("今日无到期复盘")

@@ -503,6 +503,10 @@ class Bundle:
             （slot=am）。前端不必自己认 slot 的取值口径 —— 那个口径（缺失/写坏
             一律按 pm）只在这里定义一次；账本既有字段一个都没动。
           - `groups` 是纯附加的分组摘要（推荐在前），行数仍以 rows 为准。
+          - `bench` / `bench2` / `bench_note`（2026-10-05，纯附加）：两个基准的中文名
+            与「为什么同时给两个」的那句解释；每档的两个口径在
+            `stats[k]`（n/alpha 与 n2/alpha2）与 `rows[].reviews[k]`（alpha/alpha2）
+            里，缺第二个口径的旧记录是 null，前端显示「—」而不是 0%。
         """
         rows = []
         for r in (self.picks or []):
@@ -531,7 +535,9 @@ class Bundle:
                                  r.get("id") or ""), reverse=True)
 
         latest = max((r.get("date") or "" for r in rows), default="")
-        # 均值与样本数由 M5 同一份实现算出，保证日报与网页版不会各算各的
+        # 均值与样本数由 M5 同一份实现算出，保证日报与网页版不会各算各的。
+        # picks_stats 现在同时给两个口径：n/alpha（沪深300）与 n2/alpha2（中证1000），
+        # 两者样本数各算各的（老账本行只进第一个口径）—— 前端据此分别显示。
         stats = self.m5.picks_stats(rows)
         groups = []
         for s in ("am", "pm"):
@@ -543,6 +549,11 @@ class Bundle:
             "groups": groups,
             "latest_date": latest,
             "stats": {str(k): v for k, v in stats.items()},
+            # 两个基准的名字与那句解释（纯附加字段，2026-10-05）：前端照抄渲染即可，
+            # 判据/文案只在这里定义一次，旧导出没有这些字段时前端回退到内置常量。
+            "bench": BENCH_CN,
+            "bench2": BENCH2_CN,
+            "bench_note": PICK_BENCH_NOTE,
             "total": len(rows),
         }
 
@@ -666,6 +677,16 @@ def confirmed_sources(n, max_sources=SOURCES_IN_LIST):
 # ---------------------------------------------------------------------------
 SLOT_ORDER = {"am": 0, "pm": 1}
 SLOT_GROUP_CN = {"am": "今日潜力个股（推荐）", "pm": "盘后（收盘复盘后记录）"}
+
+# 两个基准并列（2026-10-05，与 M5 日报 / M6 推送同一口径）。
+# 候选天然偏中小盘 + 事件驱动，只用沪深300 当基准会**系统性高估**这套判断的水平
+# （小盘股整体跑赢时，"判断对"是假的）。故每档同时给相对沪深300 与相对中证1000
+# 的超额，并在前端给一句解释。名字与备注在这里定义一次，前端不必自己硬编码
+# —— 静态导出把整个 dict 序列化，这些字段跟着 picks.js 一起上线。
+BENCH_CN = "沪深300"
+BENCH2_CN = "中证1000"
+PICK_BENCH_NOTE = (f"超额同时给{BENCH_CN} 与{BENCH2_CN}："
+                   "候选偏中小盘，只用沪深300 会高估水平")
 
 
 def pick_slot(row):

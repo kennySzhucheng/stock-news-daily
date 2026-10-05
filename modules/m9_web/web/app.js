@@ -704,8 +704,29 @@
   // ── 候选观察清单（M10） ──────────────────────────────────
   /* 不显示「胜率」「命中率」，也不给超额加红绿配色：超额 +0.1% 与 -0.1%
      经济上几乎没有差别，用颜色把它们分成两档会凭空造出「对/错」的观感。
-     均值与**样本数**永远一起出现——样本 3 条时的均值不配单独示人。 */
-  function revCell(rev) {
+     均值与**样本数**永远一起出现——样本 3 条时的均值不配单独示人。
+     两个基准并列（2026-10-05）：候选偏中小盘 + 事件驱动，只用沪深300 会系统性
+     高估水平，故每档同时给相对沪深300 与相对中证1000 的超额。缺第二个口径的
+     记录（老账本 / bench2 取不到）显示「—」——**不能显示 0%**，也不进均值
+     （均值的样本数由后端 m5.picks_stats 分别给出：n 与 n2）。 */
+  function benchNames(p) {
+    // 后端（aggregate.picks_view）给的 bench/bench2；旧静态导出没有这两个字段时
+    // 回退到内置常量，保证老页面也能渲染出两个字的口径名。
+    return { bench: (p && p.bench) || '沪深300', bench2: (p && p.bench2) || '中证1000' };
+  }
+  function benchNote(p) {
+    return (p && p.bench_note) ||
+      '超额同时给沪深300 与中证1000：候选偏中小盘，只用沪深300 会高估水平';
+  }
+  // 一行「超额 沪深300 +2.38%」；缺这个口径时是「—」（不是 0%）
+  function alphaLine(label, v) {
+    var s = (typeof v === 'number')
+      ? '<b>' + pct(v * 100) + '</b>'
+      : '<span class="muted">—</span>';
+    return '<div class="pick-alpha">超额 ' + esc(label) + ' ' + s + '</div>';
+  }
+
+  function revCell(rev, names) {
     if (!rev) return '<td class="num pick-pending">—</td>';
     if (rev.status !== 'ok') {
       return '<td class="num pick-pending">' + esc(REV_STATUS_CN[rev.status] || '未取到行情') +
@@ -714,11 +735,9 @@
     var lag = (rev.done && rev.due && rev.done !== rev.due)
       ? '<span class="pick-lag" title="计划 ' + esc(rev.due) + '，实际在 ' + esc(rev.done) +
         ' 取到行情">补</span>' : '';
-    var a = (typeof rev.alpha === 'number')
-      ? '<b>' + pct(rev.alpha * 100) + '</b>'
-      : '<span class="muted">—</span>';
     return '<td class="num">' + pct(rev.ret * 100) +
-      '<div class="pick-alpha">超额 ' + a + '</div>' + lag + '</td>';
+      alphaLine(names.bench, rev.alpha) +
+      alphaLine(names.bench2, rev.alpha2) + lag + '</td>';
   }
 
   function pickCard(r) {
@@ -752,13 +771,13 @@
       '<div class="pick-foot">' + base + ref + '</div></div>';
   }
 
-  function pickRow(r) {
+  function pickRow(r, names) {
     return '<tr><td class="pick-date">' + esc(r.date) +
       '<span class="muted small">' + esc(SLOT_CN[r.slot] || r.slot || '') + '</span></td>' +
       '<td>' + esc(r.name) +
       '<span class="muted small">' + esc(KIND_CN[r.kind] || '') +
       (r.board ? ' · ' + esc(r.board) : '') + '</span></td>' +
-      PICK_TIERS.map(function (k) { return revCell((r.reviews || {})[String(k)]); }).join('') +
+      PICK_TIERS.map(function (k) { return revCell((r.reviews || {})[String(k)], names); }).join('') +
       '</tr>';
   }
 
@@ -773,13 +792,27 @@
     }
 
     var stats = p.stats || {};
+    var names = benchNames(p);
+    // 两个基准并列（2026-10-05）：每档给「相对沪深300 / 相对中证1000」两个均值，
+    // 样本数**分别报**（老账本/bench2 缺失的档位只有第一个口径的样本）。
+    // 与 M5 日报同一口径：低于 3 条不给均值，但样本数照报。
     var statParts = PICK_TIERS.map(function (k) {
       var s = stats[String(k)];
       if (!s || !s.n) return '';
+      var n2 = (typeof s.n2 === 'number') ? s.n2 : 0;
+      var same = (n2 === s.n);
+      var sample = '样本 ' + s.n + ' 条' +
+        (same ? '' : ' / ' + esc(names.bench2) + ' 口径 ' + n2 + ' 条');
+      if (s.n < 3) {
+        return '<span class="pick-stat">T+' + k + ' ' + sample + '（不足 3 条不给均值）</span>';
+      }
       var mean = (typeof s.alpha === 'number')
         ? '<b>' + pct(s.alpha * 100) + '</b>' : '<span class="muted">—</span>';
+      var mean2 = (n2 && typeof s.alpha2 === 'number')
+        ? '<b>' + pct(s.alpha2 * 100) + '</b>' : '<span class="muted">—</span>';
       return '<span class="pick-stat">T+' + k + ' 均超额 ' + mean +
-        '<span class="muted">（样本 ' + s.n + ' 条）</span></span>';
+        '<span class="muted">（相对' + esc(names.bench) + '）</span> / ' + mean2 +
+        '<span class="muted">（相对' + esc(names.bench2) + '）· ' + sample + '</span></span>';
     }).filter(Boolean).join('');
 
     var today = (p.latest_date || '').trim();
@@ -822,12 +855,15 @@
     $('#picksBody').innerHTML =
       '<div class="pick-stats">' + (statParts ||
         '<span class="muted small">还没有到期回填的表现数据</span>') + '</div>' +
+      '<p class="muted small">' + esc(benchNote(p)) + '</p>' +
       cards +
       '<h3 class="pick-sub">历史明细（含跑输的，共 ' + p.total + ' 条）</h3>' +
       '<div class="table-wrap"><table class="tbl pick-tbl"><thead><tr>' +
       '<th>记录日</th><th>候选</th><th>T+1</th><th>T+3</th><th>T+5</th>' +
-      '</tr></thead><tbody>' + rows.map(pickRow).join('') + '</tbody></table></div>' +
-      '<p class="muted small">超额 = 该候选涨跌幅 − 同期沪深300 涨跌幅；' +
+      '</tr></thead><tbody>' + rows.map(function (r) { return pickRow(r, names); }).join('') +
+      '</tbody></table></div>' +
+      '<p class="muted small">每格两行超额：相对' + esc(names.bench) + ' 与 相对' +
+      esc(names.bench2) + '；缺第二个口径的旧记录显示「—」（不计入均值）。' +
       '收益率为未复权口径，除权除息期间会有偏差。' +
       '「补」表示该档实际取价日迟于计划日期（周末/停牌/休市）。</p>';
   }

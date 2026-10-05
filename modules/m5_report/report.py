@@ -562,6 +562,17 @@ def render_news(structured):
 PICK_HISTORY_DAYS = 14        # 日报里回填记录展示多久
 PICK_MIN_SAMPLE = 3           # 样本少于此数不给均值（百分比在小样本上没有意义）
 
+# 两个基准并列（2026-10-05）：候选天然偏中小盘 + 事件驱动（M10 的 prompt 还要求
+# "同等依据优先单价更低"的标的），只用沪深300 当基准会**系统性高估**这套判断的水平
+# —— 小盘股整体跑赢的阶段，alpha 为正可能只是风格红利。所以同时给中证1000 口径。
+# 名字与 M10（picks.BENCH_NAME / BENCH2_NAME）、M6 推送、M9 网页保持同一口径；
+# 那三个模块各自独立运行，不为一句文案互相 import（与 conclusion 的三份副本同理）。
+PICK_BENCH_CN = "沪深300"
+PICK_BENCH2_CN = "中证1000"
+# 为什么同时给两个基准 —— 这行解释是**固定文案**，与统计行一起出现。
+PICK_BENCH_NOTE = (f"超额同时给{PICK_BENCH_CN} 与{PICK_BENCH2_CN}："
+                   "候选偏中小盘，只用沪深300 会高估水平")
+
 _STATUS_CN = {"no_quote": "未匹配到行情", "no_bench": "基准缺失", "expired": "未取到行情"}
 
 # 盘前/盘后两个批次分开显示（2026-10-04 盘前通道）：
@@ -626,7 +637,12 @@ def _pct(v):
 
 
 def _tier_cell(rev, k):
-    """一档复盘 → 单元格。未到期显示 —；补记的标注实际跨度（due 与 done 可能差几天）。"""
+    """一档复盘 → 单元格。未到期显示 —；补记的标注实际跨度（due 与 done 可能差几天）。
+
+    两个基准并列（2026-10-05）：超额给两行（沪深300 / 中证1000）。老账本行没有
+    bench2 数据时第二行是 **「—」** —— 不能显示 0%，也不能把它算进均值
+    （那些行本来就没这个口径的数，写 0% 等于凭空造出一个"跑平"的样本）。
+    """
     if not rev:
         return '<span class="pick-pending">T+%d 未到期</span>' % k
     if rev.get("status") != "ok":
@@ -635,20 +651,43 @@ def _tier_cell(rev, k):
     if rev.get("done") and rev.get("due") and rev["done"] != rev["due"]:
         lag = f'<span class="pick-lag">{esc(rev["done"][5:])}补</span>'
     return (f'<b>{_pct(rev.get("ret"))}</b>'
-            f'<span class="pick-alpha">超额 {_pct(rev.get("alpha"))}</span>{lag}')
+            f'<span class="pick-alpha">超额 {PICK_BENCH_CN} {_pct(rev.get("alpha"))}</span>'
+            f'<span class="pick-alpha">{PICK_BENCH2_CN} {_pct(rev.get("alpha2"))}</span>'
+            f"{lag}")
+
+
+def _tier_stat_line(k, d):
+    """一档的两口径统计文本（均值只在样本 ≥PICK_MIN_SAMPLE 时给）。
+
+    格式（与 M6 推送同一口径、与用户给的样例一致）：
+      T+1 均超额 +2.38%（相对沪深300） / +1.10%（相对中证1000）· 样本 4 条
+    样本数**两个口径分别报**：中证1000 是后加的口径，老账本/bench2 缺失的档位
+    只会进 n 不进 n2；两者不同时写成「样本 4 条 / 中证1000 口径 3 条」，
+    相同时只写一个，不啰嗦也不谎报。
+    """
+    n, n2 = d["n"], d["n2"]
+    tail = f"样本 {n} 条" + ("" if n2 == n else f" / {PICK_BENCH2_CN} 口径 {n2} 条")
+    if n < PICK_MIN_SAMPLE:
+        return f"T+{k} {tail}（少于 {PICK_MIN_SAMPLE} 条不给均值）"
+    a2 = _pct(d["alpha2"]) if n2 else "—"
+    return (f"T+{k} 均超额 {_pct(d['alpha'])}（相对{PICK_BENCH_CN}） / {a2}"
+            f"（相对{PICK_BENCH2_CN}）· {tail}")
 
 
 def picks_stats(rows):
-    """各档平均收益与平均超额 → {k: {"n", "ret", "alpha"}}。
+    """各档平均收益与两个基准的平均超额 → {k: {"n","ret","alpha","n2","alpha2"}}。
 
     只统计 status == "ok" 的档位，n 就是参与平均的样本数 —— **n 必须与均值
     一起显示**，本函数因此把 n 一并返回而不是只给均值。
+    n2 / alpha2 是第二基准（中证1000）口径，**独立计数**：老账本行、或 bench2
+    任一端点缺失的档位（alpha2 为 null）不进 n2，于是"沪深300 4 条、中证1000
+    3 条"能如实分别报出，而不是把一个缺数据的口径算成 0%。
     不产出胜率/命中率这类字段：样本量小时百分比没有意义，且它会把连续的超额
     压成二值的对/错。
     """
     out = {}
     for k in (1, 3, 5):
-        vals_r, vals_a = [], []
+        vals_r, vals_a, vals_a2 = [], [], []
         for r in rows:
             rev = (r.get("reviews") or {}).get(str(k))
             if not rev or rev.get("status") != "ok":
@@ -657,10 +696,14 @@ def picks_stats(rows):
                 vals_r.append(rev["ret"])
             if rev.get("alpha") is not None:
                 vals_a.append(rev["alpha"])
+            if rev.get("alpha2") is not None:
+                vals_a2.append(rev["alpha2"])
         out[k] = {
             "n": len(vals_r),
             "ret": (sum(vals_r) / len(vals_r)) if vals_r else None,
             "alpha": (sum(vals_a) / len(vals_a)) if vals_a else None,
+            "n2": len(vals_a2),
+            "alpha2": (sum(vals_a2) / len(vals_a2)) if vals_a2 else None,
         }
     return out
 
@@ -808,18 +851,18 @@ def render_picks(picks, date_str):
   <div class="pick-tiers">{tiers}</div>
 </div>""")
 
-    # 汇总行：均值与样本数**必须同时出现**
+    # 汇总行：均值与样本数**必须同时出现**，且**两个基准并列**（沪深300 / 中证1000）
     st = picks_stats(hist)
     parts = []
     for k in (1, 3, 5):
         d = st[k]
         if d["n"] == 0:
             continue
-        if d["n"] < PICK_MIN_SAMPLE:
-            parts.append(f"T+{k} 样本 {d['n']} 条（少于 {PICK_MIN_SAMPLE} 条不给均值）")
-        else:
-            parts.append(f"T+{k} 均超额 {_pct(d['alpha'])}（样本 {d['n']} 条）")
+        parts.append(_tier_stat_line(k, d))
     stats_html = ("<p class=\"pick-stats\">" + "　".join(parts) + "</p>") if parts else ""
+    # 固定一行解释（用户要求）：为什么同时给两个口径。它跟着候选版块走，
+    # 与统计行同处一段，读者看到两个数就知道差别在哪。
+    bench_note = f'<p class="pick-note">{PICK_BENCH_NOTE}</p>'
 
     hist_html = ""
     if rows_html:
@@ -830,7 +873,8 @@ def render_picks(picks, date_str):
   </summary>
   {''.join(rows_html)}
   <p class="pick-note">收益率为<b>未复权</b>口径；区间内若发生除权除息，该档会被低估。
-  「补」表示实际打分日与到期日不同（周末/停牌/限流所致）。</p>
+  每档给两行超额：{PICK_BENCH_CN} 与 {PICK_BENCH2_CN}；没有第二个口径的旧记录显示
+  「—」（不计入均值）。「补」表示实际打分日与到期日不同（周末/停牌/限流所致）。</p>
 </details>"""
 
     n_today = len(today_rows)
@@ -839,10 +883,11 @@ def render_picks(picks, date_str):
   <p class="pick-note">盘前 08:10 那批是<b>推荐</b>：每条都写明推荐的三件事
   （新闻依据 → 传导机制 → 预期差），并给出<b>关注区间</b>与<b>触发条件</b>；
   收盘后那批是当日复盘记录。每条都带<b>推翻条件</b>与新闻依据，其后续表现按
-  T+1/T+3/T+5 原样回填，<b>含跑输的</b>（超额相对沪深300）。<b>不是买入指令</b>，
-  决策权归您本人。</p>
+  T+1/T+3/T+5 原样回填，<b>含跑输的</b>（超额同时给{PICK_BENCH_CN} 与{PICK_BENCH2_CN}）。
+  <b>不是买入指令</b>，决策权归您本人。</p>
   {today_html}
   {stats_html}
+  {bench_note}
   {hist_html}
 </section>"""
 

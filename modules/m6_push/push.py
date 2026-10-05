@@ -360,18 +360,45 @@ def load_picks(date_str):
         # 全部算进来 —— 样本量本来就只有个位数，再按日期切一刀就没法看了。
         # **均值必须与样本数一起给**，且不叫「胜率」—— 样本量小时百分比没有意义，
         # 二值的对/错也会抹掉「跑赢 0.1%」与「跑输 0.1%」的区别。
+        #
+        # 两个基准并列（2026-10-05）：候选偏中小盘 + 事件驱动，只用沪深300 会系统性
+        # 高估水平，故同时给中证1000 口径。微信正文长度敏感（Server酱），所以
+        # **图例只写一次**（"两值依次为相对沪深300、相对中证1000"），每档只多
+        # 「 / +x.xx%」这几个字符——实测整段「已回填」比改造前只长 40~50 字符
+        # （T+1/T+3/T+5 三档全有数据时最多约 +55，仍低于 +60 的预算）。
         bits = []
+        has_bench2 = False
         for k in (1, 3, 5):
-            vals = [(r.get("reviews") or {}).get(str(k)) for r in rows]
-            vals = [v for v in vals
-                    if v and v.get("status") == "ok" and v.get("alpha") is not None]
+            revs = [(r.get("reviews") or {}).get(str(k)) for r in rows]
+            revs = [v for v in revs if v and v.get("status") == "ok"]
+            vals = [v["alpha"] for v in revs if v.get("alpha") is not None]
+            vals2 = [v["alpha2"] for v in revs if v.get("alpha2") is not None]
             if not vals:
                 continue
+            has_bench2 = has_bench2 or bool(vals2)
+            # 两个口径的样本数**分别报**：老账本行、bench2 缺失的档位只进第一个口径，
+            # 相同时只写一个（不啰嗦），不同时把中证1000 口径的点名列出（不谎报）
+            tail = f"样本 {len(vals)} 条"
+            if len(vals2) != len(vals):
+                tail += f"·{BENCH2_CN} 口径 {len(vals2)} 条"
             if len(vals) < 3:
-                bits.append(f"T+{k} 样本 {len(vals)} 条（不足 3 条不给均值）")
+                bits.append(f"T+{k} {tail}（不足 3 条不给均值）")
+            elif vals2:
+                avg2 = sum(vals2) / len(vals2)
+                bits.append(f"T+{k} 均超额 {sum(vals) / len(vals):+.2%} / "
+                            f"{avg2:+.2%}（{tail}）")
             else:
-                avg = sum(v["alpha"] for v in vals) / len(vals)
-                bits.append(f"T+{k} 均超额 {avg:+.2%}（样本 {len(vals)} 条）")
+                bits.append(f"T+{k} 均超额 {sum(vals) / len(vals):+.2%}（{tail}）")
+        stats = "　".join(bits)
+        if has_bench2:
+            # 顺序说明只此一处：每档的两个数按「相对沪深300 / 相对中证1000」排列
+            stats = f"（超额依次为相对{BENCH_CN}、相对{BENCH2_CN}）{stats}"
+        elif stats:
+            # 有回填、却**一条中证1000 口径的样本都没有**（老账本，或 bench2 长期
+            # 取不到）：也要把第二个口径的存在与现状说清楚，不能让读者以为
+            # "超额只有一种口径"——那正是这次改造要消除的错觉。
+            stats = (f"（超额双口径：相对{BENCH_CN} 与相对{BENCH2_CN}；"
+                     f"本账本暂时只有 {BENCH_CN} 口径的样本）{stats}")
 
         # 最近一批（供"今天没有产出推荐"的空态用）：优先**盘前（推荐）批**的最近日期，
         # 一条 am 都没有（老账本）时退回最近一条记录并把用词降级为"候选记录"。
@@ -388,7 +415,7 @@ def load_picks(date_str):
                                - datetime.strptime(latest, "%Y-%m-%d")).days
             except Exception:
                 latest_days = None
-        return {"today": today, "stats": "　".join(bits),
+        return {"today": today, "stats": stats,
                 "latest": latest, "latest_days": latest_days,
                 "latest_is_am": bool(am_dates)}
     except Exception as e:
@@ -495,6 +522,11 @@ def _picks_empty_note(slot, status, latest="", latest_days=None, latest_is_am=Tr
 # 只有一批时不加标题：没有可混淆的另一批，标题纯属多占一行推送长度。
 SLOT_ORDER = ("am", "pm")
 SLOT_GROUP_CN = {"am": "今日潜力个股（推荐）", "pm": "盘后（收盘复盘后记录）"}
+# 两个基准的中文名（与 M10 picks.BENCH_NAME/BENCH2_NAME、M5 日报、M9 网页同一口径）。
+# 为什么同时给两个：候选偏中小盘 + 事件驱动，只用沪深300 会系统性高估水平 ——
+# 明细在候选块里只出现一次图例，正文长度因此只增加几十个字符。
+BENCH_CN = "沪深300"
+BENCH2_CN = "中证1000"
 # `logic` 的字段标签（与 M5/M9 同一口径）：am 行是推荐 → 「为什么推荐」；
 # pm 行是收盘后的事后记录 → 「逻辑」。
 PICK_LOGIC_LABEL = {"am": "为什么推荐", "pm": "逻辑"}
