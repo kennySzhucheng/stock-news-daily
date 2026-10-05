@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>复盘看板 · 2026-W40</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%231e4d7a'/%3E%3Ctext x='16' y='23' font-size='20' text-anchor='middle' fill='%23f7f4ee'%3E%E8%82%A1%3C/text%3E%3C/svg%3E">
+<style>
+:root{
+  /* 与日报同一审美：浅色纸面 / 墨色字 / 细线分割，红绿只上数字 */
+  --bg:#f7f4ee; --bg2:#efeae1; --card:#ffffff; --border:#ddd6c9;
+  --ink:#1f1d1a; --text:#2b2822; --muted:#7a746a;
+  --accent:#1e4d7a; --warn:#9a6b12;
+  --up:#c4362b; --down:#12734f; --flat:#7a746a;
+  --serif:Georgia,"Times New Roman","Songti SC","SimSun","Noto Serif CJK SC",
+    "Source Han Serif SC",serif;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",
+    "Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+}
+*{box-sizing:border-box; margin:0; padding:0;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  background:var(--bg); color:var(--text); font-family:var(--sans);
+  line-height:1.78; font-size:16px; padding:0 0 48px;
+  max-width:760px; margin:0 auto;
+}
+a{color:var(--accent); text-decoration:none;}
+header.hero{
+  padding:0 16px 8px; border-top:4px solid var(--ink);
+  border-bottom:1px solid var(--ink); margin:0 8px;
+}
+header.hero .kicker{
+  font:12px/1.6 var(--sans); letter-spacing:.18em; color:var(--muted); padding-top:14px;
+}
+header.hero h1{font-family:var(--serif); font-size:26px; font-weight:700; line-height:1.25;}
+header.hero .date{
+  color:var(--muted); font-size:12.5px; letter-spacing:.06em;
+  margin-top:8px; padding-top:6px; border-top:1px solid var(--border);
+}
+main{padding:0 12px;}
+section.block{margin:24px 8px;}
+section.block > h2{
+  font-family:var(--serif); font-size:18px; font-weight:700;
+  margin-bottom:12px; padding-bottom:8px; border-bottom:1px solid var(--border);
+}
+p.lead{font-size:13.5px; color:var(--muted); margin:6px 0 12px;}
+.note{
+  background:var(--bg2); border-left:3px solid var(--accent);
+  padding:10px 12px; margin:10px 0; font-size:13.5px;
+}
+.note ul{margin:0 0 0 18px;}
+.note li{margin:3px 0;}
+.warn{
+  color:var(--warn); font-size:13.5px; margin:8px 0;
+  border-left:3px solid var(--warn); padding:6px 10px; background:var(--bg2);
+}
+table{width:100%; border-collapse:collapse; margin:8px 0 4px; font-size:14px;}
+caption{caption-side:top; text-align:left; color:var(--muted); font-size:12.5px; padding:2px 0 6px;}
+th,td{border-bottom:1px solid var(--border); padding:7px 8px; text-align:left; vertical-align:top;}
+th{background:var(--bg2); font-weight:600; white-space:nowrap; font-size:13px;}
+td.num,th.num{text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums;}
+tr.total td{font-weight:600; border-top:1px solid var(--ink);}
+.up{color:var(--up);} .down{color:var(--down);} .flat{color:var(--flat);}
+.muted{color:var(--muted);} .small{font-size:13px;}
+.nodata{color:var(--muted);}
+.verdict-triggered{color:var(--up); font-weight:600;}
+.verdict-not_triggered{color:var(--muted);}
+.verdict-unclear{color:var(--warn);}
+.verdict-none{color:var(--muted);}
+.kv{display:flex; flex-wrap:wrap; gap:6px 18px; margin:8px 0; font-size:14px;}
+.kv b{font-family:var(--serif); font-size:16px;}
+.table-wrap{overflow-x:auto;}
+footer.risk{
+  margin:28px 8px 8px; padding:16px 0 8px;
+  border-top:3px double var(--ink); font-size:13px; color:var(--muted); line-height:1.6;
+}
+footer.risk h3{font-family:var(--serif); font-size:14px; color:var(--ink); margin-bottom:6px;}
+footer.risk ul{margin:6px 0 0 18px;}
+footer.risk li{margin:3px 0;}
+@media (min-width:600px){
+  header.hero h1{font-size:32px;}
+  section.block > h2{font-size:20px;}
+}
+
+.row{border-bottom:1px solid var(--border); padding:10px 0;}
+.row-head{display:flex; flex-wrap:wrap; gap:4px 10px; align-items:baseline; font-size:15px;}
+.row-date{font-variant-numeric:tabular-nums; color:var(--muted);}
+.row-slot{font-size:12.5px; color:var(--muted); border:1px solid var(--border); padding:0 5px;}
+.tier{font-size:14px; margin:2px 0 2px 0;}
+.tier-k{display:inline-block; min-width:34px; color:var(--muted); font-size:12.5px;}
+/* 无 JS 兜底：万一将来有人给这一页加脚本又写坏了，至少不会整页空白 */
+.noscript-bar{background:var(--bg2); border-bottom:1px solid var(--border);
+  padding:6px 16px; font-size:13px; color:var(--muted); margin:0 8px;}
+</style>
+</head>
+<body>
+<noscript><div class="noscript-bar">本页不需要 JavaScript：所有统计在生成时就算好了，
+样式也全部内联。若看到这一行，说明您的浏览器禁用了脚本，本页照常可读。</div></noscript>
+<header class="hero">
+  <div class="kicker">STOCK NEWS DAILY · REVIEW BOARD</div>
+  <h1>复盘看板 · 2026-W40</h1>
+  <div class="date">截至 2026-09-29 记录的行 · 生成于 2026-10-05 16:30 ·
+    ISO 周（周一为一周之始）· 同一周重跑覆盖同一文件</div>
+</header>
+<main>
+
+<section class="block" id="overview">
+  <h2>累计总览</h2>
+  <p class="lead">这里回答"到现在为止我到底准不准"。所有数字都是<b>已复核</b>档位的
+  实际回填值，没有预测、没有模型打分。</p>
+  
+  
+  
+  <div class="kv"><span>候选总条数 <b>8</b></span><span>其中已复核过的候选 <b>5</b> 条</span><span>已复核档位 <b>5</b> 档</span><span class="muted">样本数（T+1/T+3/T+5）：沪深300 5/0/0 · 中证1000 0/0/0</span></div><div class="table-wrap"><table><caption>全账本累计（截至 2026-09-29 记录的行）；两条基准的样本数各自独立标注 —— 老账本没有中证1000 点位，n 天然更小。</caption><thead><tr><th>口径</th><th class="num">T+1<br><span class="muted small">沪深300</span></th><th class="num">T+1<br><span class="muted small">中证1000</span></th><th class="num">T+3<br><span class="muted small">沪深300</span></th><th class="num">T+3<br><span class="muted small">中证1000</span></th><th class="num">T+5<br><span class="muted small">沪深300</span></th><th class="num">T+5<br><span class="muted small">中证1000</span></th></tr></thead><tbody><tr class="total"><th scope="row">已复核档均值超额</th><td class="num"><span class="down">-0.49%</span> <span class="muted">n=5</span></td><td class="num"><span class="nodata">暂无</span></td><td class="num"><span class="nodata">暂无</span></td><td class="num"><span class="nodata">暂无</span></td><td class="num"><span class="nodata">暂无</span></td><td class="num"><span class="nodata">暂无</span></td></tr></tbody></table></div><p class="lead">每条候选按记录日之后第 1/3/5 个交易日补录；「样本」= 该档里真的有该基准超额数字的条数，两条基准分开数。</p>
+</section>
+
+<section class="block" id="by-slot">
+  <h2>按批次：盘前推荐 vs 盘后记录</h2>
+  <p class="lead">盘前那批是收盘前给出的可执行观察清单（基准是昨收），
+  盘后那批是收盘后的事后记录（基准是当日收盘价）—— 两者难度不同，混在一起算会失真。</p>
+  <div class="table-wrap"><table><caption>盘前推荐 vs 盘后记录 —— 哪个更准，看这里的样本数与均值</caption><thead><tr><th>分组</th><th class="num">T+1<br><span class="muted small">沪深300</span></th><th class="num">T+1<br><span class="muted small">中证1000</span></th><th class="num">T+3<br><span class="muted small">沪深300</span></th><th class="num">T+3<br><span class="muted small">中证1000</span></th><th class="num">T+5<br><span class="muted small">沪深300</span></th><th class="num">T+5<br><span class="muted small">中证1000</span></th></tr></thead><tbody><tr><th scope="row">盘后记录（收盘后那批）</th><td class="num"><span class="down">-0.49%</span> <span class="muted">n=5</span></td><td class="num"><span class="nodata">暂无</span></td><td class="num"><span class="nodata">暂无</span></td><td class="num"><span class="nodata">暂无</span></td><td class="num"><span class="nodata">暂无</span></td><td class="num"><span class="nodata">暂无</span></td></tr></tbody></table></div>
+</section>
+
+<section class="block" id="by-confidence">
+  <h2>按置信度</h2>
+  <p class="lead">回答"高置信度是不是真的更准"。置信度是当时自己给的，
+  这一节的数字就是它的对账单。</p>
+  <div class="table-wrap"><table><caption>高置信度是不是真的更准 —— 只列账本里出现过的档位</caption><thead><tr><th>分组</th><th class="num">T+1<br><span class="muted small">沪深300</span></th><th class="num">T+1<br><span class="muted small">中证1000</span></th><th class="num">T+3<br><span class="muted small">沪深300</span></th><th class="num">T+3<br><span class="muted small">中证1000</span></th><th class="num">T+5<br><span class="muted small">沪深300</span></th><th class="num">T+5<br><span class="muted small">中证1000</span></th></tr></thead><tbody><tr><th scope="row">中置信度</th><td class="num"><span class="down">-0.39%</span> <span class="muted">n=3</span></td><td class="num"><span class="nodata">暂无</span></td><td class="num"><span class="nodata">暂无</span></td><td class="num"><span class="nodata">暂无</span></td><td class="num"><span class="nodata">暂无</span></td><td class="num"><span class="nodata">暂无</span></td></tr><tr><th scope="row">低置信度</th><td class="num"><span class="down">-0.64%</span> <span class="muted">n=2</span></td><td class="num"><span class="nodata">暂无</span></td><td class="num"><span class="nodata">暂无</span></td><td class="num"><span class="nodata">暂无</span></td><td class="num"><span class="nodata">暂无</span></td><td class="num"><span class="nodata">暂无</span></td></tr></tbody></table></div><p class="warn">⚠️ 样本不足 5 条，仅供参考，不足以判断</p>
+</section>
+
+<section class="block" id="by-board">
+  <h2>按板块</h2>
+  <p class="warn">暂无出现 ≥ 2 次的板块（出现 1 次的板块刻意不列）。</p>
+</section>
+
+<section class="block" id="invalidation">
+  <h2>逻辑核查（推翻条件是否被触发）</h2>
+  <p class="warn">暂无已核查的档（5 档已复核里，没有被做过推翻条件核查）。</p><p class="lead">口径：<b>只数 invalidation_check 非 null 的档</b>；未核查的档（null）不计入任何核查口径 —— 没查过不等于没触发。</p>
+</section>
+
+<section class="block" id="detail">
+  <h2>逐条明细<span class="muted small">　已复核 5 条</span></h2>
+  <p class="lead">按记录日倒序，列出<b>所有已复核的档</b> —— 跑输的、逻辑破产的都在里面，
+  与跑赢的同版式同字号。收益率为未复权口径。</p>
+  <div class="detail"><div class="row"><div class="row-head"><span class="row-date">2026-09-29</span><span class="row-slot">盘后记录</span><b>清溢光电</b><span class="muted small">置信度 中</span></div><div class="tier"><span class="tier-k">T+1</span> <span class="down">-4.16%</span> <span class="small">超额 沪深300 <span class="down">-4.45%</span> · 中证1000 <span class="nodata">—</span></span> <span class="small verdict-none">推翻条件核查：未核查</span></div></div><div class="row"><div class="row-head"><span class="row-date">2026-09-29</span><span class="row-slot">盘后记录</span><b>恒瑞医药</b><span class="muted small">置信度 中</span></div><div class="tier"><span class="tier-k">T+1</span> <span class="up">+3.46%</span> <span class="small">超额 沪深300 <span class="up">+3.17%</span> · 中证1000 <span class="nodata">—</span></span> <span class="small verdict-none">推翻条件核查：未核查</span></div></div><div class="row"><div class="row-head"><span class="row-date">2026-09-29</span><span class="row-slot">盘后记录</span><b>天赐材料</b><span class="muted small">置信度 中</span></div><div class="tier"><span class="tier-k">T+1</span> <span class="up">+0.39%</span> <span class="small">超额 沪深300 <span class="up">+0.10%</span> · 中证1000 <span class="nodata">—</span></span> <span class="small verdict-none">推翻条件核查：未核查</span></div></div><div class="row"><div class="row-head"><span class="row-date">2026-09-28</span><span class="row-slot">盘后记录</span><b>鼎泰高科</b><span class="muted small">置信度 低</span></div><div class="tier"><span class="tier-k">T+1</span> <span class="down">-0.45%</span> <span class="small">超额 沪深300 <span class="down">-0.55%</span> · 中证1000 <span class="nodata">—</span></span> <span class="small verdict-none">推翻条件核查：未核查</span></div></div><div class="row"><div class="row-head"><span class="row-date">2026-09-28</span><span class="row-slot">盘后记录</span><b>华东医药</b><span class="muted small">置信度 低</span></div><div class="tier"><span class="tier-k">T+1</span> <span class="down">-0.63%</span> <span class="small">超额 沪深300 <span class="down">-0.73%</span> · 中证1000 <span class="nodata">—</span></span> <span class="small verdict-none">推翻条件核查：未核查</span></div></div></div>
+</section>
+
+<section class="block" id="weeks">
+  <h2>最近 4 周</h2>
+  <div class="table-wrap"><table><caption>T+1 口径（其余档位见上面的累计总览）；提示列按两条基准里较少的一条判。</caption><thead><tr><th>周</th><th class="num">T+1 样本<br><span class="muted small">沪深300</span></th><th class="num">T+1 均值<br><span class="muted small">沪深300</span></th><th class="num">T+1 样本<br><span class="muted small">中证1000</span></th><th class="num">T+1 均值<br><span class="muted small">中证1000</span></th><th>提示</th></tr></thead><tbody><tr><th scope="row">2026-W40（当周）</th><td class="num">5</td><td class="num"><span class="down">-0.49%</span> <span class="muted">n=5</span></td><td class="num"><span class="nodata">暂无</span></td><td class="num"><span class="nodata">暂无</span></td><td class="small">—</td></tr></tbody></table></div>
+</section>
+
+</main>
+<footer class="risk">
+  <h3>看这个页面时要记住的三件事</h3>
+  <ul>
+    <li>超额同时给 沪深300 与 中证1000：候选偏中小盘，只用沪深300 会高估水平。</li>
+    <li>任何统计块样本 &lt; 5 条时都会显式标注；某档 0 样本写「暂无」而不是 0%。</li>
+    <li>本页不给「对了百分之几」这类百分比结论：个位数样本的百分比没有意义，所以只给样本数与均值，由您自己判断。</li>
+    <li>跑输的记录不删也不隐藏，按日期倒序全部列出。</li>
+    <li>本页不是买入指令、不构成投资建议；决策权归您本人。</li>
+  </ul>
+  <p style="margin-top:8px">数据来源：M10 候选账本 reports/picks/ledger.jsonl（本页只读，不修改账本）。
+  本页由脚本自动生成，仅供参考。<b>不是买入指令、不构成投资建议</b>；
+  市场有风险，投资需谨慎，决策权归您本人。</p>
+</footer>
+</body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "date": "2026-10-06",
+  "slot": "pm",
+  "push_ok": true,
+  "push_detail": "pushid=59998747",
+  "sentiment_ok": true,
+  "warn": "",
+  "analysis_ok": true,
+  "analysis_chars": 3318,
+  "analysis_conclusion_ok": true,
+  "analysis_violations": "",
+  "news_count": 168,
+  "quotes_count": 29,
+  "llm_batches": 9,
+  "llm_failed_batches": 0,
+  "run_number": "86",
+  "event": "schedule",
+  "generated_at": "2026-10-06 00:30:11"
+}

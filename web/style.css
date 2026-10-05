@@ -229,6 +229,11 @@ select{
 .badge.bearish{color:var(--bear); border-color:var(--bear); background:transparent;}
 .badge.neutral{color:var(--muted);}
 .badge.dropped{color:var(--muted); border-style:dashed;}
+/* 跨天事件追踪标记（2026-10-05，M2 的 continuing）：high 是"同一事件在持续发酵"
+   已被确认，low 只是"疑似" —— 用更弱的样式区分，免得把 low 读成确认。
+   只用既有 token（--accent / --muted / --border），不引入新颜色。 */
+.badge.continuing{color:var(--accent); border-color:var(--accent); background:transparent;}
+.badge.continuing.weak{color:var(--muted); border-color:var(--border);}
 .tag{
   font-size:11px; padding:1px 7px; border-radius:2px;
   background:transparent; border:1px solid var(--border); color:var(--muted);
@@ -347,6 +352,18 @@ a.cite:hover{background:none; border-bottom-style:solid; text-decoration:none;}
 /* 非沪深 A 股的那张表：降饱和，避免与主表混为一谈（2026-10-04） */
 .muted-table{opacity:.72;}
 
+/* 推翻条件核查（2026-10-05）：四态视觉份量拉开 ——
+   triggered 是"逻辑破产"，要一眼看见；未核查/未触发/无法判断归为弱提示。
+   只用既有 token（--up 在浅色里是红、深色里自动换色），不引入新颜色。 */
+.pick-inval-check{margin-top:6px; font-size:13.5px; line-height:1.6;}
+.pick-inval-check b{font-weight:600;}
+.pick-inval-check.inv-triggered{
+  color:var(--up); border-left:3px solid currentColor; padding-left:8px;
+}
+.pick-inval-check.muted{color:var(--muted);}
+.pick-inval-warn{color:var(--up); font-weight:600;}
+.pick-inval-cell{white-space:normal; font-size:12.5px; line-height:1.5;}
+
 /* 盘前清单的关注区间 / 触发条件（与 M5 日报同名类，不引入新颜色） */
 .pick-plan{margin-top:7px; font-size:13.5px; line-height:1.6;}
 .pick-plan b{color:var(--text); margin-right:6px; font-weight:600;}
@@ -381,6 +398,12 @@ a.cite:hover{background:none; border-bottom-style:solid; text-decoration:none;}
 .pick-tag{
   font-size:11.5px; color:var(--accent); background:transparent;
   padding:1px 7px; border-radius:2px; border:1px solid var(--accent);
+}
+/* 连续推荐标记（2026-10-05）：同名、相邻记录日 ≤3 自然日的行已合并成这一条，
+   以最新那条为代表。与 .pick-tag 同版式（既有 token），语义不同故单独一类。 */
+.pick-streak{
+  font-size:11.5px; color:var(--mid); background:transparent;
+  padding:1px 7px; border-radius:2px; border:1px solid var(--mid);
 }
 .pick-conf{font-size:12px; color:var(--muted); margin-left:auto;}
 .pick-logic{margin-top:8px; font-size:14px;}

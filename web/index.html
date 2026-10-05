@@ -82,6 +82,7 @@
       <div class="search-row">
         <input type="search" id="fq" placeholder="搜索关键词，空格分隔多个词（与）" autocomplete="off">
         <select id="fsort">
+          <option value="importance">按重要度（报道家数）</option>
           <option value="time">按时间</option>
           <option value="source">按来源</option>
           <option value="sentiment">按情绪</option>
@@ -227,7 +228,8 @@
       <h2>候选观察清单</h2>
       <p class="muted small">
         每条候选都带<b>推翻条件</b>与新闻依据；其后续表现按 T+1/T+3/T+5 原样回填，
-        <b>含跑输的</b>，不做选择性展示。超额相对沪深300，收益率为未复权口径。
+        <b>含跑输的</b>，不做选择性展示。<b>超额同时给沪深300 与中证1000</b>（候选偏中小盘，
+        只用沪深300 会高估水平），收益率为未复权口径。
         个股候选<b>仅限沪深 A 股</b>，同等依据下优先单价更低的标的。
         <b>不是买入指令，决策权归您本人。</b>
       </p>
@@ -241,6 +243,18 @@
       <h2>往期日报</h2>
       <p class="muted small">每天盘前（08:10）与盘后（15:40）各一份，互不覆盖。</p>
       <div id="historyList"></div>
+    </div>
+
+    <!-- 复盘看板（M12）入口的数据部分由 app.js 渲染（/api/history 的 review 字段）：
+         看板不存在时不渲染，避免死链 —— 这是唯一入口，别再硬编码第二条链接。
+         链接地址由接口下发（线上 `../review-latest.html`）。 -->
+    <div class="card" id="reviewCard" style="display:none">
+      <h2>复盘看板</h2>
+      <p class="muted small">
+        一段时间（一周一个快照）的候选表现汇总：双基准均值超额、按批次/置信度/板块分组、
+        逻辑核查（含"蒙对"）、逐条明细；<b>跑输的记录不删也不隐藏</b>。
+      </p>
+      <p><a class="btn ghost" id="reviewLink" href="#">打开复盘看板 →</a></p>
     </div>
   </section>
 

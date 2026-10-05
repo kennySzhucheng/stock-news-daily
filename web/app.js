@@ -94,6 +94,7 @@
   var S = {
     meta: null, overview: null, news: [], raw: [], rawLoaded: false,
     quotes: [], failed: [], boards: [], history: [], analysis: null, picks: null,
+    review: null,                       // M12 复盘看板入口（纯附加键）
     rawMode: false, shown: PAGE, sort: { key: 'change_pct', asc: false },
     // 持仓标签页：本机数据，不经过任何服务端
     pfList: [], pfQuotes: {}, pfQuoteAt: 0, pfQuoteTime: '', pfLoading: false
@@ -103,6 +104,66 @@
   // 与 m10_picks/picks.py 的 _STATUS_CN / m5_report 保持一致
   var REV_STATUS_CN = { no_quote: '未取到行情', no_bench: '基准缺失', expired: '未取到行情' };
   var PICK_TIERS = [1, 3, 5];
+  // 盘前（am）那批就是**推荐**（与 M5 日报 / M6 推送同一口径，2026-10-05 起）：
+  // 分组标题、logic 的字段标签、组下方那句风险提示三处都必须一致。
+  // 盘后（pm）那批是收盘后的事后记录，已经复盘过 —— 不叫推荐更准确。
+  var PICK_GROUP_CN = { am: '今日潜力个股（推荐）', pm: '盘后（收盘复盘后记录）' };
+  var PICK_LOGIC_LABEL = { am: '为什么推荐', pm: '逻辑' };
+  // 风险提示（沿用既有 .muted .small 排版，不新增样式、不加新颜色）
+  var PICK_RECOMMEND_NOTE =
+    '以上是 AI 依据当日新闻给出的观察建议（含关注区间与触发条件），' +
+    '不是买入指令、不构成投资建议；新闻≠股价，已被消化的利好可能“利好出尽”；' +
+    '每条都写了推翻条件，跑输的记录不会删。';
+  // 推翻条件核查（2026-10-05）：M10 复盘时用"记录日之后新出现的新闻"复核当初写的
+  // 推翻条件，结果在 reviews[k].invalidation_check。**四态必须分开**，尤其
+  // **没核查 ≠ 未触发** —— 老账本行/没查过的是 unchecked，绝不能说成"未触发"。
+  // 标签优先用后端（aggregate.picks_view 的 inv.labels）给的，旧静态导出没有时
+  // 回退到这份内置常量（与 m5_report.INV_CHECK_CN 同一口径）。
+  var INV_LABELS_FALLBACK = {
+    triggered: '推翻条件：疑似触发',
+    not_triggered: '推翻条件：未触发',
+    unclear: '推翻条件：无法判断（窗口内无相关信息）'
+  };
+  function invLabels(p) {
+    var got = (p && p.inv && p.inv.labels) || {};
+    return {
+      triggered: got.triggered || INV_LABELS_FALLBACK.triggered,
+      not_triggered: got.not_triggered || INV_LABELS_FALLBACK.not_triggered,
+      unclear: got.unclear || INV_LABELS_FALLBACK.unclear
+    };
+  }
+  function invUnchecked(p) {
+    return (p && p.inv && p.inv.unchecked) || '推翻条件核查：未核查';
+  }
+  function invReasonMax(p) {
+    var n = (p && p.inv && p.inv.reason_max);
+    return (typeof n === 'number' && n > 0) ? n : 60;
+  }
+
+  // 该行是不是「推荐」批：优先用后端给的 is_recommendation（判据只在 aggregate 里
+  // 定义一次），旧导出没有这个字段时退回 slot。
+  function isRecommendation(r) {
+    if (typeof r.is_recommendation === 'boolean') return r.is_recommendation;
+    return r.slot === 'am';
+  }
+
+  // 某个日期距本机今天几天（>=0 表示过去；解析不了返回 null）。
+  function daysAgo(dateStr) {
+    if (!dateStr) return null;
+    var t = new Date(dateStr + 'T00:00:00');
+    if (isNaN(t.getTime())) return null;
+    var now = new Date();
+    return Math.round(
+      (new Date(now.getFullYear(), now.getMonth(), now.getDate()) - t) / 86400000);
+  }
+
+  // 「最近一批推荐是 X，已过去 N 天」——空态用；日期取不到就返回空串
+  function latestBatchNote(latest) {
+    if (!latest) return '';
+    var d = daysAgo(latest);
+    return '最近一批推荐是 ' + latest +
+      (d !== null && d >= 0 ? '，已过去 ' + d + ' 天' : '') + '。';
+  }
 
   // ── 总览 ────────────────────────────────────────────────
   function renderOverview() {
@@ -219,7 +280,18 @@
     });
 
     var sort = $('#fsort').value;
-    if (sort === 'source') {
+    if (sort === 'importance') {
+      /* 按重要度：**报道家数 desc → 时间 desc**（2026-10-05，默认视图）。
+         家数 = 该条 sources 的独立来源家族数（后端 family_count，兜底本地现算），
+         与「已确认」判据同源。只改**展示顺序**：每条新闻的 id 没变，引用锚点
+         #news-<id> 仍指向它自己那条（M3 的 digest 顺序与 citation_map 一个字节
+         都没动）。 */
+      out.sort(function (a, b) {
+        var d = niFamilyCount(b) - niFamilyCount(a);
+        if (d) return d;
+        return String(b.time).localeCompare(String(a.time));
+      });
+    } else if (sort === 'source') {
       out.sort(function (a, b) { return String(a.source).localeCompare(String(b.source), 'zh'); });
     } else if (sort === 'sentiment') {
       var rk = { bullish: 0, bearish: 1, neutral: 2 };
@@ -253,6 +325,67 @@
   /* isRaw 显式传入，不能靠 item 上有没有 dropped 字段判断：
      原始新闻里"被 M2 选中"的那些 dropped 为 false，
      若据此当普通新闻渲染，点击会跳到 id 恰好相同的另一条结构化新闻。 */
+
+  // ── 跨天持续标记 + 报道家数（纯函数，与 M5 日报同一口径） ──────────────
+  /* M2 的跨天事件追踪字段（冻结契约）：
+       "continuing": {"days":3, "first_date":"2026-10-08", "prev_date":"…",
+                      "families":["新浪财经"], "confidence":"high"}
+     ① **新事件没有这个键**（不是 null）→ 什么都不加，绝不渲染空标签；
+     ② confidence 只有 high / low。**low 不许写成「持续关注第 N 天」** —— 那会让
+        人以为"同一事件"已经确认；low 只能写「疑似同一事件」；
+     ③ `families` 是**历史记录**的来源家族，**不含今天这条自己的来源**，所以
+        「N 家媒体」必须自己把今天的 sources 并进去（见 niFamilies）。
+     后端 aggregate.py 的 query_news 会把 family_label / continuing 算好带下来，
+     这几支函数既是兜底（旧静态导出没有那些字段时），也是文案的单一定义处之一。 */
+  function mmdd(s) {
+    var m = /(\d{4})-(\d{2})-(\d{2})/.exec(String(s == null ? '' : s));
+    return m ? m[2] + '-' + m[3] : '';
+  }
+
+  // 该条的全部报道来源家族 = 今天的 sources ∪ 历史的 continuing.families（去重保序）
+  function niFamilies(n) {
+    var out = [];
+    var push = function (s) {
+      s = String(s == null ? '' : s).trim();
+      if (s && out.indexOf(s) < 0) out.push(s);
+    };
+    var raw = (n.sources && n.sources.length) ? n.sources : [n.source];
+    (raw || []).forEach(push);
+    var c = n.continuing;
+    if (c && typeof c === 'object') (c.families || []).forEach(push);
+    return out;
+  }
+
+  function niFamilyCount(n) {
+    return (typeof n.family_count === 'number') ? n.family_count : niFamilies(n).length;
+  }
+
+  // 跨天标记：high →「持续关注 · 第 N 天（首次 MM-DD）」；low →「疑似同一事件（第 N 天）」
+  function continuingBadge(n) {
+    var c = n && n.continuing;
+    if (!c || typeof c !== 'object') return '';
+    var d = parseInt(c.days, 10);
+    if (!(d >= 1)) return '';
+    var first = mmdd(c.first_date) || c.first_mmdd || '';
+    var conf = String(c.confidence || '').toLowerCase();
+    if (conf === 'high') {
+      return '<span class="badge continuing">持续关注 · 第 ' + d + ' 天' +
+        (first ? '（首次 ' + esc(first) + '）' : '') + '</span>';
+    }
+    if (conf === 'low') {
+      return '<span class="badge continuing weak">疑似同一事件（第 ' + d + ' 天）</span>';
+    }
+    return '';
+  }
+
+  // 「2 家媒体 · 来源：新浪财经、东方财富」：只有 confirmed 才显示来源清单
+  // （与 M5 日报同一口径）；单源不写家数（没信息量）。
+  // 句子由后端算好（aggregate.family_sources_label），旧静态导出退回 confirmed_sources。
+  function familySourceLabel(n) {
+    if (!n || n.verified !== 'confirmed') return '';
+    return n.family_label || n.confirmed_sources || '';
+  }
+
   function newsCard(n, isRaw) {
     var meta = ['<span>' + esc((n.time || '').slice(5, 16)) + '</span>',
                 '<span>' + esc(n.source || '') + '</span>'];
@@ -264,11 +397,15 @@
       if (n.category) meta.push('<span class="tag">' + esc(CAT_CN[n.category] || n.category) + '</span>');
       meta.push('<span class="badge ' + (n.verified === 'confirmed' ? 'confirmed' : 'unverified') + '">' +
                 (n.verified === 'confirmed' ? '已确认' : '待核实') + '</span>');
+      // 跨天标记（2026-10-05）：没有 continuing 的条目一个字符都不加
+      var cont = continuingBadge(n);
+      if (cont) meta.push(cont);
       // 来源清单（2026-10-04）：confirmed 不再只给一个二值标记 —— 显示是哪几家
-      // 独立出版方刊发了同一事件，读者可自行判断印证强度。字段由 aggregate.py
-      // 的 query_news 提供（confirmed_sources 已按 4 家截断；为空串时不渲染）。
+      // 独立出版方刊发了同一事件，读者可自行判断印证强度。「N 家媒体」的家数把
+      // M2 continuing.families（历史来源家族）并进来了（单源不写家数）。
       // 不能塞进 .badge（那个类 white-space:nowrap，长来源名会撑破窄屏）。
-      if (n.confirmed_sources) meta.push('<span>' + esc(n.confirmed_sources) + '</span>');
+      var fam = familySourceLabel(n);
+      if (fam) meta.push('<span>' + esc(fam) + '</span>');
       meta.push('<span class="badge ' + esc(n.sentiment || 'neutral') + '">' +
                 esc(SENTI_CN[n.sentiment] || '中性') + '</span>');
       (n.board || []).forEach(function (b) {
@@ -653,6 +790,22 @@
   function reportUrl(file) { return STATIC ? ('../' + file) : ('/reports/' + file); }
 
   function renderHistory() {
+    // 复盘看板入口（M12）：**看板不存在就整块不显示** —— 接口给 exists 判据，
+    // 前端不猜路径、也不渲染死链（本地没跑 M12 时就是这种情况）。
+    var rv = S.review || null;
+    var card = $('#reviewCard');
+    if (card) {
+      if (rv && rv.exists && (rv.report || {}).file) {
+        card.style.display = '';
+        var link = $('#reviewLink');
+        if (link) {
+          link.href = rv.path || ('../' + rv.report.file);
+          link.textContent = (rv.report.label || '复盘看板') + ' →';
+        }
+      } else {
+        card.style.display = 'none';
+      }
+    }
     if (!S.history.length) {
       $('#historyList').innerHTML = '<p class="empty">暂无历史日报</p>';
       return;
@@ -669,8 +822,29 @@
   // ── 候选观察清单（M10） ──────────────────────────────────
   /* 不显示「胜率」「命中率」，也不给超额加红绿配色：超额 +0.1% 与 -0.1%
      经济上几乎没有差别，用颜色把它们分成两档会凭空造出「对/错」的观感。
-     均值与**样本数**永远一起出现——样本 3 条时的均值不配单独示人。 */
-  function revCell(rev) {
+     均值与**样本数**永远一起出现——样本 3 条时的均值不配单独示人。
+     两个基准并列（2026-10-05）：候选偏中小盘 + 事件驱动，只用沪深300 会系统性
+     高估水平，故每档同时给相对沪深300 与相对中证1000 的超额。缺第二个口径的
+     记录（老账本 / bench2 取不到）显示「—」——**不能显示 0%**，也不进均值
+     （均值的样本数由后端 m5.picks_stats 分别给出：n 与 n2）。 */
+  function benchNames(p) {
+    // 后端（aggregate.picks_view）给的 bench/bench2；旧静态导出没有这两个字段时
+    // 回退到内置常量，保证老页面也能渲染出两个字的口径名。
+    return { bench: (p && p.bench) || '沪深300', bench2: (p && p.bench2) || '中证1000' };
+  }
+  function benchNote(p) {
+    return (p && p.bench_note) ||
+      '超额同时给沪深300 与中证1000：候选偏中小盘，只用沪深300 会高估水平';
+  }
+  // 一行「超额 沪深300 +2.38%」；缺这个口径时是「—」（不是 0%）
+  function alphaLine(label, v) {
+    var s = (typeof v === 'number')
+      ? '<b>' + pct(v * 100) + '</b>'
+      : '<span class="muted">—</span>';
+    return '<div class="pick-alpha">超额 ' + esc(label) + ' ' + s + '</div>';
+  }
+
+  function revCell(rev, names) {
     if (!rev) return '<td class="num pick-pending">—</td>';
     if (rev.status !== 'ok') {
       return '<td class="num pick-pending">' + esc(REV_STATUS_CN[rev.status] || '未取到行情') +
@@ -679,16 +853,64 @@
     var lag = (rev.done && rev.due && rev.done !== rev.due)
       ? '<span class="pick-lag" title="计划 ' + esc(rev.due) + '，实际在 ' + esc(rev.done) +
         ' 取到行情">补</span>' : '';
-    var a = (typeof rev.alpha === 'number')
-      ? '<b>' + pct(rev.alpha * 100) + '</b>'
-      : '<span class="muted">—</span>';
     return '<td class="num">' + pct(rev.ret * 100) +
-      '<div class="pick-alpha">超额 ' + a + '</div>' + lag + '</td>';
+      alphaLine(names.bench, rev.alpha) +
+      alphaLine(names.bench2, rev.alpha2) + lag + '</td>';
   }
 
-  function pickCard(r) {
+  // 该行的推翻条件核查结论：取**已核查过**的那一档里最严重的一条
+  // （triggered > not_triggered > unclear）。一条候选有多档复盘，核查是随每档
+  // 补录各做一次的；全为 null 时返回 null → 展示「未核查」（**不是**「未触发」）。
+  function pickInvCheck(r) {
+    var RANK = { triggered: 2, not_triggered: 1, unclear: 0 };
+    var best = null;
+    PICK_TIERS.forEach(function (k) {
+      var rev = (r.reviews || {})[String(k)];
+      if (!rev || typeof rev !== 'object') return;
+      var ic = rev.invalidation_check;
+      if (!ic || typeof ic !== 'object') return;
+      var v = String(ic.verdict || '').trim().toLowerCase();
+      if (!(v in RANK)) return;
+      var cand = [RANK[v], String(rev.done || ''), v, ic];
+      if (!best || cand[0] > best[0] ||
+          (cand[0] === best[0] && cand[1] > best[1])) best = cand;
+    });
+    return best ? { verdict: best[2], ic: best[3] } : null;
+  }
+
+  function invCheckHtml(r, p) {
+    var got = pickInvCheck(r);
+    if (!got) return '<p class="pick-inval-check muted">' + esc(invUnchecked(p)) + '</p>';
+    var labels = invLabels(p);
+    var label = labels[got.verdict] || ('推翻条件：' + got.verdict);
+    if (got.verdict !== 'triggered') {
+      return '<p class="pick-inval-check muted">' + esc(label) + '</p>';
+    }
+    var reason = String(got.ic.reason || '');
+    var max = invReasonMax(p);
+    var detail = [];
+    if (reason) detail.push(esc(reason.length > max ? reason.slice(0, max - 1) + '…' : reason));
+    var basis = (got.ic.basis || []).slice(0, 6);
+    if (basis.length) {
+      // 编号体系要写清：这是**核查时的新闻窗口位置**，与卡片上「依据 [n]」
+      // 引用的 M3 新闻编号是两套东西，同一个号会指到两条不同的新闻。
+      detail.push('核查窗口 ' + basis.map(function (b) { return '#' + b; }).join('、'));
+    }
+    return '<p class="pick-inval-check inv-triggered"><b>⚠️ ' + esc(label) + '</b>' +
+      (detail.length ? '：' + detail.join('　') : '') + '</p>';
+  }
+
+  function pickCard(r, p) {
     var conf = r.confidence ? '<span class="pick-conf">置信度 ' + esc(r.confidence) + '</span>' : '';
     var board = r.board ? '<span class="pick-tag">' + esc(r.board) + '</span>' : '';
+    // 连续推荐标记（2026-10-05，**只在展示层**）：同名、相邻记录日 ≤3 自然日的行
+    // 已被后端 picks.cards 合并成这一条，以最新那条为代表。days < 2（只记录过一次）
+    // 时一个字符都不加 —— "连续第 1 天"没有信息量。
+    // 账本与统计口径都不受它影响：stats 仍按 rows 每一行算，历史明细表逐行列出。
+    var streak = (r.streak && r.streak.days >= 2)
+      ? '<span class="pick-streak">连续第 ' + r.streak.days + ' 天推荐' +
+        (r.streak.first_date ? '（首次 ' + esc(r.streak.first_date) + '）' : '') + '</span>'
+      : '';
     var refs = (r.basis_ids || []).filter(function (i) { return i < S.news.length; });
     var ref = refs.length
       ? '<span class="pick-ref">依据 ' + refs.map(function (i) {
@@ -699,26 +921,40 @@
       ? '<span class="pick-base">' +
         // 盘前行（slot=am）的基准价是**昨收**，不写清会被当成"记录时的现价"
         (r.slot === 'am' ? '基准 昨收 ' : '记录时价 ') + r.base_price + '</span>' : '';
+    // logic 的标签**按批次分**：推荐批（am）→「为什么推荐」；复盘批（pm）→「逻辑」。
+    // 不按 slot 硬判，走 isRecommendation()，旧导出缺字段时它自己会退回 slot。
+    var logicLabel = PICK_LOGIC_LABEL[isRecommendation(r) ? 'am' : 'pm'];
     return '<div class="pick-card">' +
       '<div class="pick-head"><b>' + esc(r.name) + '</b>' +
       '<span class="pick-kind">' + esc(KIND_CN[r.kind] || r.kind) + '</span>' +
-      board + conf + '</div>' +
-      (r.logic ? '<p class="pick-logic">' + esc(r.logic) + '</p>' : '') +
+      board + streak + conf + '</div>' +
+      (r.logic
+        ? '<p class="pick-logic"><b>' + logicLabel + '</b>：' + esc(r.logic) + '</p>'
+        : '') +
       // 盘前清单的可执行信息（2026-10-04 新增字段；空则不渲染该项）
       (r.entry_zone ? '<p class="pick-plan"><b>关注区间</b>' + esc(r.entry_zone) + '</p>' : '') +
       (r.trigger ? '<p class="pick-plan"><b>触发条件</b>' + esc(r.trigger) + '</p>' : '') +
+      // 当初写下的那句推翻条件（原文）与**后来复核的结论**是两件事，都要显示
       (r.invalidation
         ? '<p class="pick-inval"><b>推翻条件</b>' + esc(r.invalidation) + '</p>' : '') +
+      invCheckHtml(r, p) +
       '<div class="pick-foot">' + base + ref + '</div></div>';
   }
 
-  function pickRow(r) {
+  function pickRow(r, names, p) {
     return '<tr><td class="pick-date">' + esc(r.date) +
       '<span class="muted small">' + esc(SLOT_CN[r.slot] || r.slot || '') + '</span></td>' +
       '<td>' + esc(r.name) +
       '<span class="muted small">' + esc(KIND_CN[r.kind] || '') +
       (r.board ? ' · ' + esc(r.board) : '') + '</span></td>' +
-      PICK_TIERS.map(function (k) { return revCell((r.reviews || {})[String(k)]); }).join('') +
+      // 推翻条件核查：与"当初写的推翻条件"**同格但两行**——原文是记录时写下的
+      // 那句话，核查结论是后来用新新闻复核的结果，两者不能混为一谈，也不能互相
+      // 取代（历史明细里不显示原文的话，读者只看到"未核查"就丢了当初的判断依据）
+      '<td class="pick-inval-cell">' +
+      (r.invalidation
+        ? '<p class="pick-inval"><b>推翻条件</b>' + esc(r.invalidation) + '</p>' : '') +
+      invCheckHtml(r, p) + '</td>' +
+      PICK_TIERS.map(function (k) { return revCell((r.reviews || {})[String(k)], names); }).join('') +
       '</tr>';
   }
 
@@ -733,44 +969,106 @@
     }
 
     var stats = p.stats || {};
+    var names = benchNames(p);
+    // 两个基准并列（2026-10-05）：每档给「相对沪深300 / 相对中证1000」两个均值，
+    // 样本数**分别报**（老账本/bench2 缺失的档位只有第一个口径的样本）。
+    // 与 M5 日报同一口径：低于 3 条不给均值，但样本数照报。
     var statParts = PICK_TIERS.map(function (k) {
       var s = stats[String(k)];
       if (!s || !s.n) return '';
+      var n2 = (typeof s.n2 === 'number') ? s.n2 : 0;
+      var same = (n2 === s.n);
+      var sample = '样本 ' + s.n + ' 条' +
+        (same ? '' : ' / ' + esc(names.bench2) + ' 口径 ' + n2 + ' 条');
+      if (s.n < 3) {
+        return '<span class="pick-stat">T+' + k + ' ' + sample + '（不足 3 条不给均值）</span>';
+      }
       var mean = (typeof s.alpha === 'number')
         ? '<b>' + pct(s.alpha * 100) + '</b>' : '<span class="muted">—</span>';
+      var mean2 = (n2 && typeof s.alpha2 === 'number')
+        ? '<b>' + pct(s.alpha2 * 100) + '</b>' : '<span class="muted">—</span>';
       return '<span class="pick-stat">T+' + k + ' 均超额 ' + mean +
-        '<span class="muted">（样本 ' + s.n + ' 条）</span></span>';
+        '<span class="muted">（相对' + esc(names.bench) + '）</span> / ' + mean2 +
+        '<span class="muted">（相对' + esc(names.bench2) + '）· ' + sample + '</span></span>';
     }).filter(Boolean).join('');
 
     var today = (p.latest_date || '').trim();
     var todayRows = rows.filter(function (r) { return r.date === today; });
-    // 同一天可能有两批：盘前（今日可执行清单，基准=昨收）与盘后（收盘后记录）。
-    // 盘前在前 —— 那才是"今天要看的东西"。只有一批时不加分组标题。
-    var ORDER = [['am', '盘前（今日可执行）'], ['pm', '盘后（收盘复盘后记录）']];
-    var groups = ORDER.map(function (g) {
-      return { label: g[1],
-               rows: todayRows.filter(function (r) { return (r.slot || 'pm') === g[0]; }) };
-    }).filter(function (g) { return g.rows.length; });
+    // 同一天可能有两批：推荐（am，盘前那批，基准=昨收）与盘后（收盘后记录）。
+    // 推荐在前 —— 那才是"今天要看的东西"。只有一批时不加分组标题（沿用既有规则）。
+    // **连续推荐合并**（2026-10-05，只在展示层）：后端 picks.cards 已把同名且相邻
+    // 记录日 ≤3 自然日的行并成一条（以最新那条为代表，行上带 streak）。这里优先用它；
+    // 旧静态导出没有 cards 时回退到 rows 现算（不合并）。
+    // 注意 rows 本身**仍是未合并的账本行**：下面的历史明细表逐行列出，stats 也按它算。
+    var ORDER = [['am', PICK_GROUP_CN.am], ['pm', PICK_GROUP_CN.pm]];
+    var cardsInfo = (p.cards && p.cards.groups && p.cards.date === today) ? p.cards : null;
+    var groups = cardsInfo
+      ? cardsInfo.groups.map(function (g) {
+          return { label: g.label || PICK_GROUP_CN[g.slot] || g.slot,
+                   slot: g.slot, rows: g.rows || [] };
+        })
+      : ORDER.map(function (g) {
+          return { label: g[1], slot: g[0],
+                   rows: todayRows.filter(function (r) {
+                     return (isRecommendation(r) ? 'am' : 'pm') === g[0];
+                   }) };
+        }).filter(function (g) { return g.rows.length; });
+    // 卡片数是**合并后**的条数（表头与下面实际渲染的卡片必须对得上）
+    var nCards = groups.reduce(function (n, g) { return n + g.rows.length; }, 0);
+    // 推荐批下方固定一句风险提示（「推荐」旁边必须有"不是买入指令"）。
+    var recNote = groups.some(function (g) { return g.slot === 'am'; })
+      ? '<p class="muted small">' + esc(PICK_RECOMMEND_NOTE) + '</p>' : '';
+    // 账本里最新的那批是不是"今天"的？不是（休市/长假/盘前那轮还没跑）就先说清
+    // **今天没有产出推荐**，再照常给出最近一批的候选 —— 只留一块"还没有记录"
+    // 会让人分不清是休市还是流水线坏了。
+    var ago = daysAgo(today);
+    var staleNote = (ago !== null && ago > 0)
+      ? '<p class="pick-empty">今天没有产出推荐（休市日不产出；盘前 08:10 那轮给出推荐，' +
+        '收盘后那轮记录当日候选）。' + esc(latestBatchNote(today)) + '</p>'
+      : '';
     // 盘前那次运行时当日还没有候选，此时 latest_date 是上一交易日 —— 如实标日期，
     // 不把它说成「今日」
     var cards = todayRows.length
-      ? '<h3 class="pick-sub">' + esc(today) + ' 记录的候选（' + todayRows.length + ' 条）</h3>' +
+      ? staleNote +
+        '<h3 class="pick-sub">' + esc(today) + ' 记录的候选（' + nCards + ' 条）</h3>' +
         groups.map(function (g) {
           return (groups.length > 1
             ? '<h3 class="pick-sub">' + g.label + '（' + g.rows.length + ' 条）</h3>' : '') +
-            '<div class="pick-cards">' + g.rows.map(pickCard).join('') + '</div>';
+            '<div class="pick-cards">' + g.rows.map(function (r) { return pickCard(r, p); }).join('') + '</div>' +
+            (g.slot === 'am' ? recNote : '');
         }).join('')
-      : '<p class="pick-empty">这次运行时还没有新的候选记录。</p>';
+      : '<p class="pick-empty">今天没有产出推荐（休市日不产出；盘前 08:10 那轮给出推荐，' +
+        '收盘后那轮记录当日候选）。' + esc(latestBatchNote(today)) +
+        '以下是跟踪中候选的表现。</p>';
+
+    // **关键统计**：逻辑已被推翻、价格却仍跑赢的条数。文案由后端给出（判据与口径
+    // 只在 M5 定义一次）；旧静态导出没有这个字段时退回本地拼一句。
+    // 样本为 0 时整条不显示 —— 写"0 档"会让读者以为核查没在跑。
+    var invLine = (p.inv && p.inv.line) || '';
+    if (!invLine && p.inv && p.inv.stats && p.inv.stats.sample) {
+      invLine = '⚠️ 已复核 ' + p.inv.stats.sample + ' 档中有 ' + p.inv.stats.triggered +
+        ' 档逻辑破产（价格仍跑赢 ' + p.inv.stats.lucky + ' 档）—— 这类“蒙对”不计入判断能力';
+    }
+    var invStat = invLine
+      ? '<p class="pick-stat inv-triggered">' + esc(invLine) + '</p>' : '';
 
     $('#picksBody').innerHTML =
       '<div class="pick-stats">' + (statParts ||
         '<span class="muted small">还没有到期回填的表现数据</span>') + '</div>' +
+      invStat +
+      '<p class="muted small">' + esc(benchNote(p)) + '</p>' +
       cards +
       '<h3 class="pick-sub">历史明细（含跑输的，共 ' + p.total + ' 条）</h3>' +
       '<div class="table-wrap"><table class="tbl pick-tbl"><thead><tr>' +
-      '<th>记录日</th><th>候选</th><th>T+1</th><th>T+3</th><th>T+5</th>' +
-      '</tr></thead><tbody>' + rows.map(pickRow).join('') + '</tbody></table></div>' +
-      '<p class="muted small">超额 = 该候选涨跌幅 − 同期沪深300 涨跌幅；' +
+      '<th>记录日</th><th>候选</th><th>推翻核查</th><th>T+1</th><th>T+3</th><th>T+5</th>' +
+      '</tr></thead><tbody>' +
+      rows.map(function (r) { return pickRow(r, names, p); }).join('') +
+      '</tbody></table></div>' +
+      '<p class="muted small">推翻核查＝用该条记录日之后新出现的新闻复核当初写下的推翻条件：' +
+      '「疑似触发」表示逻辑已破产（依据编号是复核时引用的新闻窗口编号）；' +
+      '**未核查 ≠ 未触发**（老账本行与没查过的档一律显示「未核查」）。' +
+      '每格两行超额：相对' + esc(names.bench) + ' 与 相对' +
+      esc(names.bench2) + '；缺第二个口径的旧记录显示「—」（不计入均值）。' +
       '收益率为未复权口径，除权除息期间会有偏差。' +
       '「补」表示该档实际取价日迟于计划日期（周末/停牌/休市）。</p>';
   }
@@ -796,6 +1094,10 @@
     });
 
     $('#modalTitle').textContent = '新闻详情 #' + id;
+    // 详情弹层里的来源清单：**完整**列出、不截断（family_label_full），家数含
+    // M2 的历史来源家族；单源条目不写家数。取不到就整段不渲染（不留空 span）。
+    var famFull = (d.verified === 'confirmed')
+      ? (d.family_label_full || d.confirmed_sources_full || familySourceLabel(d)) : '';
     var h = [];
     h.push('<div class="markdown"><p>' + esc(d.text) + '</p></div>');
     h.push('<div class="sec-label">元信息</div>');
@@ -803,10 +1105,11 @@
       '<span class="tag">' + esc(CAT_CN[d.category] || d.category || '') + '</span>' +
       '<span class="badge ' + (d.verified === 'confirmed' ? 'confirmed' : 'unverified') + '">' +
       (d.verified === 'confirmed' ? '已确认（多源）' : '待核实（单源）') + '</span>' +
+      // 跨天标记（2026-10-05）：与列表同一句文案；没有 continuing 就什么都不加
+      continuingBadge(d) +
       '<span class="badge ' + esc(d.sentiment || 'neutral') + '">' +
       esc(SENTI_CN[d.sentiment] || '中性') + '</span>' +
-      // 详情弹层里**完整**列出所有来源（confirmed_sources_full 不截断）
-      (d.confirmed_sources_full ? '<span>' + esc(d.confirmed_sources_full) + '</span>' : '') +
+      (famFull ? '<span>' + esc(famFull) + '</span>' : '') +
       '<span>' + esc(d.time || '') + '</span><span>' + esc(d.source || '') + '</span>' +
       (d.url ? '<a href="' + esc(d.url) + '" target="_blank" rel="noopener">原文 ↗</a>' : '') +
       '</div>');
@@ -857,7 +1160,7 @@
 
     $('#fclear').addEventListener('click', function () {
       ['fq', 'fsort', 'fcat', 'fsenti', 'fverified', 'fsource', 'fboard', 'fstock']
-        .forEach(function (id) { var el = $('#' + id); el.value = id === 'fsort' ? 'time' : ''; });
+        .forEach(function (id) { var el = $('#' + id); el.value = id === 'fsort' ? 'importance' : ''; });
       renderNews(true);
     });
 
@@ -1003,6 +1306,7 @@
       S.meta = r[0]; S.overview = r[1]; S.news = r[2].items || [];
       S.quotes = r[3].quotes || []; S.failed = r[3].failed || [];
       S.boards = r[4].boards || []; S.analysis = r[5]; S.history = r[6].reports || [];
+      S.review = r[6].review || null;   // M12 看板入口（纯附加键，可能不存在）
       S.picks = r[7] || null;
       S.raw = []; S.rawLoaded = false;   // 原始新闻按需再拉
 
