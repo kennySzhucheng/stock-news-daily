@@ -49,8 +49,16 @@ CONF_CN = {"高": "高", "中": "中", "低": "低"}
 # 四态文案：与 M5 的 INV_CHECK_CN 同一口径（同一结论不能两处说法不同）。
 # 这里复制一份常量而不是 import M5 —— 模块独立是项目既有约定；
 # 语义由 tests 里的四态断言锁住。
-VERDICT_CN = {"triggered": "疑似触发", "not_triggered": "未触发", "unclear": "无法判断"}
-VERDICT_NONE_CN = "未核查"
+# 这里复制一份常量而不是 import M5 —— 模块独立是项目既有约定；
+# 语义由 tests 里的四态断言锁住。
+#
+# **文案必须与 M5/M9 逐字一致**（2026-10-05 统一）：同一条结论在两个页面用两种说法
+# （这里是「推翻核查：疑似触发」、日报里是「推翻条件：疑似触发」）会让人怀疑它们
+# 不是同一件事。tests/offline_tests.py 里有一条断言把三处文案钉死。
+VERDICT_CN = {"triggered": "推翻条件：疑似触发",
+              "not_triggered": "推翻条件：未触发",
+              "unclear": "推翻条件：无法判断（窗口内无相关信息）"}
+VERDICT_NONE_CN = "推翻条件核查：未核查"
 VERDICT_RANK = {"triggered": 2, "not_triggered": 1, "unclear": 0}
 
 MIN_SAMPLE = 5
@@ -531,10 +539,11 @@ def tier_line(rev):
     parts.append(f'<span class="small">超额 {BENCH_NAME} {pct(rev.get("alpha"))}'
                  f' · {BENCH2_NAME} {pct(rev.get("alpha2"))}</span>')
     v = normalize_verdict(rev.get("invalidation_check"))
+    # VERDICT_*_CN 里已经带「推翻条件：」前缀（与 M5/M9 逐字一致），这里不再拼前缀
     if v is None:
-        parts.append(f'<span class="small verdict-none">推翻核查：{VERDICT_NONE_CN}</span>')
+        parts.append(f'<span class="small verdict-none">{VERDICT_NONE_CN}</span>')
     else:
-        parts.append(f'<span class="small verdict-{v}">推翻核查：{VERDICT_CN[v]}</span>')
+        parts.append(f'<span class="small verdict-{v}">{VERDICT_CN[v]}</span>')
     span = rev.get("span")
     kind = "交易日" if rev.get("span_kind") == "trading" else "自然日"
     if isinstance(span, int) and span:

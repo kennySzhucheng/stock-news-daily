@@ -1385,6 +1385,25 @@ class ReviewDashboard(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertTrue((out / "review-latest.html").is_file())
 
+    def test_verdict_labels_consistent_across_modules(self):
+        """四态文案在三处必须**逐字一致**（各模块独立复制常量，语义由本断言锁住）。
+
+        同一条结论在日报里叫「推翻条件：疑似触发」、在复盘看板里叫「推翻核查：疑似触发」，
+        会让人怀疑它们不是同一件事 —— 这是纯粹的措辞漂移，没有理由存在。
+        """
+        rep = load("m5_report", "modules/m5_report/report.py")
+        canonical = list(rep.INV_CHECK_CN.values()) + [rep.INV_UNCHECKED_CN]
+        app = (ROOT / "modules/m9_web/web/app.js").read_text(encoding="utf-8")
+        wk = (ROOT / "modules/m12_weekly/weekly.py").read_text(encoding="utf-8")
+        wkmod = load("m12_weekly", "modules/m12_weekly/weekly.py")
+        for txt in canonical:
+            self.assertIn(txt, app, f"app.js 缺少与 M5 一致的文案：{txt}")
+            self.assertIn(txt, wk, f"weekly.py 缺少与 M5 一致的文案：{txt}")
+        self.assertEqual(sorted(wkmod.VERDICT_CN.values()),
+                         sorted(rep.INV_CHECK_CN.values()),
+                         "看板的四态文案必须与日报逐字相同")
+        self.assertEqual(wkmod.VERDICT_NONE_CN, rep.INV_UNCHECKED_CN)
+
     def test_wired_into_history_api_and_export(self):
         """看板入口必须走数据（不是硬编码链接）：接口与静态导出都要带、前端要判 exists。"""
         srv = (ROOT / "modules/m9_web/server.py").read_text(encoding="utf-8")
