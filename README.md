@@ -1,6 +1,15 @@
-# 股市情报助手 · 项目总览
+# 股市情报助手 · A股每日情报日报
 
-> 每天自动收集时事新闻 → AI 分析 → 网页日报 + 微信推送。**定位是信息助手，不提供买卖建议，决策权归用户本人；但会公开自己过往判断的成败记录。**
+> **每天自动做三件事**：聚合 13 个新闻源 → AI 筛选与多源交叉验证 → 出**盘前推荐清单**（每条写清依据 / 关注区间 / 触发条件 / 推翻条件）与**盘后复盘**（T+1·T+3·T+5 相对沪深300 与中证1000 的超额，并自动核查推翻条件是否被触发）。
+>
+> ![离线用例](https://github.com/kennySzhucheng/stock-news-daily/actions/workflows/tests.yml/badge.svg)
+> [📰 最新日报](https://kennyszhucheng.github.io/stock-news-daily/) ·
+> [📊 复盘看板](https://kennyszhucheng.github.io/stock-news-daily/review-latest.html) ·
+> [🔎 交互网页版](https://kennyszhucheng.github.io/stock-news-daily/web/) ·
+> [🤖 云端运行记录](https://github.com/kennySzhucheng/stock-news-daily/actions) ·
+> [📔 CHANGELOG](CHANGELOG.md)
+>
+> ⚠️ **定位是信息助手，不提供买卖建议，决策权归用户本人**；但会**公开自己过往判断的成败记录**（跑输的不删、不给"胜率"）。
 
 ## 一、项目定位与边界
 
