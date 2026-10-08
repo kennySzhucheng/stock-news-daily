@@ -33,6 +33,14 @@ import aggregate  # noqa: E402
 BASE = HERE.parent.parent
 WEB_DIR = HERE / "web"
 
+# 前端三件套之外还要原样复制过去的静态资源（PWA 最小集，2026-10-08）：
+# 图标与 manifest 必须跟着 index.html 一起进 reports/web/，否则线上 /web/
+# 页面的 <link rel="manifest"> 会 404，手机就装不上主屏幕。
+# 加文件时**这里与 sync.py 的 PAGE_FILES 都要看一眼**：sync.py 只回拉
+# PAGE_FILES，漏掉的话"只跑 sync.py"的本地副本里这些文件不会出现。
+STATIC_ASSETS = ("manifest.webmanifest", "icon-192.png", "icon-512.png",
+                 "apple-touch-icon.png", "favicon.ico")
+
 # 原始新闻在静态版里只保留正文前若干字：完整 1000+ 条会撑到 600KB，
 # 而这个视图的用途是"看看被丢掉的是什么"，摘要足够
 RAW_TEXT_LIMIT = 300
@@ -122,6 +130,15 @@ def main():
         if fname == "index.html":
             text = text.replace("window.__STATIC__ = false;", "window.__STATIC__ = true;")
         (out_dir / fname).write_text(text, encoding="utf-8")
+
+    # 静态资源（图标 / manifest）二进制原样复制 —— 与上面同一套"缺了就直接失败"
+    # 的处理：部署出去缺 manifest 或图标，表现是"手机上装不上"，在服务端看不出来，
+    # 只有真机点一下才发现，所以宁可在导出这一步响亮地失败。
+    for fname in STATIC_ASSETS:
+        src = WEB_DIR / fname
+        if not src.is_file():
+            raise SystemExit(f"[FAIL] 缺少静态资源 {src}")
+        shutil.copyfile(src, out_dir / fname)
 
     # 清理可能残留的旧数据文件（接口改名后不至于留下孤儿文件）
     valid = {f"{n}.js" for n in payloads}

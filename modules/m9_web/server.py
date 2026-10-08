@@ -51,11 +51,16 @@ WEB_DIR = HERE / "web"
 EXPORT_API_DIR = BASE / "reports" / "web" / "api"
 
 # 静态文件白名单后缀，避免把任意路径读出去
+# （未列出的后缀会退化成 application/octet-stream —— 页面照样能打开，但有些
+#   浏览器对"类型不对的 manifest / 图标"会直接拒绝。PWA 那三行是 2026-10-08 加的。）
 STATIC_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".js": "application/javascript; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".json": "application/json; charset=utf-8",
+    ".webmanifest": "application/manifest+json; charset=utf-8",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
     ".svg": "image/svg+xml",
 }
 

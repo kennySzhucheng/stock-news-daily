@@ -4,6 +4,21 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>股市情报 · 网页版</title>
+<!-- PWA 最小集（2026-10-08）：手机上「添加到主屏幕」后全屏打开，像一个 App。
+     全部用相对路径 —— 线上挂在 Pages 的 /web/ 下，静态导出后又在 reports/web/，
+     两种位置都成立（与 app.js 的 reportUrl() 同一口径：相对当前目录）。
+     manifest 的 start_url="." 即「本目录」，因此线上是 /stock-news-daily/web/。 -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#1e4d7a">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="icon-192.png" sizes="192x192">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<!-- iOS Safari 只认 apple- 前缀那条（不认 manifest 的 display），
+     缺了它「添加到主屏幕」会带着 Safari 的地址栏打开 -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="股市情报">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>

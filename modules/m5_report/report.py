@@ -1324,7 +1324,11 @@ section.block > details > summary > h2{
   border-bottom:1px solid var(--border);
   counter-increment:sec;
 }
-/* 版块序号：纯 CSS 计数（01 02 03），不动模板结构 */
+/* 版块序号：纯 CSS 计数（01 02 03），不动模板结构。
+   **计数器必须在 main 上 reset 一次**（2026-10-08 修）：没有这句时每个 h2 各自
+   从 0 起算，全篇序号都是「01」——日报里四个版块全写 01，索引页新加的两个标题
+   也会各写一个 01。这一句让上面那句注释里的「01 02 03」真正成立。 */
+main{counter-reset:sec;}
 section.block > h2::before,
 section.block > details > summary > h2::before{
   content:counter(sec,decimal-leading-zero) " ";
@@ -1592,6 +1596,60 @@ section.block > details > summary > h3{
 .slot-link.na .slot-name{color:var(--muted);}
 .slot-link .slot-go{margin-left:auto; color:var(--muted); font-size:12px;}
 .day-latest{margin-top:8px; font-size:13px; text-align:right;}
+
+/* 索引页「今日速览」（2026-10-08）：手机上打开首页要一眼看到"今天发生了什么"。
+   窄屏（320~430）用两列小格子 + 卡片，**不用宽表格**，所以不会横向滚动。
+   配色与字号全部沿用上面的 token 与衬线标题，不引入新颜色。 */
+.brief-concl{
+  margin:0 0 12px; padding:12px 14px; background:var(--bg2);
+  border-left:3px solid var(--accent); font-size:15px; line-height:1.7;
+  overflow-wrap:anywhere;
+}
+.brief-bias{
+  display:inline-block; font-size:12px; padding:1px 8px; border-radius:2px;
+  margin-right:8px; vertical-align:1px; white-space:nowrap;
+  border:1px solid currentColor;
+}
+.brief-bias.up{color:var(--up);}
+.brief-bias.down{color:var(--down);}
+.brief-bias.flat{color:var(--flat);}
+.brief-grid{display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:0;}
+.brief-cell{
+  background:var(--bg2); border:1px solid var(--border); padding:8px 10px;
+  min-width:0;
+}
+.brief-cell .k{font-size:12px; color:var(--muted);}
+.brief-cell .v{
+  font-family:var(--serif); font-size:20px; font-weight:700; color:var(--ink);
+  line-height:1.35; font-variant-numeric:tabular-nums; overflow-wrap:anywhere;
+}
+.brief-cell .v.na{font-size:14px; font-weight:400; color:var(--muted);}
+.brief-sub{
+  font-family:var(--serif); font-size:15px; font-weight:700; color:var(--ink);
+  margin:16px 0 8px; padding-bottom:6px; border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:8px;
+}
+.brief-pick{border-bottom:1px solid var(--border); padding:10px 0;}
+.brief-pick:last-of-type{border-bottom:0;}
+.brief-pick .bp-head{
+  display:flex; align-items:center; gap:6px; flex-wrap:wrap; font-size:14.5px;
+}
+.brief-zone{
+  font-size:12.5px; color:var(--muted); line-height:1.6; margin-top:5px;
+  overflow-wrap:anywhere;
+}
+.brief-links{display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:16px;}
+.brief-link{
+  display:block; min-width:0; padding:10px 12px; background:var(--card);
+  border:1px solid var(--border); border-left:3px solid var(--accent); color:var(--text);
+}
+.brief-link .t{display:block; font-size:14px; font-weight:600; color:var(--ink);}
+.brief-link .s{display:block; font-size:12px; color:var(--muted); margin-top:2px;}
+.brief-link:hover .t{color:var(--accent);}
+@media (min-width:600px){
+  .brief-grid{grid-template-columns:repeat(4,1fr);}
+  .brief-links{grid-template-columns:repeat(3,1fr);}
+}
 """
 
 
@@ -1702,25 +1760,290 @@ def _parse_report_name(stem):
     return m.group(1), (m.group(2) or "")
 
 
-def build_index(report_files):
-    """索引页：按日期倒序分组，每天列出盘前/盘后各一份"""
+# ---------------------------------------------------------------------------
+# 索引页「今日速览」(2026-10-08)
+#
+# 背景：用户反馈"手机上网页能看到的东西有点少"。实测索引页只有链接列表
+# （989 字、72 个链接，全是"盘前 / 盘后 / 当日最新"），打开首页根本看不出
+# "今天发生了什么"；而 /web/ 交互版内容其实很足。这块把 M3 的结论句、本次
+# 运行的四个计数、今天的候选（若有）与三个入口压成一小块，放在索引页最上面。
+#
+# 三条与既有模块一致的铁律：
+#   ① 结论句复用 extract_conclusion（与摘要框、M6 推送、M9 网页同一判据）；
+#   ② 「连续第 N 天推荐」复用 pick_streak（整本账本口径，不另写一套判据）；
+#   ③ 取不到就写「暂无」，**绝不拿 0 当占位**（与 M12 看板同一原则）。
+# 整块必须是**生成时就算好的静态 HTML** —— 索引页没有 JS，不能靠前端渲染。
+# ---------------------------------------------------------------------------
+BRIEF_PICKS_MAX = 5      # 速览里最多列几条候选（完整清单在日报的候选版块）
+
+# 结论句 → 偏多 / 偏空 / 中性 标记。判据只有一条：取**最先出现**的那个情绪词。
+# 为什么按"最先出现"而不是词频/利好优先：M3 的结论句是先给立场再解释（实测
+# "中性偏谨慎——政策面偏暖但多为长期规划…"），句首那个词才是它对今天的定性；
+# 按词频数会把这句读成"偏多"，标记与紧随其后的句子自相矛盾。
+BRIEF_BIAS_WORDS = (
+    ("up", ("偏多", "看多", "乐观", "积极", "偏暖", "回暖", "转暖")),
+    ("down", ("偏空", "看空", "谨慎", "悲观", "偏冷", "降温", "承压")),
+    ("flat", ("中性", "震荡", "观望", "平衡")),
+)
+BRIEF_BIAS_CN = {"up": "偏多", "down": "偏空", "flat": "中性"}
+
+# 四个计数的标签与取值顺序（原始新闻 / 结构化 / 行情 / 多源确认）
+BRIEF_COUNT_LABEL = (("raw", "原始新闻"), ("structured", "结构化"),
+                     ("quotes", "行情"), ("confirmed", "多源确认"))
+
+# 「今天没有候选」时用的原因码 → 中文。与 M6 推送的 PICKS_REASON_CN 同一口径
+# （源头是 M10 的 REASON_DOC；三个模块各自留一份副本，不为一句文案互相 import
+# —— 与 conclusion 的三份副本同理）。
+BRIEF_PICK_REASON_CN = {
+    "parse_failed": "模型输出解析失败",
+    "llm_error": "模型输出解析失败",
+    "all_rejected": "候选未通过校验（如推翻条件缺失）",
+    "empty": "无合格材料",
+    "non_trading_day": "今天休市",
+    "not_premarket": "本轮不是盘前快照（已出现今日盘中报价）",
+    "gate_closed": "闸门未开",
+}
+
+
+def conclusion_bias(text):
+    """结论句 → "up" / "down" / "flat"；一个情绪词都读不到时返回 None。
+
+    返回 None 表示"从这句话里读不出倾向"，展示层**不标**（而不是硬贴一个"中性"）。
+    """
+    s = (text or "").strip()
+    if not s:
+        return None
+    best = None
+    for cls, words in BRIEF_BIAS_WORDS:
+        for w in words:
+            i = s.find(w)
+            if i >= 0 and (best is None or i < best[0]):
+                best = (i, cls)
+    return best[1] if best else None
+
+
+def brief_counts(data):
+    """今日速览的四个计数 → {"raw": int|None, "structured": ..., "quotes": ...,
+    "confirmed": ...}。
+
+    None = **这次运行里取不到这个数**（文件缺 / 字段没写），展示层写成「暂无」；
+    取到 0 就是 0 —— 那是"今天真的一条都没有"这个事实，不是占位符。
+    两者混在一起（缺数据也显示 0）会让人以为流水线一切正常。
+    """
+    data = data or {}
+    out = {"raw": None, "structured": None, "quotes": None, "confirmed": None}
+
+    raw = data.get("raw")
+    if isinstance(raw, list):
+        out["raw"] = len(raw)
+    elif isinstance(raw, dict) and isinstance(raw.get("news"), list):
+        out["raw"] = len(raw["news"])
+
+    news = (data.get("structured") or {}).get("news")
+    if isinstance(news, list):
+        out["structured"] = len(news)
+        out["confirmed"] = sum(1 for n in news if isinstance(n, dict)
+                               and n.get("verified") == "confirmed")
+
+    q = data.get("quotes")
+    if isinstance(q, dict):
+        cnt = q.get("count")
+        if isinstance(cnt, int) and not isinstance(cnt, bool):
+            out["quotes"] = cnt
+        elif isinstance(q.get("quotes"), list):
+            out["quotes"] = len(q["quotes"])
+    return out
+
+
+def brief_today_rows(picks, date_str, limit=BRIEF_PICKS_MAX):
+    """今天账本里要放进速览的候选行 → (要展示的行, 今天的账本总行数)。
+
+    · 只取 date == 今天 的行（与 render_picks 同一判据，不改账本）；
+    · 批次顺序沿用 SLOT_ORDER（推荐 am 在前、盘后 pm 在后），组内保持账本顺序；
+    · **同名只留一条**：同一天盘前/盘后各记一条是常态（见 pick_run 的注释），
+      速览回答的是"今天推荐了哪几只"，同一只票占两行会挤掉别的票。
+    """
+    rows = [r for r in (picks or []) if r.get("date") == date_str]
+    total = len(rows)
+    rows = sorted(rows, key=lambda r: SLOT_ORDER.index(pick_slot(r)))   # 稳定排序
+    out, seen = [], set()
+    for r in rows:
+        name = str(r.get("name") or "")
+        if name and name in seen:
+            continue
+        seen.add(name)
+        out.append(r)
+        if len(out) >= limit:
+            break
+    return out, total
+
+
+def brief_pick_html(row, all_picks):
+    """速览里的一条候选：名称 + 批次 + 置信度 +（盘前批）关注区间 + 连续推荐标记。
+
+    · 「连续第 N 天推荐」复用 pick_streak（整本账本口径），不重写判据；
+    · 关注区间只有**盘前（am）**行才有意义 —— pm 行是收盘后的事后记录，
+      它没有"当天可执行的区间"（见 _pick_card 的注释）；字段空/缺失就整行不渲染；
+    · 置信度取不到就不渲染那个标签，不写「置信度 —」这种等于没写的东西。
+    """
+    is_am = pick_slot(row) == "am"
+    conf = str(row.get("confidence") or "").strip()
+    conf_html = f'<span class="pick-conf">置信度 {esc(conf)}</span>' if conf else ""
+    streak = pick_streak(all_picks or [], row)
+    streak_html = f'<span class="pick-streak">{esc(streak)}</span>' if streak else ""
+    zone = ""
+    if is_am:
+        z = str(row.get("entry_zone") or "").strip()
+        if z:
+            zone = f'<div class="brief-zone">关注区间：{esc(z)}</div>'
+    slot_cn = SLOT_CN.get(pick_slot(row), "")
+    return (
+        '<div class="brief-pick"><div class="bp-head">'
+        f'<b>{esc(row.get("name"))}</b>'
+        f'<span class="pick-tag">{esc(slot_cn)}</span>{conf_html}{streak_html}'
+        f"</div>{zone}</div>"
+    )
+
+
+def load_picks_status(date_str, slot):
+    """读 M10 本轮写的 reports/picks/picks-<日期>-<时段>.json；读不到/坏掉返回 None。
+
+    接口（M10 产出，M6 推送与这里只读）：date / slot / generated_at / gate_open /
+    recorded / reason / detail。状态文件是**旁路产物**：缺了、写坏了、JSON 不成形
+    都绝不能让索引页生成失败。
+    """
+    if not date_str or not slot:
+        return None
+    path = REPORTS_DIR / "picks" / f"picks-{date_str}-{slot}.json"
+    try:
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def brief_no_picks_note(picks, date_str, slot):
+    """今天一条候选都没有时，索引页要说清**为什么**（休市 / 闸门未开 / 未产出），
+    并带上"上一批是什么时候"（与 picks_empty_note 一样，回答这两件事）。
+
+    为什么不能只写"今日无候选"：读者分不清这是"今天本来就不产出"（休市）、
+    "闸门没开"、还是"流水线坏了"—— 三件事的处置完全不同。
+    """
+    st = load_picks_status(date_str, slot)
+    why = ""
+    if isinstance(st, dict):
+        reason = str(st.get("reason") or "").strip()
+        if st.get("gate_open") in (False, 0):
+            why = BRIEF_PICK_REASON_CN.get(reason) or "闸门未开（非交易日或非交易时段）"
+        elif st.get("recorded") == 0:
+            cn = BRIEF_PICK_REASON_CN.get(reason) or reason or "未给出原因"
+            why = f"闸门开着但本轮一条都没选出来（原因：{cn}）"
+    d, days, is_am = latest_batch(picks or [], date_str or "")
+    tail = ""
+    if d:
+        what = "推荐" if is_am else "候选记录"
+        ago = f"，已过去 {days} 天" if days is not None else ""
+        tail = f"最近一批{what}是 {esc(d)}{ago}。"
+    lead = (f"今天没有产出候选/推荐：{esc(why)}。" if why else
+            "今天没有产出候选/推荐（本次未读到候选状态文件，可能是休市、"
+            "闸门未开，或本轮未产出）。")
+    return f'<p class="pick-empty">{lead}{tail}完整判断见下方日报。</p>'
+
+
+def render_index_brief(data, date_str, slot, has_latest, has_review):
+    """索引页最上面那块「今日速览」的 HTML（**生成时算好的静态 HTML**）。
+
+    data 是 load_data() 的结果；data 为 None / 缺字段时每个数字都写「暂无」，
+    绝不拿 0 顶上。三个入口只在目标真的存在时渲染（复盘看板可由 M12 失败而缺失），
+    网页版入口始终在（它由 M9 部署，是本页的另一个视图）。
+    """
+    data = data or {}
+    counts = brief_counts(data)
+    concl = extract_conclusion(data.get("analysis_md") or "")
+    bias = conclusion_bias(concl)
+    picks = data.get("picks") or []
+    today, total_today = brief_today_rows(picks, date_str) if date_str else ([], 0)
+
+    if concl:
+        bias_html = (f'<span class="brief-bias {bias}">{BRIEF_BIAS_CN[bias]}</span>'
+                     if bias else "")
+        concl_html = f"{bias_html}{esc(concl)}"
+    else:
+        concl_html = '暂无（本次运行没解析出市场结论，判断见下方日报的「市场分析」）'
+
+    cells = "".join(
+        '<div class="brief-cell"><div class="k">%s</div><div class="v%s">%s</div></div>'
+        % (esc(label),
+           "" if isinstance(counts[key], int) else " na",
+           counts[key] if isinstance(counts[key], int) else "暂无")
+        for key, label in BRIEF_COUNT_LABEL
+    )
+
+    if today:
+        cards = "".join(brief_pick_html(r, picks) for r in today)
+        more = ""
+        if total_today > len(today):
+            more = ('<div class="brief-zone">今天账本共 %d 条（盘前/盘后可能各记一条），'
+                    '这里合并同名后列出 %d 只</div>' % (total_today, len(today)))
+        picks_block = (
+            '<div class="brief-sub">今日候选 / 推荐'
+            f'<span class="h2-count">今日 {total_today} 条</span></div>'
+            f'{cards}{more}'
+            '<p class="brief-zone">以上是 AI 依据当日新闻给出的观察建议'
+            '（含关注区间与触发条件），<b>不是买入指令</b>、不构成投资建议；'
+            '每条都写了推翻条件，跑输的记录不会删。</p>'
+        )
+    else:
+        picks_block = ('<div class="brief-sub">今日候选 / 推荐</div>'
+                       + brief_no_picks_note(picks, date_str, slot))
+
+    entries = []
+    if has_latest:
+        entries.append(("latest.html", "最新日报", "最近一次运行生成的那份"))
+    if has_review:
+        entries.append(("review-latest.html", "复盘看板", "候选表现 · 逻辑核查汇总"))
+    entries.append(("web/", "网页版", "搜索 · 筛选 · 持仓 · 追问"))
+    entries_html = "".join(
+        f'<a class="brief-link" href="{esc(href)}"><span class="t">{esc(t)}</span>'
+        f'<span class="s">{esc(s)}</span></a>' for href, t, s in entries)
+
+    meta = " ".join(x for x in ((date_str or ""), SLOT_CN.get(slot or "", "")) if x)
+    head_meta = f'<span class="h2-count">{esc(meta)}</span>' if meta else ""
+    return f"""<section class="block" id="brief">
+  <h2>今日速览{head_meta}</h2>
+  <div class="brief-concl">{concl_html}</div>
+  <div class="brief-grid">{cells}</div>
+  {picks_block}
+  <div class="brief-links">{entries_html}</div>
+</section>"""
+
+
+def build_index(report_files, data=None, date_str=None, slot=None):
+    """索引页：最上面是「今日速览」，下面按日期倒序分组，每天列出盘前/盘后各一份。
+
+    data / date_str / slot 由 main() 传进来（就是本次这一轮的数据与时段），
+    速览块直接用它们算，不重新读盘。缺省（老调用方只传 report_files）时
+    速览里的数字显示「暂无」而不是 0 —— 索引页不允许凭空造数。
+    """
     by_date = {}
     for f in report_files:
         parsed = _parse_report_name(f.stem)
         if not parsed:
             continue
-        date_str, slot = parsed
-        by_date.setdefault(date_str, []).append((slot, f))
+        d, s = parsed
+        by_date.setdefault(d, []).append((s, f))
 
     blocks = []
-    for date_str in sorted(by_date, reverse=True):
-        entries = sorted(by_date[date_str], key=lambda x: x[0])
+    for d in sorted(by_date, reverse=True):
+        entries = sorted(by_date[d], key=lambda x: x[0])
         links = []
-        for slot, f in entries:
+        for s, f in entries:
             # 没有时段后缀的是"加时段命名"之前那次运行留下的文件（只会出现在
             # 2026-09-16 当天），标成"早期"以免与"盘前/盘后"并列时让人困惑
-            label = SLOT_CN.get(slot, "早期")
-            cls = slot or "na"
+            label = SLOT_CN.get(s, "早期")
+            cls = s or "na"
             links.append(
                 f'<a class="slot-link {esc(cls)}" href="{esc(f.name)}"'
                 f' title="{esc(f.name)}">'
@@ -1731,7 +2054,7 @@ def build_index(report_files):
         latest = entries[-1][1]
         blocks.append(
             f'<div class="day-group">'
-            f'<div class="day-date">{esc(date_str)}</div>'
+            f'<div class="day-date">{esc(d)}</div>'
             f'<div class="day-links">{"".join(links)}</div>'
             f'<div class="day-latest"><a href="{esc(latest.name)}">当日最新</a></div>'
             f"</div>"
@@ -1781,6 +2104,11 @@ def build_index(report_files):
             f'<div class="go">查看复盘看板 →</div>'
             f"</a>"
         )
+    # 「今日速览」（2026-10-08）：索引页最上面那一块，全部在生成时算好。
+    # 三个入口的可见性与下面那三条一致（latest / 看板只在文件真的存在时渲染），
+    # 所以传进去的是 has_latest / has_review，而不是让速览块自己去猜。
+    brief_html = render_index_brief(data, date_str, slot, has_latest,
+                                    bool(review_entry))
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -1796,7 +2124,9 @@ def build_index(report_files):
   <div class="date">全部日报 · 按日期倒序 · 每天盘前/盘后各一份</div>
 </header>
 <main>
+  {brief_html}
   <section class="block">
+    <h2>全部日报<span class="h2-count">{len(report_files)} 份</span></h2>
     {latest_link}
     {body}
     {review_entry}
@@ -1844,13 +2174,15 @@ def main():
     latest_path.write_text(page, encoding="utf-8")
     print(f"[OK] latest -> {latest_path}")
 
-    # 更新索引（latest.html 与 index.html 自身不计入日报列表）
+    # 更新索引（latest.html 与 index.html 自身不计入日报列表）。
+    # data / date_str / slot 一起传进去：索引页顶部的「今日速览」要用**本轮**的
+    # 结论句、四个计数与今天的账本行，重新读盘会读到与这份日报不同的时点。
     report_files = sorted(
         [p for p in REPORTS_DIR.glob("*.html")
          if p.name not in ("index.html", "latest.html")],
         key=lambda p: p.stem, reverse=True,
     )
-    idx = build_index(report_files)
+    idx = build_index(report_files, data, date_str, slot)
     idx_path = REPORTS_DIR / "index.html"
     idx_path.write_text(idx, encoding="utf-8")
     print(f"[OK] index  -> {idx_path} ({len(report_files)} reports)")
