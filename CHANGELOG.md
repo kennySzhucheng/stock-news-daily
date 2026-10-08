@@ -705,6 +705,55 @@ iPhone / Android 真机"添加到主屏幕"未实测（无真机环境），可�
 
 ---
 
+## 2026-10-08 · 安卓 App：把网页版打包成手机应用（APK） ✅ 完成
+
+用户要求："把手机上的网页构建成一个小应用植入到手机中，要包含相应一定的功能"。
+结论：**不重做界面** —— 用单 Activity + WebView 包住线上网页（每天自动更新），只补"应用感"该有的部分。
+
+### 工程与功能（`android/`，30 个文件 / 110KB，纯 Java、**零第三方依赖**、可离线构建）
+
+| 功能 | 实现 |
+|---|---|
+| 首页 = 日报索引页（含"今日速览"） | `MainActivity.java` `URL_DAILY` |
+| **底部三入口**：日报 / 交互版 / 复盘看板 + 当前项高亮 | `activity_main.xml` + `onTabSelected` / `applyTabHighlight` / `tabIndexForUrl` |
+| 顶部标题栏 + 刷新 + 加载进度条 | `refresh` / `onProgressChanged` |
+| 返回键：WebView 可后退则后退，否则退出 | `handleBack` |
+| **断网错误页 + 重试**（本地 `assets/error.html`，JS 桥回调） | `showErrorPage` / `Bridge.retry` |
+| 站外链接走系统浏览器 | `handleUri` / `openExternally` |
+| 图标 | `tools/make_icons.py` ← 复用 `modules/m9_web/web/icon-512.png` 生成五种密度 |
+
+包名 `io.github.kennyszhucheng.stocknews`、App 名「股市情报」、`versionName 1.0.0`、
+`minSdk 26` / `targetSdk 35` / `compileSdk 35`；AGP 8.7.3 + Gradle 8.9（用本机已缓存的 Gradle，
+不生成 wrapper）。
+
+### 构建期发现并修掉一个真 bug
+
+首次装机截图显示**标题被挤成 19px、底部标签整个不见**。`dumpsys` 查明该 AVD **带刘海、
+状态栏 128px（48.8dp，不是标准 24dp）**：`type=statusBars frame=[0,0][1080,128]`。
+根因是 titleBar/tabBar 用了**固定** 56dp/58dp，inset padding 把内容吃光。
+改成"外层 `wrap_content` + 内层 `titleRow`/`tabRow` 固定高"后实测正常
+（titleText 73px、btnRefresh 126×126、tabDaily 152px=58dp）。
+
+### 验收（原始输出）
+
+- `gradle assembleDebug` → **BUILD SUCCESSFUL**，`app-debug.apk` 89,937 B；
+- `aapt2 dump badging` → `package=io.github.kennyszhucheng.stocknews`、`application-label='股市情报'`、
+  `versionName='1.0.0'`、`minSdk 26` / `targetSdk 35`、launchable-activity 正确；
+- `apksigner verify --print-certs` → exit=0，v2+v3 签名（v1=false 属预期，minSdk ≥24）；
+- **模拟器实测（API 35，无头）**：release APK `install -r` → `Success`；`am start` 焦点正确；
+  **截图经人眼确认非白屏**（标题栏 + 真实线上日报页 + 底部三标签，"日报"高亮）；
+  逐项实测切换三个入口、返回键、**飞行模式冷启动 → 本地错误页 → 恢复网络点重试 → 正常加载**；
+- release 已签名，产物 `~/.stock-news-daily/股市情报助手-v1.0.0.apk`（83,414 B）；
+  keystore 与口令**只在仓库外**（`~/.stock-news-daily/`），README 只写取用路径、无明文口令；
+- `.gitignore` 追加 android 构建产物（`local.properties` / `build/` / `.gradle/` / `*.jks`）。
+
+### 已知未做
+
+外链跳浏览器**只有代码、无端到端实测**（被测页面里没有站外链接）；未安装到用户的真机
+（真机 `V2527A` 也连着 adb，但按要求只操作模拟器）；未开混淆/资源压缩；未配 App Links。
+
+---
+
 ## 2026-10-02 · 索引页底部加网页版入口 ✅ 完成
 
 用户提「希望在索引页下方加上一个 web 的入口，更方便查看」。

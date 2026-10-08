@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 顶部标题栏 / 状态栏底色 -->
+    <color name="brand">#0B3D6B</color>
+    <color name="brand_dark">#082B4D</color>
+    <!-- 底部导航选中色 -->
+    <color name="accent">#0B7FD4</color>
+    <color name="tab_inactive">#8A8F98</color>
+    <color name="tab_bar_bg">#FFFFFF</color>
+    <color name="divider">#E3E6EB</color>
+    <color name="progress">#4FC3F7</color>
+    <color name="on_brand">#FFFFFF</color>
+</resources>

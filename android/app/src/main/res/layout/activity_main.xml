@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@android:color/white">
+
+    <!-- ===== 2/3. 顶部标题栏：标题 + 刷新按钮 =====
+         外层 height=wrap_content，由 MainActivity#applyWindowInsets 把状态栏高度加成
+         paddingTop；内层 titleRow 才是固定 56dp 的设计高度。
+         否则在带刘海（状态栏 128px）的机器上，padding 会把标题挤没。 -->
+    <LinearLayout
+        android:id="@+id/titleBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="@color/brand">
+
+        <LinearLayout
+            android:id="@+id/titleRow"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingStart="16dp"
+            android:paddingEnd="4dp">
+
+            <TextView
+                android:id="@+id/titleText"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/app_name"
+                android:textColor="@color/on_brand"
+                android:textSize="19sp"
+                android:textStyle="bold"
+                android:singleLine="true" />
+
+            <ImageButton
+                android:id="@+id/btnRefresh"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:src="@drawable/ic_refresh"
+                android:tint="@color/on_brand"
+                android:scaleType="centerInside"
+                android:padding="12dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/action_refresh" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- ===== 3. 加载进度条（水平） ===== -->
+    <ProgressBar
+        android:id="@+id/progressBar"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="3dp"
+        android:max="100"
+        android:progress="0"
+        android:progressTint="@color/progress"
+        android:progressBackgroundTint="@android:color/transparent"
+        android:visibility="gone" />
+
+    <!-- ===== 1. 网页容器 ===== -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <WebView
+            android:id="@+id/webView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+    </FrameLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/divider" />
+
+    <!-- ===== 2. 底部三个入口 =====
+         同样：外层 wrap_content，由代码补 paddingBottom（导航栏/手势条高度），
+         内层 tabRow 保持 58dp。 -->
+    <LinearLayout
+        android:id="@+id/tabBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="@color/tab_bar_bg">
+
+      <LinearLayout
+        android:id="@+id/tabRow"
+        android:layout_width="match_parent"
+        android:layout_height="58dp"
+        android:orientation="horizontal">
+
+        <LinearLayout
+            android:id="@+id/tabDaily"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?android:attr/selectableItemBackground">
+
+            <ImageView
+                android:id="@+id/iconDaily"
+                style="@style/TabIcon"
+                android:src="@drawable/ic_tab_daily"
+                android:importantForAccessibility="no" />
+
+            <TextView
+                android:id="@+id/labelDaily"
+                style="@style/TabLabel"
+                android:text="@string/tab_daily" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/tabWeb"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?android:attr/selectableItemBackground">
+
+            <ImageView
+                android:id="@+id/iconWeb"
+                style="@style/TabIcon"
+                android:src="@drawable/ic_tab_web"
+                android:importantForAccessibility="no" />
+
+            <TextView
+                android:id="@+id/labelWeb"
+                style="@style/TabLabel"
+                android:text="@string/tab_web" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/tabReview"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?android:attr/selectableItemBackground">
+
+            <ImageView
+                android:id="@+id/iconReview"
+                style="@style/TabIcon"
+                android:src="@drawable/ic_tab_review"
+                android:importantForAccessibility="no" />
+
+            <TextView
+                android:id="@+id/labelReview"
+                style="@style/TabLabel"
+                android:text="@string/tab_review" />
+        </LinearLayout>
+      </LinearLayout>
+    </LinearLayout>
+
+</LinearLayout>

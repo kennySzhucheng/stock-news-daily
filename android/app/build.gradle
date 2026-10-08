@@ -1,0 +1,45 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'io.github.kennyszhucheng.stocknews'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "io.github.kennyszhucheng.stocknews"
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName "1.0.0"
+        // 纯 Java + 框架控件，不引入任何第三方 / AndroidX 运行时依赖
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix ""
+            versionNameSuffix ""
+        }
+        release {
+            minifyEnabled false
+            shrinkResources false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // 不在此处配置签名：release 产物为未签名 APK，
+            // 由 tools/sign-release 流程用 build-tools 里的 apksigner 手动签名。
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+dependencies {
+    // 故意留空：全部使用 Android 框架自带 API，保证离线可构建。
+}

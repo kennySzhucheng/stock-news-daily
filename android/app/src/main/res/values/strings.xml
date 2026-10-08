@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">股市情报</string>
+    <string name="tab_daily">日报</string>
+    <string name="tab_web">交互版</string>
+    <string name="tab_review">复盘看板</string>
+    <string name="action_refresh">刷新</string>
+    <string name="error_title">网络连接失败</string>
+</resources>
