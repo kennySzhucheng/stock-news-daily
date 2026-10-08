@@ -1,8 +1,8 @@
 {
- "updated_at": "2026-10-07 08:18:29",
+ "updated_at": "2026-10-08 08:22:30",
  "source": "eastmoney push2his kline",
  "beg": "2026-08-21",
- "end": "2026-10-07",
+ "end": "2026-10-08",
  "last_trading_day": "2026-09-30",
  "days": [
   "2026-08-21",
