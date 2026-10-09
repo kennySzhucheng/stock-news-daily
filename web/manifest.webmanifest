@@ -1,0 +1,25 @@
+{
+  "name": "股市情报日报",
+  "short_name": "股市情报",
+  "description": "AI 每日股市情报：市场结论 · 新闻检索 · 个股行情 · 板块热度 · 深度分析 · 候选清单",
+  "lang": "zh-CN",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#f7f4ee",
+  "theme_color": "#1e4d7a",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
