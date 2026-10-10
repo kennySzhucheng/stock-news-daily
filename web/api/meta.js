@@ -1,1 +1,1 @@
-window.__DATA__=window.__DATA__||{};window.__DATA__["meta"]={"date":"2026-10-10","analysis_ready":true,"news_count":172,"ask_enabled":false};
+window.__DATA__=window.__DATA__||{};window.__DATA__["meta"]={"date":"2026-10-10","analysis_ready":true,"news_count":179,"ask_enabled":false};
