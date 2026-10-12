@@ -1,0 +1,19 @@
+{
+  "date": "2026-10-12",
+  "slot": "pm",
+  "push_ok": true,
+  "push_detail": "pushid=61157359",
+  "sentiment_ok": true,
+  "warn": "",
+  "analysis_ok": true,
+  "analysis_chars": 4727,
+  "analysis_conclusion_ok": true,
+  "analysis_violations": "",
+  "news_count": 177,
+  "quotes_count": 49,
+  "llm_batches": 9,
+  "llm_failed_batches": 0,
+  "run_number": "114",
+  "event": "workflow_dispatch",
+  "generated_at": "2026-10-12 16:00:09"
+}
