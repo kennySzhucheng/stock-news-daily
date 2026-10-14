@@ -1,0 +1,1 @@
+{"date": "2026-10-14", "slot": "am", "generated_at": "2026-10-14 08:30:30", "gate_open": true, "recorded": 0, "reason": "llm_error", "detail": "HTTPError: HTTP Error 402: Payment Required", "calendar": "approx"}
