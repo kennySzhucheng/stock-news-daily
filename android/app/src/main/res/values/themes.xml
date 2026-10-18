@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-
     <!-- 不依赖 AppCompat / Material，使用框架自带的 Material 主题 -->
     <style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
         <item name="android:colorPrimary">@color/brand</item>
@@ -8,8 +7,8 @@
         <item name="android:colorAccent">@color/accent</item>
         <item name="android:statusBarColor">@color/brand</item>
         <item name="android:windowLightStatusBar">false</item>
+        <item name="android:navigationBarColor">@color/tab_bar_bg</item>
         <item name="android:windowLightNavigationBar">true</item>
-        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:windowBackground">@color/paper</item>
     </style>
-
 </resources>

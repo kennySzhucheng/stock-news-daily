@@ -1,13 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 顶部标题栏 / 状态栏底色 -->
-    <color name="brand">#0B3D6B</color>
-    <color name="brand_dark">#082B4D</color>
-    <!-- 底部导航选中色 -->
-    <color name="accent">#0B7FD4</color>
-    <color name="tab_inactive">#8A8F98</color>
+    <!-- 2026-10-19 v1.1.0：与网页版同一套色（站点主色 accent #1e4d7a / 纸色 #f7f4ee） -->
+    <color name="brand">#1E4D7A</color>
+    <color name="brand_dark">#163A5C</color>
+    <color name="accent">#2F80C0</color>
+    <color name="tab_inactive">#8C8579</color>
     <color name="tab_bar_bg">#FFFFFF</color>
-    <color name="divider">#E3E6EB</color>
-    <color name="progress">#4FC3F7</color>
+    <color name="divider">#E6E2D8</color>
+    <color name="progress">#E8B45A</color>
     <color name="on_brand">#FFFFFF</color>
+    <color name="brand_muted">#BFD4E8</color>
+    <color name="paper">#F7F4EE</color>
+    <color name="ic_launcher_background">#123A5E</color>
 </resources>

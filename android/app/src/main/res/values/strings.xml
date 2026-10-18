@@ -1,9 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">股市情报</string>
+    <string name="app_tagline">每日 08:10 / 15:40 自动更新</string>
     <string name="tab_daily">日报</string>
     <string name="tab_web">交互版</string>
     <string name="tab_review">复盘看板</string>
     <string name="action_refresh">刷新</string>
+    <string name="action_browser">在浏览器打开</string>
+    <string name="action_share">分享</string>
+    <string name="state_loading">正在加载…</string>
+    <string name="state_updated">更新于 %%1$s</string>
+    <string name="pull_hint">下拉刷新</string>
+    <string name="pull_ready">松开刷新</string>
+    <string name="refresh_done">正在刷新…</string>
     <string name="error_title">网络连接失败</string>
+    <string name="ai_title">AI 分析</string>
+    <string name="ai_set_key">设置 Key</string>
+    <string name="ai_hint">Key 只存在本机应用私有目录；分析直接读线上日报，不经过网页版</string>
+    <string name="ai_empty">点「分析今天的日报」，或直接在下面提问。</string>
+    <string name="ai_analyze_today">分析今天的日报</string>
+    <string name="ai_input_hint">追问，例如：今天最值得注意的风险是什么？</string>
+    <string name="ai_send">发送</string>
+    <string name="ai_need_key">请先设置 DeepSeek API Key</string>
+    <string name="ai_loading">正在请求 DeepSeek…</string>
+    <string name="ai_key_saved">已保存 Key（尾号 %1$s）</string>
+    <string name="ai_error">请求失败：%1$s</string>
 </resources>

@@ -3,10 +3,12 @@ package io.github.kennyszhucheng.stocknews;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowInsets;
 import android.webkit.CookieManager;
@@ -23,17 +25,21 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
+
 /**
  * 单 Activity + WebView 外壳：把已发布的网页版（GitHub Pages）打包成手机小应用。
  *
- * 功能对照：
- *  1. 首页            -> URL_DAILY（索引页，含“今日速览”）
- *  2. 底部三个入口    -> tabDaily / tabWeb / tabReview，见 {@link #applyTabHighlight(int)}
- *  3. 顶部标题栏      -> titleBar + btnRefresh，进度条 progressBar
- *  4. 返回键          -> {@link #handleBack()}
- *  5. 错误页          -> assets/error.html + {@link Bridge#retry()}
- *  6. 外链跳浏览器    -> {@link #handleUri(Uri)}
- *  7. WebView 配置    -> {@link #configureWebView()}
+ * v1.1.0（2026-10-19）的“人性化”改动：
+ *  1. 顶部栏        -> 小 logo + 「更新于 HH:mm」副标题（一眼知道内容新不新）
+ *  2. 在浏览器打开  -> 顶部 globe 按钮 / 错误页按钮（长按分享、复制链接都靠它）
+ *  3. 下拉刷新      -> 页面在顶部时向下拖 72dp 松手即刷新（不用去够右上角按钮）
+ *  4. 记忆上次 tab  -> 下次打开直接回到上次看的入口（SharedPreferences）
+ *  5. 首屏加载遮罩  -> 打开时不再是一屏空白，而是「正在加载…」
+ *  6. 更精致的图标  -> 自适应图标（金环 + 三根上行柱）+ 重新绘制的 PNG
+ *  既有功能不变：底部三入口、返回键、外链跳浏览器、断网错误页 + 重试。
  */
 public class MainActivity extends Activity {
 
@@ -47,9 +53,9 @@ public class MainActivity extends Activity {
     private static final String URL_DAILY = SITE_PREFIX;
     /** 2. 交互版。 */
     private static final String URL_WEB = SITE_PREFIX + "web/";
-    /** 2. 复盘看板。 */
+    /** 3. 复盘看板。 */
     private static final String URL_REVIEW = SITE_PREFIX + "review-latest.html";
-    /** 5. 本地错误页（离线可用）。 */
+    /** 本地错误页（离线可用）。 */
     private static final String URL_ERROR = "file:///android_asset/error.html";
 
     private static final int TAB_DAILY = 0;
@@ -57,13 +63,23 @@ public class MainActivity extends Activity {
     private static final int TAB_REVIEW = 2;
     private static final int TAB_COUNT = 3;
 
+    private static final String[] TAB_URLS = {URL_DAILY, URL_WEB, URL_REVIEW};
+
     /** 回到前台超过该时长则自动重新加载，保证“每天自动更新”。 */
     private static final long STALE_RELOAD_MS = 30L * 60L * 1000L;
+    /** 下拉刷新触发距离（dp）。 */
+    private static final int PULL_THRESHOLD_DP = 72;
+
+    private static final String PREFS = "stocknews";
+    private static final String KEY_TAB = "last_tab";
 
     /* ===================== 视图 ===================== */
 
     private WebView webView;
     private ProgressBar progressBar;
+    private TextView subtitleText;
+    private TextView pullHint;
+    private View loadingOverlay;
     private final View[] tabViews = new View[TAB_COUNT];
     private final ImageView[] tabIcons = new ImageView[TAB_COUNT];
     private final TextView[] tabLabels = new TextView[TAB_COUNT];
@@ -76,6 +92,14 @@ public class MainActivity extends Activity {
     private boolean showingErrorPage = false;
     /** 最近一次加载完成时间（用于前台恢复时的自动刷新）。 */
     private long lastLoadedAt = 0L;
+    /** 当前高亮的入口。 */
+    private int currentTab = TAB_DAILY;
+    /** 首屏遮罩是否已经撤掉（撤掉后不再显示，避免每次刷新闪白）。 */
+    private boolean firstLoadDone = false;
+
+    /** 下拉手势：按下点 y、是否正在跟踪。 */
+    private float pullDownY = -1f;
+    private boolean pullTracking = false;
 
     /* ===================== 生命周期 ===================== */
 
@@ -87,14 +111,21 @@ public class MainActivity extends Activity {
         bindViews();
         applyWindowInsets();
         configureWebView();
+        setupPullToRefresh();
+        setupBrowserButton();
 
         if (savedInstanceState != null) {
             // 重建（如旋转 / 进程恢复）：还原 WebView 历史
             webView.restoreState(savedInstanceState);
+            firstLoadDone = true;
+            showLoading(false);
         } else {
-            openUrl(URL_DAILY);
+            // 4. 记忆上次入口
+            currentTab = readSavedTab();
+            showLoading(true);
+            openUrl(TAB_URLS[currentTab]);
         }
-        applyTabHighlight(TAB_DAILY);
+        applyTabHighlight(currentTab);
     }
 
     @Override
@@ -130,6 +161,9 @@ public class MainActivity extends Activity {
     private void bindViews() {
         webView = findViewById(R.id.webView);
         progressBar = findViewById(R.id.progressBar);
+        subtitleText = findViewById(R.id.subtitleText);
+        pullHint = findViewById(R.id.pullHint);
+        loadingOverlay = findViewById(R.id.loadingOverlay);
 
         tabViews[TAB_DAILY] = findViewById(R.id.tabDaily);
         tabViews[TAB_WEB] = findViewById(R.id.tabWeb);
@@ -143,21 +177,23 @@ public class MainActivity extends Activity {
         tabLabels[TAB_WEB] = findViewById(R.id.labelWeb);
         tabLabels[TAB_REVIEW] = findViewById(R.id.labelReview);
 
-        // 2. 底部三个入口
-        tabViews[TAB_DAILY].setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { onTabSelected(TAB_DAILY, URL_DAILY); }
-        });
-        tabViews[TAB_WEB].setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { onTabSelected(TAB_WEB, URL_WEB); }
-        });
-        tabViews[TAB_REVIEW].setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { onTabSelected(TAB_REVIEW, URL_REVIEW); }
-        });
+        for (int i = 0; i < TAB_COUNT; i++) {
+            final int index = i;
+            tabViews[i].setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { onTabSelected(index); }
+            });
+        }
 
-        // 3. 刷新按钮
         ImageButton refresh = findViewById(R.id.btnRefresh);
         refresh.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { refresh(); }
+        });
+
+        // v1.1.0：本机 AI 分析入口（本地 Key，直连 DeepSeek，不经过网页版）
+        findViewById(R.id.btnAi).setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                startActivity(new Intent(MainActivity.this, AiActivity.class));
+            }
         });
     }
 
@@ -192,21 +228,21 @@ public class MainActivity extends Activity {
         root.requestApplyInsets();
     }
 
-    /* ===================== 7. WebView 配置 ===================== */
+    /* ===================== WebView 配置 ===================== */
 
     @SuppressWarnings("deprecation")
     private void configureWebView() {
         WebSettings s = webView.getSettings();
-        s.setJavaScriptEnabled(true);                 // 7. JS
-        s.setDomStorageEnabled(true);                 // 7. DOM storage
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
         s.setDatabaseEnabled(true);
-        s.setUseWideViewPort(true);                   // 7. 宽视口
-        s.setLoadWithOverviewMode(true);              // 7. 概览模式
+        s.setUseWideViewPort(true);
+        s.setLoadWithOverviewMode(true);
         s.setSupportZoom(true);
         s.setBuiltInZoomControls(true);
         s.setDisplayZoomControls(false);
-        s.setCacheMode(WebSettings.LOAD_DEFAULT);     // 7. 缓存开启
-        s.setAllowFileAccess(true);                   // 本地错误页 file:///android_asset
+        s.setCacheMode(WebSettings.LOAD_DEFAULT);
+        s.setAllowFileAccess(true);
         s.setAllowContentAccess(true);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         s.setMediaPlaybackRequiresUserGesture(true);
@@ -225,7 +261,7 @@ public class MainActivity extends Activity {
 
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                return handleUri(request.getUrl());   // 6. 外链判定
+                return handleUri(request.getUrl());
             }
 
             @Override
@@ -242,6 +278,7 @@ public class MainActivity extends Activity {
                 if (!URL_ERROR.equals(url)) {
                     showingErrorPage = false;
                     lastRequestedUrl = url;
+                    setSubtitle(getString(R.string.state_loading));
                 }
             }
 
@@ -252,11 +289,18 @@ public class MainActivity extends Activity {
                     progressBar.setVisibility(View.GONE);
                 }
                 if (URL_ERROR.equals(url) || showingErrorPage) {
+                    showLoading(false);
                     return;
                 }
                 lastLoadedAt = System.currentTimeMillis();
                 lastRequestedUrl = url;
-                applyTabHighlight(tabIndexForUrl(url));   // 2. 当前项高亮
+                firstLoadDone = true;
+                showLoading(false);
+                // 1. 更新时间：一眼看出内容是几点拉到的
+                setSubtitle(getString(R.string.state_updated,
+                        new SimpleDateFormat("HH:mm", Locale.getDefault())
+                                .format(new Date(lastLoadedAt))));
+                applyTabHighlight(tabIndexForUrl(url));
             }
 
             @Override
@@ -293,12 +337,103 @@ public class MainActivity extends Activity {
         });
     }
 
-    /* ===================== 2. 底部导航 ===================== */
+    /* ===================== 3. 下拉刷新（不引入 AndroidX） ===================== */
 
-    private void onTabSelected(int index, String url) {
+    private void setupPullToRefresh() {
+        webView.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                switch (event.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        pullDownY = event.getY();
+                        pullTracking = webView.getScrollY() == 0;
+                        break;
+                    case MotionEvent.ACTION_MOVE: {
+                        if (!pullTracking || pullDownY < 0) {
+                            break;
+                        }
+                        if (webView.getScrollY() > 0) {
+                            pullTracking = false;
+                            hidePullHint();
+                            break;
+                        }
+                        float dy = event.getY() - pullDownY;
+                        if (dy > dp(20)) {
+                            boolean ready = dy > dp(PULL_THRESHOLD_DP);
+                            showPullHint(ready
+                                    ? getString(R.string.pull_ready)
+                                    : getString(R.string.pull_hint));
+                        } else {
+                            hidePullHint();
+                        }
+                        break;
+                    }
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL: {
+                        float dy = pullDownY < 0 ? 0 : event.getY() - pullDownY;
+                        boolean trigger = pullTracking && dy > dp(PULL_THRESHOLD_DP);
+                        hidePullHint();
+                        pullTracking = false;
+                        pullDownY = -1f;
+                        if (trigger) {
+                            Toast.makeText(MainActivity.this,
+                                    R.string.refresh_done, Toast.LENGTH_SHORT).show();
+                            refresh();
+                        }
+                        break;
+                    }
+                    default:
+                        break;
+                }
+                return false;   // 不拦截：滚动仍交给 WebView
+            }
+        });
+    }
+
+    private void showPullHint(String text) {
+        if (pullHint == null) {
+            return;
+        }
+        pullHint.setText(text);
+        pullHint.setVisibility(View.VISIBLE);
+    }
+
+    private void hidePullHint() {
+        if (pullHint != null) {
+            pullHint.setVisibility(View.GONE);
+        }
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    /* ===================== 2. 在浏览器打开 ===================== */
+
+    private void setupBrowserButton() {
+        ImageButton browser = findViewById(R.id.btnBrowser);
+        browser.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { openCurrentInBrowser(); }
+        });
+    }
+
+    private void openCurrentInBrowser() {
+        String url = showingErrorPage
+                ? (lastRequestedUrl != null ? lastRequestedUrl : URL_DAILY)
+                : (webView != null && webView.getUrl() != null
+                        ? webView.getUrl() : URL_DAILY);
+        openExternally(Uri.parse(url));
+    }
+
+    /* ===================== 底部导航 ===================== */
+
+    private void onTabSelected(int index) {
+        if (index < 0 || index >= TAB_COUNT) {
+            return;
+        }
         applyTabHighlight(index);
         if (showingErrorPage) {
-            openUrl(url);
+            openUrl(TAB_URLS[index]);
             return;
         }
         String current = webView.getUrl();
@@ -306,15 +441,16 @@ public class MainActivity extends Activity {
                 && current.startsWith(SITE_PREFIX)) {
             webView.reload();     // 再点当前项 = 刷新
         } else {
-            openUrl(url);
+            openUrl(TAB_URLS[index]);
         }
     }
 
-    /** 当前项高亮：选中项用强调色，其余灰色。 */
+    /** 当前项高亮：选中项用强调色，其余灰色；同时记住选择（4）。 */
     private void applyTabHighlight(int active) {
         if (active < 0 || active >= TAB_COUNT) {
             active = TAB_DAILY;
         }
+        currentTab = active;
         int on = getColor(R.color.accent);
         int off = getColor(R.color.tab_inactive);
         for (int i = 0; i < TAB_COUNT; i++) {
@@ -326,6 +462,7 @@ public class MainActivity extends Activity {
                 tabLabels[i].setTextColor(csl);
             }
         }
+        saveTab(active);
     }
 
     private int tabIndexForUrl(String url) {
@@ -341,11 +478,27 @@ public class MainActivity extends Activity {
         return TAB_DAILY;
     }
 
+    private int readSavedTab() {
+        try {
+            int i = Integer.parseInt(
+                    getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_TAB, "0"));
+            return (i >= 0 && i < TAB_COUNT) ? i : TAB_DAILY;
+        } catch (Exception e) {
+            return TAB_DAILY;
+        }
+    }
+
+    private void saveTab(int index) {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putString(KEY_TAB, String.valueOf(index)).apply();
+    }
+
     /* ===================== 加载 / 刷新 / 错误页 ===================== */
 
     private void openUrl(String url) {
         showingErrorPage = false;
         lastRequestedUrl = url;
+        hidePullHint();
         webView.loadUrl(url);
     }
 
@@ -357,7 +510,24 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** 5. 显示本地错误页，并记住失败地址以便重试。 */
+    private void showLoading(boolean show) {
+        if (loadingOverlay == null) {
+            return;
+        }
+        // 已经加载过一次就不再显示（避免刷新/切 tab 时闪白屏）
+        if (show && firstLoadDone) {
+            return;
+        }
+        loadingOverlay.setVisibility(show ? View.VISIBLE : View.GONE);
+    }
+
+    private void setSubtitle(String text) {
+        if (subtitleText != null && text != null) {
+            subtitleText.setText(text);
+        }
+    }
+
+    /** 显示本地错误页，并记住失败地址以便重试。 */
     private void showErrorPage(String failedUrl) {
         if (showingErrorPage) {
             return;
@@ -369,10 +539,12 @@ public class MainActivity extends Activity {
         if (progressBar != null) {
             progressBar.setVisibility(View.GONE);
         }
+        showLoading(false);
+        hidePullHint();
         webView.loadUrl(URL_ERROR);
     }
 
-    /* ===================== 6. 外链处理 ===================== */
+    /* ===================== 外链处理 ===================== */
 
     /** @return true 表示已由本方法处理（应用不加载该 URL） */
     private boolean handleUri(Uri uri) {
@@ -415,7 +587,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    /* ===================== 4. 返回键 ===================== */
+    /* ===================== 返回键 ===================== */
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
@@ -450,7 +622,7 @@ public class MainActivity extends Activity {
         return false;
     }
 
-    /* ===================== 5. 错误页 JS 桥 ===================== */
+    /* ===================== 错误页 JS 桥 ===================== */
 
     /** 必须是 public 的具名类，@JavascriptInterface 才能被 WebView 反射调用。 */
     public class Bridge {
@@ -459,6 +631,16 @@ public class MainActivity extends Activity {
             runOnUiThread(new Runnable() {
                 @Override public void run() {
                     openUrl(lastRequestedUrl != null ? lastRequestedUrl : URL_DAILY);
+                }
+            });
+        }
+
+        /** 错误页的「用浏览器打开」：网络正常但 WebView 出问题时仍有路可走。 */
+        @JavascriptInterface
+        public void openInBrowser() {
+            runOnUiThread(new Runnable() {
+                @Override public void run() {
+                    openCurrentInBrowser();
                 }
             });
         }

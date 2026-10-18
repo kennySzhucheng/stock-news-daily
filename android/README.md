@@ -6,9 +6,23 @@
 
 - **包名 / applicationId**：`io.github.kennyszhucheng.stocknews`
 - **App 名**：股市情报
-- **versionName / versionCode**：`1.0.0` / `1`
+- **versionName / versionCode**：`1.1.0` / `2`
 - **minSdk / targetSdk / compileSdk**：`26` / `35` / `35`
 - **AGP / Gradle**：`8.7.3` / `8.9`
+
+### v1.1.0 能力（2026-10-19）
+
+| 能力 | 说明 |
+|---|---|
+| 新图标 | 自适应图标 + 五档 PNG，`tools/gen_resources_v110.py` 一次生成（深蓝底 + 金环 + 三根上行柱） |
+| 下拉刷新 | 页面在顶部向下拖 72dp 松手即刷新（`OnTouchListener`，不依赖 AndroidX） |
+| 更新于 HH:mm | 顶部副标题显示本次加载时间 |
+| 记忆入口 | 记住上次 tab（SharedPreferences），下次直接回到该页 |
+| 在浏览器打开 | 顶部 globe 按钮 / 错误页按钮 |
+| 首屏遮罩 | 打开时显示「正在加载…」，不再是白屏 |
+| **本机 AI 分析** | 顶部 ✨ 进入 `AiActivity`：本地填 DeepSeek Key（只存应用私有目录）、可改模型（默认 `deepseek-chat`）、直接抓线上日报做分析并支持追问。**网页版做不了**（静态站点放 Key = 公开 Key，浏览器直连也会被 CORS 拦）。 |
+
+> Key 的存储：`SharedPreferences("stocknews_ai")`，应用私有，卸载即清除；不写入日志、不上传任何第三服务器（只发给你自己填的 `api.deepseek.com`）。
 
 ---
 

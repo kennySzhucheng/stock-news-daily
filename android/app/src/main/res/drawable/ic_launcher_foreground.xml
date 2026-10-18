@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 与 tools/gen_resources_v110.py 的 PNG 同源：坐标 = 512 设计稿 / 4.74 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 金色圆环 -->
+    <path
+        android:pathData="M22,54 A32,32 0 1,0 86,54 A32,32 0 1,0 22,54"
+        android:strokeColor="#E8B45A"
+        android:strokeWidth="4.2"
+        android:fillColor="#00000000" />
+    <!-- 三根上行柱（圆头粗线） -->
+    <path android:pathData="M44,62 L44,52" android:strokeColor="#FFFFFF"
+        android:strokeWidth="7" android:strokeLineCap="round" />
+    <path android:pathData="M54,62 L54,44" android:strokeColor="#FFFFFF"
+        android:strokeWidth="7" android:strokeLineCap="round" />
+    <path android:pathData="M64,62 L64,36" android:strokeColor="#FFFFFF"
+        android:strokeWidth="7" android:strokeLineCap="round" />
+    <!-- 金色圆点 -->
+    <path android:pathData="M64,28 m-3.2,0 a3.2,3.2 0 1,0 6.4,0 a3.2,3.2 0 1,0 -6.4,0"
+        android:fillColor="#E8B45A" />
+</vector>

@@ -10,47 +10,69 @@
   html, body { height: 100%; margin: 0; }
   body {
     display: flex; align-items: center; justify-content: center;
-    background: #F5F7FA; color: #1F2733; padding: 24px;
+    background: #F7F4EE; color: #1F2733; padding: 24px;
     font-family: -apple-system, "Noto Sans CJK SC", "Source Han Sans SC", "Microsoft YaHei", Roboto, sans-serif;
   }
   .card {
-    width: 100%; max-width: 420px; background: #FFFFFF; border-radius: 16px;
-    padding: 32px 24px; text-align: center;
-    box-shadow: 0 6px 24px rgba(11, 61, 107, .10);
+    width: 100%; max-width: 380px; background: #FFFFFF; border-radius: 18px;
+    padding: 30px 22px 24px; text-align: center;
+    box-shadow: 0 8px 28px rgba(30, 77, 122, .10);
+    border: 1px solid #E6E2D8;
   }
-  .badge {
-    width: 64px; height: 64px; margin: 0 auto 18px; border-radius: 50%;
-    background: #FDECEC; color: #D64545; font-size: 34px; font-weight: 700;
-    line-height: 64px;
+  .mark {
+    width: 64px; height: 64px; margin: 0 auto 16px; border-radius: 18px;
+    background: #123A5E; display: flex; align-items: center; justify-content: center;
   }
-  h1 { margin: 0 0 10px; font-size: 19px; color: #0B3D6B; }
-  p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; color: #5A6472; }
-  .hint { margin-top: 14px; font-size: 12px; color: #939CA9; }
+  .mark svg { width: 40px; height: 40px; }
+  h1 { margin: 0 0 8px; font-size: 18px; color: #1E4D7A; letter-spacing: .02em; }
+  p { margin: 0 0 6px; font-size: 13.5px; line-height: 1.7; color: #5A6472; }
+  .hint { margin-top: 12px; font-size: 12px; color: #939CA9; }
+  .actions { margin-top: 22px; display: grid; gap: 10px; }
   button {
-    margin-top: 24px; width: 100%; height: 48px; border: 0; border-radius: 10px;
-    background: #0B7FD4; color: #FFFFFF; font-size: 16px; font-weight: 600;
-    cursor: pointer;
+    width: 100%; height: 46px; border: 0; border-radius: 11px;
+    background: #1E4D7A; color: #FFFFFF; font-size: 15px; font-weight: 600;
+    cursor: pointer; letter-spacing: .02em;
   }
-  button:active { background: #0968AE; }
+  button:active { background: #163A5C; }
+  button.secondary {
+    background: #F2EEE6; color: #1E4D7A; border: 1px solid #E6E2D8;
+  }
+  button.secondary:active { background: #E8E2D6; }
 </style>
 </head>
 <body>
   <div class="card">
-    <div class="badge">!</div>
+    <div class="mark">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="12" cy="12" r="10" stroke="#E8B45A" stroke-width="1.6" opacity=".85"/>
+        <path d="M8 16v-3.5M12 16V10M16 16V8" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round"/>
+        <circle cx="16" cy="5.6" r="1.4" fill="#E8B45A"/>
+      </svg>
+    </div>
     <h1>页面加载失败</h1>
     <p>可能是手机当前没有网络，或者站点暂时无法访问。</p>
     <p>请确认已连接 Wi-Fi 或移动数据后重试。</p>
-    <button type="button" onclick="doRetry()">重新加载</button>
-    <div class="hint">若多次重试仍失败，可稍后再打开本应用。</div>
+    <div class="actions">
+      <button type="button" onclick="doRetry()">重新加载</button>
+      <button type="button" class="secondary" onclick="openBrowser()">用浏览器打开</button>
+    </div>
+    <div class="hint">多次重试仍失败，可稍后再打开本应用。</div>
   </div>
 <script>
-  function doRetry() {
+  function bridge(name) {
     try {
-      if (window.AndroidBridge && typeof AndroidBridge.retry === 'function') {
-        AndroidBridge.retry();
-        return;
-      }
-    } catch (e) { /* 忽略，走下面的兜底 */ }
+      return (window.AndroidBridge && typeof window.AndroidBridge[name] === 'function')
+        ? window.AndroidBridge : null;
+    } catch (e) { return null; }
+  }
+  function doRetry() {
+    var b = bridge('retry');
+    if (b) { b.retry(); return; }
+    location.href = 'https://kennyszhucheng.github.io/stock-news-daily/';
+  }
+  function openBrowser() {
+    var b = bridge('openInBrowser');
+    if (b) { b.openInBrowser(); return; }
     location.href = 'https://kennyszhucheng.github.io/stock-news-daily/';
   }
 </script>

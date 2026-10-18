@@ -98,9 +98,14 @@ jobs:
           if git fetch origin state --depth=1 2>/dev/null; then
             got=0
             for f in event_index.jsonl picks/news_roll.jsonl picks/boards.json picks/trading_days.json; do
-              if git show FETCH_HEAD:"$f" > "reports/$f" 2>/dev/null; then
+              # 先写临时文件再改名：`git show ... > 目标` 会在 git 失败时留下 0 字节文件，
+              # 那种文件比"没有文件"更坏（模块会把空文件当成"空缓存"，还可能解析报错）。
+              if git show FETCH_HEAD:"$f" > "reports/$f.tmp" 2>/dev/null; then
+                mv -f "reports/$f.tmp" "reports/$f"
                 echo "已恢复运行态缓存 $f（$(wc -c < "reports/$f") 字节）"
                 got=$((got+1))
+              else
+                rm -f "reports/$f.tmp"
               fi
             done
             echo "共恢复 $got 个缓存文件"

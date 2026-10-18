@@ -25,6 +25,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- v1.1.0：本机 AI 分析（本地填 Key，直连 api.deepseek.com） -->
+        <activity
+            android:name=".AiActivity"
+            android:exported="false"
+            android:label="@string/ai_title"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/AppTheme" />
     </application>
 
 </manifest>
