@@ -430,6 +430,7 @@ def load_picks(date_str):
             revs = [v for v in revs if v and v.get("status") == "ok"]
             vals = [v["alpha"] for v in revs if v.get("alpha") is not None]
             vals2 = [v["alpha2"] for v in revs if v.get("alpha2") is not None]
+            rets = [v["ret"] for v in revs if v.get("ret") is not None]
             if not vals:
                 continue
             has_bench2 = has_bench2 or bool(vals2)
@@ -440,12 +441,22 @@ def load_picks(date_str):
                 tail += f"·{BENCH2_CN} 口径 {len(vals2)} 条"
             if len(vals) < 3:
                 bits.append(f"T+{k} {tail}（不足 3 条不给均值）")
-            elif vals2:
+                continue
+            # 中位数与跑赢档数（2026-10-18）：均值会被个别暴涨样本带偏（线上实测
+            # 50 档 T+1 均值 +0.93% 而中位数 −0.26%），微信里也要把中位数给出来 ——
+            # 否则只看到"平均在赚"，实际典型那一条在亏。跑赢写成原始计数 x/y，
+            # 不给百分比（与"不给胜率"的既有约定一致）。
+            mid = sorted(rets)[len(rets) // 2] if rets else None
+            extra = ""
+            if mid is not None:
+                extra += f"·中位 {mid:+.2%}"
+            extra += f"·{sum(1 for v in vals if v > 0)}/{len(vals)} 跑赢"
+            if vals2:
                 avg2 = sum(vals2) / len(vals2)
                 bits.append(f"T+{k} 均超额 {sum(vals) / len(vals):+.2%} / "
-                            f"{avg2:+.2%}（{tail}）")
+                            f"{avg2:+.2%}{extra}（{tail}）")
             else:
-                bits.append(f"T+{k} 均超额 {sum(vals) / len(vals):+.2%}（{tail}）")
+                bits.append(f"T+{k} 均超额 {sum(vals) / len(vals):+.2%}{extra}（{tail}）")
         stats = "　".join(bits)
         if has_bench2:
             # 顺序说明只此一处：每档的两个数按「相对沪深300 / 相对中证1000」排列

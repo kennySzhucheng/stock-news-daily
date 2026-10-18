@@ -228,23 +228,41 @@ def _f(v):
 
 
 class Cell:
-    """一个（档位 × 基准）的累计：样本数与均值。均值**没有样本就不存在**。"""
+    """一个（档位 × 基准）的累计：样本数、均值、**中位数**、跑赢条数。
 
-    __slots__ = ("n", "_sum")
+    均值**没有样本就不存在**（0 样本写「暂无」）。中位数与跑赢条数是 2026-10-18
+    加的：线上 50 档 T+1 均值 +0.93%、中位数 −0.26% —— 只看均值会让"平均在赚"
+    掩盖"典型那一条在亏"，看板与日报必须同一口径。
+    """
+
+    __slots__ = ("n", "_sum", "_vals", "wins")
 
     def __init__(self):
         self.n = 0
         self._sum = 0.0
+        self._vals = []
+        self.wins = 0
 
     def add(self, v):
         if v is None:
             return
         self.n += 1
         self._sum += v
+        self._vals.append(v)
+        if v > 0:
+            self.wins += 1
 
     @property
     def mean(self):
         return (self._sum / self.n) if self.n else None
+
+    @property
+    def median(self):
+        if not self._vals:
+            return None
+        s = sorted(self._vals)
+        m = len(s) // 2
+        return s[m] if len(s) % 2 else (s[m - 1] + s[m]) / 2
 
 
 class HorizonStats:
@@ -270,6 +288,12 @@ class HorizonStats:
 
     def n(self, k, bench):
         return self.cells[k][bench].n
+
+    def median(self, k, bench):
+        return self.cells[k][bench].median
+
+    def wins(self, k, bench):
+        return self.cells[k][bench].wins
 
     def any_sample(self):
         return any(self.cells[k][b].n for k in REVIEW_DAYS for b in ("alpha", "alpha2"))
@@ -500,8 +524,26 @@ def small_note(n):
     return f'<p class="warn">{SMALL_SAMPLE_NOTE}</p>' if n < MIN_SAMPLE else ""
 
 
+def cell_txt(hs, k, bench):
+    """一格：均值 + 样本数 + 中位数 + 跑赢条数（2026-10-18）。
+
+    均值会被个别暴涨样本带偏（线上实测均值 +0.93% / 中位数 −0.26%），所以
+    **每一格都把中位数一起印出来**；跑赢写成 x/n 原始计数，不给百分比。
+    0 样本 → 「暂无」（绝不显示 0.00%）。
+    """
+    mean, n = hs.mean(k, bench), hs.n(k, bench)
+    if mean is None or n == 0:
+        return NO_DATA
+    med, wins = hs.median(k, bench), hs.wins(k, bench)
+    s = f'{pct(mean)} <span class="muted">n={n}'
+    if med is not None:
+        s += f' · 中位 {pct(med)}'
+    s += f' · {wins}/{n} 跑赢</span>'
+    return s
+
+
 def stat_table(hs_by_key, key_labels, caption, row_filter=None):
-    """一张分组统计表：每行一个分组，T+1/T+3/T+5 各给双基准均值 + 样本数。"""
+    """一张分组统计表：每行一个分组，T+1/T+3/T+5 各给双基准均值 + 样本数 + 中位数 + 跑赢条数。"""
     head = "".join(
         f'<th class="num">T+{k}<br><span class="muted small">{BENCH_NAME}</span></th>'
         f'<th class="num">T+{k}<br><span class="muted small">{BENCH2_NAME}</span></th>'
@@ -515,8 +557,8 @@ def stat_table(hs_by_key, key_labels, caption, row_filter=None):
             continue
         tds = []
         for k in REVIEW_DAYS:
-            tds.append(f'<td class="num">{mean_txt(hs.mean(k, "alpha"), hs.n(k, "alpha"))}</td>')
-            tds.append(f'<td class="num">{mean_txt(hs.mean(k, "alpha2"), hs.n(k, "alpha2"))}</td>')
+            tds.append(f'<td class="num">{cell_txt(hs, k, "alpha")}</td>')
+            tds.append(f'<td class="num">{cell_txt(hs, k, "alpha2")}</td>')
         ns = [hs.n(k, b) for k in REVIEW_DAYS for b in ("alpha", "alpha2")]
         n_row = max(ns or [0])       # 该行的代表样本数：两条基准里取多的那条
         if worst is None or n_row < worst:

@@ -868,8 +868,12 @@ class PremarketChannel(unittest.TestCase):
         self.pk = load("m10_picks", "modules/m10_picks/picks.py")
 
     def test_calendar_kind_marks_unverified_year(self):
-        """未核实年份必须能被机器读出来（否则盘前清单会静默停摆）。"""
-        self.assertEqual(self.pk.calendar_kind("2026-10-09"), "approx")  # 未来 → 近似但已核实
+        """未核实年份必须能被机器读出来（否则盘前清单会静默停摆）。
+
+        注意断言要用**未来日期**：已发生日期会被真实 K 线缓存覆盖成 "real"
+        （2026-10-18 起 10-09 已在缓存里，原先拿它当"未来"的断言就过时了）。
+        """
+        self.assertEqual(self.pk.calendar_kind("2026-12-30"), "approx")  # 未来 → 近似但已核实
         self.assertEqual(self.pk.calendar_kind("2027-03-01"), "approx-unverified-year")
         src = (ROOT / "modules/m10_picks/picks.py").read_text(encoding="utf-8")
         self.assertIn('state["calendar"] = calendar_kind(today)', src)
@@ -1415,6 +1419,119 @@ class ReviewDashboard(unittest.TestCase):
         self.assertIn("rv.exists", app)
         self.assertNotIn('href="../review-latest.html"', idx,
                          "硬编码链接会与接口形成两份真相，且本地必 404")
+
+
+class P0UsabilityFixes(unittest.TestCase):
+    """2026-10-18 的三条 P0 修正（用户反馈"买的票短期在亏 / 用久了有不足"）。
+
+    1. **统计只给均值会骗人**：线上 50 档 T+1 均值 +0.93%、中位数 **−0.26%**
+       （一个 +20% 样本贡献了 0.4% 均值）→ 统计必须同时给**中位数**与**跑赢档数**。
+    2. **推荐里有一手买不起的票**：A 股 1 手=100 股，实测候选里有 350/219/164/154 元的
+       票（一手 1.5~3.5 万）→ 加**一手金额 ≤ 5000 元**硬闸，超了整条不入账。
+    3. **板块候选混在个股里**：`汽车 3802.62` 是板块指数点位，页面上像"某只股票 3802 元"
+       → 板块单独标注「板块指数·非个股」、基准写成「指数点位」。
+    """
+
+    def setUp(self):
+        self.pk = load("m10_picks", "modules/m10_picks/picks.py")
+        self.rep = load("m5_report", "modules/m5_report/report.py")
+
+    # ── 1. 一手金额硬闸 ─────────────────────────────────────────
+    def _cand(self, name, kind="stock"):
+        return {"kind": kind, "name": name, "board": "", "logic": "x" * 30,
+                "invalidation": "若公司公告订单延期或取消", "confidence": "中",
+                "basis_refs": [1], "entry_zone": "10.0~10.5", "trigger": "开盘站稳"}
+
+    def test_one_lot_gate_drops_expensive_stock(self):
+        pk = self.pk
+        # 桩要按名称返回**不同代码**，否则两条候选拿到同一个价格、都被判贵
+        def _resolve(cand, bm, cache, by_name):
+            code = "600000" if "贵" in cand["name"] else "600001"
+            return ("1." + code, code, "沪A")
+        pk.resolve_target = _resolve
+        prices = {"600000": (200.0, 199.0, "stub"), "600001": (10.0, 9.9, "stub")}
+        pk.base_quote = lambda secid, code, by_code: prices.get(code, (None, None, None))
+        rows, stats = [], {}
+        n = pk.record(rows, "2026-10-09", "pm",
+                      [self._cand("贵股份"), self._cand("便宜股份")],
+                      4000.0, {}, None, {}, {}, stats=stats)
+        self.assertEqual(n, 1, "一手 2 万元的票必须被丢弃")
+        self.assertEqual([r["name"] for r in rows], ["便宜股份"])
+        self.assertEqual(stats.get("too_expensive"), 1)
+
+    def test_one_lot_gate_not_applied_to_board(self):
+        """板块候选的 base_price 是指数点位，没有"一手"概念，不能被这条闸误杀。"""
+        pk = self.pk
+        pk.resolve_target = lambda cand, bm, cache, by_name: ("90.BK1036", "BK1036", "")
+        pk.base_quote = lambda secid, code, by_code: (3802.62, 3790.0, "stub")
+        rows, stats = [], {}
+        n = pk.record(rows, "2026-10-09", "pm", [self._cand("汽车", kind="board")],
+                      4000.0, {}, None, {}, {}, stats=stats)
+        self.assertEqual(n, 1)
+        self.assertNotIn("too_expensive", stats)
+
+    def test_prompts_state_hard_price_rule(self):
+        pa = self.pk.build_am_prompt("d", 1, "a", [])
+        p = self.pk.build_prompt("d", 1, "a", [])
+        for txt, tag in ((pa, "am"), (p, "pm")):
+            self.assertIn("单价必须 ≤ 50 元", txt, tag)
+            self.assertIn("一律不要选", txt, tag)
+            self.assertIn("1 手 = 100 股", txt, tag)
+
+    # ── 2. 中位数 + 跑赢档数 ────────────────────────────────────
+    def _rows_with(self, alphas):
+        rows = []
+        for i, a in enumerate(alphas):
+            rows.append({"id": f"r{i}", "date": "2026-10-09", "slot": "pm", "kind": "stock",
+                         "name": f"股{i}", "code": "600000", "board": "", "logic": "x" * 30,
+                         "invalidation": "若公告否认", "confidence": "中", "basis_refs": [1],
+                         "reviews": {"1": {"status": "ok", "ret": a, "alpha": a,
+                                           "alpha2": a * 0.8, "due": "2026-10-10",
+                                           "done": "2026-10-10"}, "3": None, "5": None}})
+        return rows
+
+    def test_stats_give_median_and_win(self):
+        st = self.rep.picks_stats(self._rows_with([0.20, 0.01, 0.0, -0.01, -0.02]))[1]
+        self.assertEqual(st["n"], 5)
+        self.assertAlmostEqual(st["median_ret"], 0.0, places=6,
+                               msg="中位数必须是 0，不是被 +20% 拉高的 3.6%")
+        self.assertAlmostEqual(st["median_alpha"], 0.0, places=6)
+        self.assertEqual(st["win"], 2)
+        self.assertEqual(st["n_a"], 5)
+
+    def test_stats_line_shows_median_and_win(self):
+        st = self.rep.picks_stats(self._rows_with([0.20, 0.01, 0.0, -0.01, -0.02]))[1]
+        line = self.rep._tier_stat_line(1, st)
+        self.assertIn("中位", line)
+        self.assertIn("2/5 跑赢", line)
+        self.assertIn("样本 5 条", line)
+        self.assertIn("均超额", line)
+
+    def test_m6_stats_source_has_median_and_win(self):
+        """M6 正文里的统计行也必须给中位数与跑赢档数（微信里同样不能只说均值）。"""
+        src = (ROOT / "modules/m6_push/push.py").read_text(encoding="utf-8")
+        self.assertIn("中位 {mid:+.2%}", src)
+        self.assertIn("跑赢", src)
+
+    # ── 3. 板块候选标注 ─────────────────────────────────────────
+    def _board_row(self):
+        return {"id": "2026-10-09-pm-b-汽车", "date": "2026-10-09", "slot": "pm",
+                "kind": "board", "name": "汽车", "code": "BK1036", "board": "",
+                "base_price": 3802.62, "logic": "汽车板块景气度回升" + "x" * 20,
+                "invalidation": "若板块成交额连续两日萎缩", "confidence": "中",
+                "basis_refs": [1], "reviews": {"1": None, "3": None, "5": None}}
+
+    def test_m5_board_card_is_labeled_as_index(self):
+        html = self.rep.render_picks([self._board_row()], "2026-10-09")
+        plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html))
+        self.assertIn("板块指数·非个股", plain)
+        self.assertIn("指数点位 3802.62", plain)
+        self.assertIn("个股 0 · 板块指数 1", plain, "h2 要分个股/板块报数")
+
+    def test_m9_labels_board_kind(self):
+        app = (ROOT / "modules/m9_web/web/app.js").read_text(encoding="utf-8")
+        self.assertIn("板块指数·非个股", app)
+        self.assertIn("指数点位 ", app)
 
 
 if __name__ == "__main__":

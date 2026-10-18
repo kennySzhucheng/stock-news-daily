@@ -100,7 +100,7 @@
     pfList: [], pfQuotes: {}, pfQuoteAt: 0, pfQuoteTime: '', pfLoading: false
   };
 
-  var KIND_CN = { stock: '个股', board: '板块' };
+  var KIND_CN = { stock: '个股', board: '板块指数·非个股' };
   // 与 m10_picks/picks.py 的 _STATUS_CN / m5_report 保持一致
   var REV_STATUS_CN = { no_quote: '未取到行情', no_bench: '基准缺失', expired: '未取到行情' };
   var PICK_TIERS = [1, 3, 5];
@@ -919,8 +919,10 @@
       : '';
     var base = (typeof r.base_price === 'number')
       ? '<span class="pick-base">' +
-        // 盘前行（slot=am）的基准价是**昨收**，不写清会被当成"记录时的现价"
-        (r.slot === 'am' ? '基准 昨收 ' : '记录时价 ') + r.base_price + '</span>' : '';
+        // 盘前行（slot=am）的基准价是**昨收**，不写清会被当成"记录时的现价"；
+        // 板块候选（kind=board）的 base 是**板块指数点位**，不能直接买（2026-10-18）
+        (r.kind === 'board' ? '指数点位 '
+          : (r.slot === 'am' ? '基准 昨收 ' : '记录时价 ')) + r.base_price + '</span>' : '';
     // logic 的标签**按批次分**：推荐批（am）→「为什么推荐」；复盘批（pm）→「逻辑」。
     // 不按 slot 硬判，走 isRecommendation()，旧导出缺字段时它自己会退回 slot。
     var logicLabel = PICK_LOGIC_LABEL[isRecommendation(r) ? 'am' : 'pm'];
@@ -987,9 +989,17 @@
         ? '<b>' + pct(s.alpha * 100) + '</b>' : '<span class="muted">—</span>';
       var mean2 = (n2 && typeof s.alpha2 === 'number')
         ? '<b>' + pct(s.alpha2 * 100) + '</b>' : '<span class="muted">—</span>';
+      // 中位数与跑赢档数（2026-10-18，与 M5/M6 同口径）：均值会被个别暴涨样本带偏
+      // （线上实测 50 档 T+1 均值 +0.93% 而中位数 −0.26%）。跑赢写成原始计数 x/y，
+      // 不给百分比 —— 与"不给胜率"的既有约定一致。后端老导出没有这些字段就不显示。
+      var midTxt = (typeof s.median_ret === 'number')
+        ? ' · 中位 ' + pct(s.median_ret * 100) : '';
+      var winTxt = (typeof s.n_a === 'number' && s.n_a)
+        ? ' · ' + s.win + '/' + s.n_a + ' 跑赢' : '';
       return '<span class="pick-stat">T+' + k + ' 均超额 ' + mean +
         '<span class="muted">（相对' + esc(names.bench) + '）</span> / ' + mean2 +
-        '<span class="muted">（相对' + esc(names.bench2) + '）· ' + sample + '</span></span>';
+        '<span class="muted">（相对' + esc(names.bench2) + '）' + midTxt + winTxt +
+        ' · ' + sample + '</span></span>';
     }).filter(Boolean).join('');
 
     var today = (p.latest_date || '').trim();

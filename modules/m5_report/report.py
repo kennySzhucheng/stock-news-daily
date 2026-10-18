@@ -988,11 +988,29 @@ def _tier_cell(rev, k):
             f"{lag}")
 
 
-def _tier_stat_line(k, d):
-    """一档的两口径统计文本（均值只在样本 ≥PICK_MIN_SAMPLE 时给）。
+def _median(vals):
+    """中位数（偶数个取中间两数均值）；空列表返回 None。
 
-    格式（与 M6 推送同一口径、与用户给的样例一致）：
-      T+1 均超额 +2.38%（相对沪深300） / +1.10%（相对中证1000）· 样本 4 条
+    为什么要它：**均值会被少数极端值带偏**。2026-10-18 实测线上 50 档 T+1：
+    均值 +0.93%、但中位数 **−0.26%** —— 一个 +20% 的样本就贡献了 0.4% 的均值。
+    只给均值等于让"平均在赚钱"掩盖"典型的那一条在亏钱"，所以统计必须同时给中位数。
+    """
+    if not vals:
+        return None
+    s = sorted(vals)
+    m = len(s) // 2
+    return s[m] if len(s) % 2 else (s[m - 1] + s[m]) / 2
+
+
+def _tier_stat_line(k, d):
+    """一档的统计文本（均值/中位数只在样本 ≥PICK_MIN_SAMPLE 时给）。
+
+    格式：
+      T+1 均超额 +2.38%（沪深300） / +1.10%（中证1000）· 中位 −0.26% · 22/50 跑赢 · 样本 4 条
+    **中位数与「跑赢档数」是 2026-10-18 加的**（用户反馈"买的票短期在亏"，而页面只给均值）：
+    - 中位数用**收益**算（回答"典型的那一条是赚还是亏"），不是超额；
+    - 「跑赢档数」是**原始计数**（alpha>0 的档数 / 有 alpha 的档数），不是百分比 ——
+      个位数样本下不给"胜率"，但 22/50 这种计数是事实、不构成误导。
     样本数**两个口径分别报**：中证1000 是后加的口径，老账本/bench2 缺失的档位
     只会进 n 不进 n2；两者不同时写成「样本 4 条 / 中证1000 口径 3 条」，
     相同时只写一个，不啰嗦也不谎报。
@@ -1002,20 +1020,32 @@ def _tier_stat_line(k, d):
     if n < PICK_MIN_SAMPLE:
         return f"T+{k} {tail}（少于 {PICK_MIN_SAMPLE} 条不给均值）"
     a2 = _pct(d["alpha2"]) if n2 else "—"
+    extra = ""
+    if d.get("median_ret") is not None:
+        extra += f"· 中位 {_pct(d['median_ret'])}"
+    if d.get("n_a"):
+        extra += f" · {d['win']}/{d['n_a']} 跑赢"
     return (f"T+{k} 均超额 {_pct(d['alpha'])}（相对{PICK_BENCH_CN}） / {a2}"
-            f"（相对{PICK_BENCH2_CN}）· {tail}")
+            f"（相对{PICK_BENCH2_CN}）{extra} · {tail}")
 
 
 def picks_stats(rows):
-    """各档平均收益与两个基准的平均超额 → {k: {"n","ret","alpha","n2","alpha2"}}。
+    """各档平均/中位收益与两个基准的平均超额、跑赢档数。
+
+    返回 {k: {"n","ret","alpha","n2","alpha2","median_ret","median_alpha",
+              "median_alpha2","n_a","win"}}。
 
     只统计 status == "ok" 的档位，n 就是参与平均的样本数 —— **n 必须与均值
     一起显示**，本函数因此把 n 一并返回而不是只给均值。
     n2 / alpha2 是第二基准（中证1000）口径，**独立计数**：老账本行、或 bench2
     任一端点缺失的档位（alpha2 为 null）不进 n2，于是"沪深300 4 条、中证1000
     3 条"能如实分别报出，而不是把一个缺数据的口径算成 0%。
-    不产出胜率/命中率这类字段：样本量小时百分比没有意义，且它会把连续的超额
-    压成二值的对/错。
+
+    **2026-10-18 新增中位数与跑赢档数**（纯附加字段，老读者不受影响）：
+    用户反馈"买的票短期在亏"，而页面只给均值 —— 中位数才回答"典型那一条赚没赚"
+    （线上实测均值 +0.93% 而中位数 −0.26%）。`win` 是 alpha>0 的**原始档数**，
+    `n_a` 是有 alpha 的档数；不产出胜率/命中率百分比（个位数样本下没意义，
+    且会把连续的超额压成二值的对/错）。
     """
     out = {}
     for k in (1, 3, 5):
@@ -1036,6 +1066,12 @@ def picks_stats(rows):
             "alpha": (sum(vals_a) / len(vals_a)) if vals_a else None,
             "n2": len(vals_a2),
             "alpha2": (sum(vals_a2) / len(vals_a2)) if vals_a2 else None,
+            # 中位数与跑赢档数（纯附加）
+            "median_ret": _median(vals_r),
+            "median_alpha": _median(vals_a),
+            "median_alpha2": _median(vals_a2),
+            "n_a": len(vals_a),
+            "win": sum(1 for v in vals_a if v > 0),
         }
     return out
 
@@ -1059,7 +1095,11 @@ def _pick_card(r, streak=""):
     同名的相邻记录日 ≤3 自然日的行已被 merge_pick_rows 并成这一条（2026-10-05）。
     为空串时一个字符都不加。
     """
-    tag = '<span class="pick-tag">板块</span>' if r.get("kind") == "board" else ""
+    # 板块候选（kind=board）的 base_price 是**板块指数点位**，不是股价 ——
+    # 页面上必须说清"不可直接买入"，否则 3802.62 这种数字会被当成某只股票的价格。
+    is_board = r.get("kind") == "board"
+    tag = ('<span class="pick-tag" title="板块指数，不是个股，不能直接买入">'
+           '板块指数·非个股</span>') if is_board else ""
     refs = "".join(f'<span class="pick-ref">[{n}]</span>'
                    for n in (r.get("basis_refs") or [])[:8])
     is_am = pick_slot(r) == "am"
@@ -1076,6 +1116,8 @@ def _pick_card(r, streak=""):
     price = r.get("base_price")
     if not price:
         base = "未匹配到行情"
+    elif is_board:
+        base = f"指数点位 {esc(price)}"
     elif is_am:
         base = f"昨收 {esc(price)}"
     else:
@@ -1188,13 +1230,20 @@ def render_picks(picks, date_str):
                       + (am_note if groups and groups[0][0] == "am" else ""))
         count_breakdown = ""
 
+    # 板块候选与个股**分开报数**（2026-10-18）：板块的基准是板块指数点位、不能直接买入，
+    # 混在「今日 N 条」里会让人以为条目都是可买个股（线上确实出现过 汽车 3802.62 这种）。
+    _n_board = sum(1 for r in today_rows if r.get("kind") == "board")
+    if _n_board:
+        count_breakdown += (f"（个股 {len(today_rows) - _n_board} · 板块指数 {_n_board}）")
+
     if not today_rows:
         today_html = picks_empty_note(picks, date_str)
 
     # 历史回填：逐条明细，每条自带 T+1/T+3/T+5 与同期基准
     rows_html = []
     for r in hist:
-        tag = '<span class="pick-tag">板块</span>' if r.get("kind") == "board" else ""
+        tag = ('<span class="pick-tag" title="板块指数，不是个股，不能直接买入">'
+               '板块指数·非个股</span>') if r.get("kind") == "board" else ""
         tiers = "".join(f'<div class="pick-tier"><span class="pick-tier-k">T+{k}</span>'
                         f'{_tier_cell((r.get("reviews") or {}).get(str(k)), k)}</div>'
                         for k in (1, 3, 5))
