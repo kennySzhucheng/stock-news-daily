@@ -556,6 +556,9 @@ def _clip(s, n):
 PICKS_REASON_CN = {
     "parse_failed": "模型输出解析失败",
     "llm_error": "模型输出解析失败",
+    # 2026-10-18 新增：额度不足与"接口/解析失败"要分开说 —— 前者只能去充值，
+    # 后者可以重跑。线上 10-14/10-15 的 402 原先被记成 llm_error，看不出真因。
+    "quota_insufficient": "DeepSeek 额度不足（未充值）",
     "all_rejected": "候选未通过校验（如推翻条件缺失）",
     "empty": "无合格材料",
 }
@@ -816,19 +819,34 @@ def build_picks_block(picks, slot="", status=None):
 
 
 def build_digest(date_str, slot, sentiment, market_view, top_news, delay=None, picks=None,
-                 picks_status=None):
-    """拼推送正文。顺序：延迟提示（若有）→ 市场分析（情绪 + 关注板块）
-    → 候选观察清单 → 重点新闻 → 日报链接。
+                 picks_status=None, analysis_status=None):
+    """拼推送正文。顺序：延迟提示（若有）→ **降级提示（若有）** → 市场分析
+    （情绪 + 关注板块）→ 候选观察清单 → 重点新闻 → 日报链接。
 
     市场判断放最前，让用户不点开链接也能先拿到结论；新闻标题退居其次。
     候选块紧跟市场分析 —— 它是从那份分析派生出来的、可事后检验的一层。
     picks_status 是 load_picks_status() 的结果，交给候选块区分「盘前」与「选股失败」。
+
+    analysis_status（2026-10-18 新增）：M3 的 analysis.status.json。**降级必须在正文
+    顶部就说清** —— 线上 10-14/10-15 额度耗尽时，日报的市场分析变成占位符，但微信
+    推送仍是"正常"的样子，用户以为分析没问题。现在：余额不足 / 契约未通过 →
+    正文第一行给一条 ⚠️ 说明（两种原因分开写，处置方式不同）。
     """
     delay = delay or {"late": False}
     parts = []
     if delay.get("late"):
         parts.append(f"> ⚠️ {delay['text']}")
         parts.append("")
+
+    if analysis_status:
+        if analysis_status.get("balance_ok") is False:
+            parts.append("> ⚠️ **本次分析降级：DeepSeek 额度不足** —— "
+                         "市场分析与候选可能缺失，请以下方新闻原文为准；充值后重跑即可恢复。")
+            parts.append("")
+        elif analysis_status.get("ok") is False:
+            parts.append("> ⚠️ **本次分析降级**：模型未产出有效市场分析（详见日报），"
+                         "请以下方新闻原文为准。")
+            parts.append("")
 
     parts.append(f"### 📈 市场分析（{SLOT_CN.get(slot, '')}）")
     parts.append(sentiment)
@@ -1013,7 +1031,8 @@ def main():
     picks = load_picks(date_str)
     picks_status = load_picks_status(date_str, slot)
     desp = build_digest(date_str, slot, sentiment, market_view, top, delay,
-                        picks=picks, picks_status=picks_status) + link_line
+                        picks=picks, picks_status=picks_status,
+                        analysis_status=analysis_status) + link_line
 
     ok, msg = send(title, desp, sendkey)
     if ok:

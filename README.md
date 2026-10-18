@@ -295,6 +295,11 @@ python tools/push_via_api.py             # 经 Git Data API 完成一次等效 p
 - **微信推送**：每次运行后经 Server酱推送摘要到微信，**市场分析在前、重点新闻在后**
 - **线上网页版**：https://kennyszhucheng.github.io/stock-news-daily/web/
 - **同日两份**：盘前与盘后产出不同文件名（`YYYY-MM-DD-am.html` / `-pm.html`），互不覆盖
+- **运行态缓存（2026-10-18 新增）**：`state` 分支。事件索引 `event_index.jsonl`、新闻滚动窗口
+  `picks/news_roll.jsonl`、`picks/boards.json`、`picks/trading_days.json` **不再发布到站点** ——
+  它们是内部缓存（事件索引 2.5MB，含全部新闻标题历史），公开可下载既没必要，也让每天两次部署
+  全量搬运。候选账本 `picks/ledger.jsonl` **仍然公开在 gh-pages**：它是"公开自己判断成败"的
+  凭据，故意留在站点上。缓存丢失只影响跨天追踪与缓存命中，模块会自己重建，不影响出报。
 
 ## 八·五、让日报准点：cron-job.org 云端调度器
 
@@ -348,6 +353,26 @@ python tools/push_via_api.py             # 经 Git Data API 完成一次等效 p
 > ⚠️ **盘前和盘后是两个独立的 job，必须各建一个。** 建了一个不等于另一个有了 ——
 > 2026-09-24 才发现**盘后 15:40 那个压根没建过**，那段时间盘后一直只有 GitHub
 > 延迟 4~5 小时的 schedule 在兜底，却没人察觉。
+
+### 第三步（2026-10-18 新增）：给「送达体检」也建一个 cronjob
+
+体检（`healthcheck.yml`）此前**只有 GitHub 的 schedule**，实测被延迟到 **16:54 / 17:52**
+（本该在 22:00 左右跑）。一旦 schedule 丢掉事件，"体检没跑"就没人知道 —— 而体检正是
+"日报没送到"的唯一发现手段。补第三条 job：
+
+| 字段 | 值 |
+|---|---|
+| Title | 股市情报-体检 |
+| URL | `https://api.github.com/repos/kennySzhucheng/stock-news-daily/actions/workflows/healthcheck.yml/dispatches` |
+| Schedule | 每天 **22:00**（Asia/Shanghai） |
+| Request method | `POST` |
+| Request body | `{"ref":"main"}` |
+| Headers | 与上面两个 job 完全相同（`Authorization: Bearer …` / `Accept` / `Content-Type`） |
+
+- 体检**没有任何 inputs**，所以 body 只给 `ref`；千万别照抄 `{"inputs":{"slot":…}}`（会 422）。
+- 本机也可以用触发脚本手动补跑：`python tools/trigger_workflow.py --workflow healthcheck.yml`
+  （`--workflow` 就是为这条加的；它会跳过 slot / 推送 / 出报去重这些日报专属逻辑）。
+- 体检失败会以 exit 1 结束（这是设计：它发现严重问题就该红），失败邮件是有用的信号。
 
 #### 怎么验证：TEST RUN 按钮是灰的，别跟它较劲（2026-09-24 补）
 

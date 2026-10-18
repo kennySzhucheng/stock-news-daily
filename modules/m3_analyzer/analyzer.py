@@ -283,10 +283,59 @@ def write_status(status):
         print(f"[warn] analysis.status.json 写入失败（{e}），不影响报告")
 
 
+def deepseek_balance():
+    """DeepSeek 余额预检 → {"ok","total","currency"} 或 None（未配置 key / 查询失败）。
+
+    **2026-10-18 新增**：线上 10-14/10-15 两天 API 返回 402 Payment Required，
+    M3 降级成占位分析、M10 候选 0 条 —— 但**报告照出、推送照发**，只有当晚体检
+    才报警（用户自己是翻报告才发现的）。本函数只做"提前说清"：
+      · M3 用它把 balance_ok 写进 analysis.status.json（M6 据此在推送正文加降级提示）；
+      · M10 用它跳过注定 402 的调用，状态文件 reason 写成 quota_insufficient。
+    任何异常都返回 None 并只 print warn —— **绝不阻断主流程**（余额接口本身挂了
+    不该让日报也挂）。判断"额度不足"的阈值是 total_balance <= 0。
+    """
+    key = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
+    if not key:
+        return None
+    try:
+        req = urllib.request.Request(
+            "https://api.deepseek.com/user/balance",
+            headers={"Authorization": f"Bearer {key}", "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            d = json.loads(resp.read().decode("utf-8", "replace"))
+        infos = d.get("balance_infos") or []
+        total = None
+        currency = ""
+        if infos:
+            try:
+                total = sum(float(i.get("total_balance") or 0) for i in infos)
+            except Exception:
+                total = None
+            currency = infos[0].get("currency") or ""
+        available = bool(d.get("is_available"))
+        ok = available and (total is None or total > 0)
+        return {"ok": ok, "total": total, "currency": currency}
+    except Exception as e:
+        print(f"[warn] DeepSeek 余额预检失败（不影响主流程）: {type(e).__name__}: {str(e)[:60]}")
+        return None
+
+
 def main():
     d = json.loads((DATA_DIR / "structured_news.json").read_text(encoding="utf-8"))
     news = d["news"]
     print(f"输入 {len(news)} 条结构化新闻")
+
+    # 额度预检（2026-10-18）：**只提前说清，不阻断**。余额不足时 API 会返回 402，
+    # 与其等它失败，不如先把事实写进状态文件，让 M6 的推送正文直接告知用户。
+    balance = deepseek_balance()
+    if balance is not None:
+        print(f"DeepSeek 余额预检: ok={balance['ok']} total={balance['total']} "
+              f"{balance['currency']}")
+        if not balance["ok"]:
+            print("!" * 72)
+            print("[WARN] DeepSeek 额度不足（或账号不可用）—— 本次分析很可能会降级；"
+                  "请尽快充值，否则当天日报的市场分析/候选都会缺失")
+            print("!" * 72)
 
     digest, count = build_news_digest(news)
     print(f"压缩成 {count} 条摘要喂给 DeepSeek ({len(digest)} 字符)")
@@ -317,6 +366,12 @@ def main():
     print(f"输出 → {out_path} ({len(result)} 字符)")
 
     status = validate_analysis(result)
+    # 余额预检结果并进状态文件（纯附加字段）：M6 据此在微信正文顶部加"本次分析降级"，
+    # 体检/排查也能一眼看出是"模型没跑通"还是"账号没钱"——这两种原因的处置完全不同。
+    if balance is not None:
+        status["balance_ok"] = balance["ok"]
+        status["balance_total"] = balance["total"]
+        status["balance_currency"] = balance["currency"]
     write_status(status)
 
     if not status["ok"]:

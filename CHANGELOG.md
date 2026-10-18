@@ -705,6 +705,71 @@ iPhone / Android 真机"添加到主屏幕"未实测（无真机环境），可�
 
 ---
 
+## 2026-10-18 · P1 可靠性三项：额度不足不再静默 · 体检加外部触发 · 运行态数据移出站点 ✅ 完成
+
+### 一、额度不足不再"静默降级"（M3 / M10 / M6）
+
+线上 10-14、10-15 两天 API 返回 **402 Payment Required**：M3 降级成占位分析、M10 候选 0 条，
+但**报告照出、推送照发**，用户得自己翻报告才发现；状态文件里只写 `llm_error`，看不出是
+"没钱"还是"接口坏了"。
+
+- **M3** 新增 `deepseek_balance()`：调 `GET /user/balance`，把 `balance_ok/balance_total/
+  balance_currency` 写进 `analysis.status.json`（纯附加字段）；查询失败一律返回 None、
+  **绝不阻断**（预检自己挂了不能变成新的静默故障源）。余额不足时打印醒目 warn。
+- **M10** 新增 `_quota_blocked()`（余额不足→跳过注定 402 的调用，省掉无谓重试）与
+  `_llm_failure_reason()`（**402/insufficient → `quota_insufficient`**，其余仍是 `llm_error`）；
+  am/pm 两条通道都接上，状态文件 detail 会写"余额 X 元 —— 本轮不调用 LLM，候选缺失；请充值"。
+- **M6** 推送正文**顶部**加降级提示，且两种原因分开说：
+  「本次分析降级：**DeepSeek 额度不足**……充值后重跑即可恢复」/「本次分析降级：模型未产出
+  有效市场分析……」。`PICKS_REASON_CN` 补 `quota_insufficient`。
+
+### 二、送达体检加外部触发（`tools/trigger_workflow.py` + README 八·五）
+
+体检此前只有 GitHub schedule，实测被延迟到 **16:54 / 17:52**；一旦 schedule 丢事件，
+"体检没跑"没人知道，而它正是"日报没送到"的唯一发现手段。
+
+- `tools/trigger_workflow.py` 新增 `--workflow`（默认 `daily.yml`）；非日报工作流自动跳过
+  slot / 微信推送 / 出报去重这些日报专属逻辑，dispatch 时不带 inputs；
+- README 八·五新增「第三步：给送达体检建 cronjob」——URL / 每天 22:00 / body `{"ref":"main"}`
+  （**体检没有 inputs，别照抄 `{"inputs":{...}}`，会 422**）；
+- 已实测：`--workflow healthcheck.yml` → **HTTP 204**，云端 run 的 `event=workflow_dispatch` ✓。
+
+### 三、运行态数据移出公开站点（`daily.yml` 的 state 分支）
+
+`event_index.jsonl`（2.58MB，含全部新闻标题历史）、`picks/news_roll.jsonl`（680KB）、
+`picks/boards.json`、`picks/trading_days.json` 此前都公开挂在 gh-pages，每天两次全量上传/恢复。
+
+- 新增「恢复运行态缓存（state 分支）」+「保存运行态缓存（state 分支）」两步：
+  跑之前从 `state` 分支取回、跑完推回；**推成功之后才**从待发布目录删掉这些文件
+  （push 失败则保留、按旧行为发布，不丢数据）；
+- `.gitignore` 加 `.state/`；
+- **候选账本 `picks/ledger.jsonl` 故意不动**：它是"公开自己判断成败"的凭据，继续留在站点上。
+  用例里专门钉了这条（防止以后顺手把它一起搬走）。
+
+### 四、验证体检时发现并修掉一个**误报**（阈值太紧）
+
+用新加的触发通道真跑了一次体检，结果 **failure**：
+
+```
+[严重] 10-18 盘前日报迟 20m（计划 08:10，实到 08:30）
+[严重] 10-18 盘后日报迟 22m（计划 15:40，实到 16:02）
+```
+
+20~22 分钟是 **Actions 排队 + 管线自身 6~8 分钟**的正常耗时，而 `ON_TIME_TOL_MIN=15`
+把它判成"严重"→ 体检天天变红、误报。改成 **15~45 分钟只提醒（WARN，不影响 exit code）、
+>45 分钟才严重**（新增 `LATE_SEVERE_MIN=45`）。"过早送达"仍按严重处理（那是真信号）。
+
+### 五、验收
+
+- 离线用例 **87 → 97 项全过**（新增 10 项：402 分类、无 key 时预检 fail-open、推送两种降级文案
+  且不互相冒充、正常时不误报降级、reason 中文、`--workflow` 支持、workflow 含 state 步骤且
+  "先 push 后删除"、账本仍公开、迟到阈值分档）；
+- `py_compile` / `node --check` 通过；`daily.yml` 的两段 shell 过 `bash -n`；
+- 体检触发实测 **HTTP 204 + event=workflow_dispatch**；state 分支逻辑第一轮运行会自动
+  把 gh-pages 上的旧缓存文件迁走（恢复→存 state→从站点删除）。
+
+---
+
 ## 2026-10-18 · P0 体验修正：统计不再只说均值 · 一手买不起的票不推 · 板块与个股分开 ✅ 完成
 
 用户用了三周后反馈"**买的票短期确实在亏**"。用线上 10 天真实数据核查，确认**不是错觉**，

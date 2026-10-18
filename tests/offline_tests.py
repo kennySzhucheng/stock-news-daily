@@ -1534,5 +1534,94 @@ class P0UsabilityFixes(unittest.TestCase):
         self.assertIn("指数点位 ", app)
 
 
+class P1Reliability(unittest.TestCase):
+    """2026-10-18 的三条 P1：额度不足不再静默 · 体检有外部触发 · 运行态数据移出公开站点。"""
+
+    def setUp(self):
+        self.psh = load("m6_push", "modules/m6_push/push.py")
+        self.pk = load("m10_picks", "modules/m10_picks/picks.py")
+
+    # ── 1. 额度不足：分类准确 + 推送顶部明说降级 ────────────────
+    def test_402_is_classified_as_quota(self):
+        pk = self.pk
+
+        class E(Exception):
+            pass
+        reason, detail = pk._llm_failure_reason(E("HTTP Error 402: Payment Required"))
+        self.assertEqual(reason, "quota_insufficient")
+        self.assertIn("402", detail)
+        self.assertEqual(pk._llm_failure_reason(E("timeout"))[0], "llm_error")
+
+    def test_quota_check_fails_open_without_key(self):
+        """没有可查的余额时**绝不拦** —— 预检自己挂了不能变成新的静默故障源。"""
+        self.assertEqual(self.pk._quota_blocked(), (False, ""))
+
+    def test_push_says_degraded_when_balance_low(self):
+        body = self.psh.build_digest("2026-10-19", "am", "偏多", [], [],
+                                     analysis_status={"ok": False, "balance_ok": False})
+        first = [ln for ln in body.split("\n") if ln.strip()][0]
+        self.assertIn("额度不足", first)
+        self.assertIn("降级", first)
+
+    def test_push_says_degraded_when_analysis_failed(self):
+        body = self.psh.build_digest("2026-10-19", "pm", "偏空", [], [],
+                                     analysis_status={"ok": False})
+        first = [ln for ln in body.split("\n") if ln.strip()][0]
+        self.assertIn("本次分析降级", first)
+        self.assertNotIn("额度不足", first, "契约失败≠额度不足，两种原因不能混说")
+
+    def test_push_normal_when_analysis_ok(self):
+        body = self.psh.build_digest("2026-10-19", "am", "偏多", [], [],
+                                     analysis_status={"ok": True})
+        self.assertNotIn("降级", body.split("\n")[0])
+
+    def test_m6_reason_map_has_quota(self):
+        self.assertIn("quota_insufficient", self.psh.PICKS_REASON_CN)
+        self.assertIn("额度", self.psh.PICKS_REASON_CN["quota_insufficient"])
+
+    # ── 2. 体检外部触发：触发脚本支持任意 workflow ──────────────
+    def test_trigger_script_supports_workflow_arg(self):
+        src = (ROOT / "tools/trigger_workflow.py").read_text(encoding="utf-8")
+        self.assertIn('"--workflow"', src)
+        self.assertIn("healthcheck.yml", src)
+        self.assertIn("is_daily", src, "非日报工作流不能套用 slot/推送/去重语义")
+
+    # ── 3. 运行态数据移出公开站点（state 分支） ─────────────────
+    def test_workflow_moves_state_off_site(self):
+        wf = (ROOT / ".github/workflows/daily.yml").read_text(encoding="utf-8")
+        self.assertIn("恢复运行态缓存（state 分支）", wf)
+        self.assertIn("保存运行态缓存（state 分支", wf)
+        for f in ("event_index.jsonl", "picks/news_roll.jsonl",
+                  "picks/boards.json", "picks/trading_days.json"):
+            self.assertIn(f, wf, f"要从站点移走的文件没列全：{f}")
+        # 删除必须在 push 之后（否则 push 失败会丢缓存）
+        save = wf.split("保存运行态缓存（state 分支")[1].split("- name:")[0]
+        self.assertLess(save.find("git push -f origin state"), save.find("rm -f reports/"),
+                        "必须先推送成功再删除本地缓存文件")
+        gi = (ROOT / ".gitignore").read_text(encoding="utf-8")
+        self.assertIn(".state/", gi)
+
+    def test_ledger_still_public(self):
+        """账本是"公开自己判断成败"的一部分，**故意留在 gh-pages**（不能一起搬走）。"""
+        wf = (ROOT / ".github/workflows/daily.yml").read_text(encoding="utf-8")
+        save = wf.split("保存运行态缓存（state 分支")[1].split("- name:")[0]
+        self.assertNotIn("ledger.jsonl", save,
+                         "账本不进 state 分支：它要公开在站点上（可检验性）")
+
+    def test_late_threshold_split(self):
+        """迟到 15~45 分钟只提醒，>45 分钟才算严重（2026-10-18）。
+
+        实测正常运行的"迟到"就有 20~22 分钟（Actions 排队 + 管线 6~8 分钟），
+        原先 15 分钟就判严重 → 体检天天变红、误报。
+        """
+        hc = load("m8_e2e", "modules/m8_e2e/healthcheck.py")
+        self.assertEqual(hc.ON_TIME_TOL_MIN, 15)
+        self.assertEqual(hc.LATE_SEVERE_MIN, 45)
+        src = (ROOT / "modules/m8_e2e/healthcheck.py").read_text(encoding="utf-8")
+        # 迟到判据必须先用严重阈值、再用提醒阈值
+        self.assertLess(src.find("if delay > LATE_SEVERE_MIN"), src.find("elif delay > ON_TIME_TOL_MIN"))
+        self.assertIn('problems.append((WARN, f"{SLOT_CN[slot]}日报迟', src)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

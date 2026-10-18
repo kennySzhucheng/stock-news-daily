@@ -37,3 +37,6 @@ android/app/build/
 android/local.properties
 *.keystore
 *.jks
+
+# 运行态缓存（保存到独立 state 分支，不进仓库也不进站点）
+.state/

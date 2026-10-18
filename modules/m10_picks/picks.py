@@ -1983,6 +1983,40 @@ def parse_candidates(text, max_tokens=None, dump_mode="w", am=False):
     return stocks + boards
 
 
+def _llm_failure_reason(e):
+    """LLM 调用异常的 reason 分类 → (reason, detail)。
+
+    **为什么区分 quota_insufficient 与 llm_error**（2026-10-18）：线上 10-14/10-15
+    的 402 Payment Required 被记成 llm_error，用户看到"LLM 出错"不知道是没钱还是
+    接口挂了 —— 这两种的处置完全不同（充值 vs. 重跑/查接口）。
+    """
+    s = f"{type(e).__name__}: {e}"
+    low = s.lower()
+    if ("402" in s or "payment required" in low or "insufficient" in low
+            or "余额" in s or "quota" in low):
+        return "quota_insufficient", s[:80]
+    return "llm_error", s[:80]
+
+
+def _quota_blocked():
+    """DeepSeek 额度预检 → (是否应跳过本轮 LLM, 说明)。
+
+    余额不足 → 跳过（省掉注定 402 的调用与重试，并给出可读原因）；
+    **查不到余额（无 key / 接口异常）→ 一律不拦** —— 预检只是锦上添花，
+    不能因为余额接口自己挂了就不选股（那会变成新的静默故障源）。
+    """
+    try:
+        b = M3.deepseek_balance()
+    except Exception:
+        return False, ""
+    if b is not None and not b.get("ok", True):
+        total = b.get("total")
+        cur = b.get("currency") or ""
+        return True, (f"DeepSeek 额度不足（余额 {total if total is not None else '?'} {cur}）"
+                      "—— 本轮不调用 LLM，候选缺失；请充值后重跑")
+    return False, ""
+
+
 def _pick_reason(llm):
     """LAST_LLM → (reason, detail)，只在「没拿到任何候选」时用于状态文件。"""
     if llm.get("parse_failed"):
@@ -3156,6 +3190,12 @@ def record_premarket(rows, today_s, bench, by_code, by_name, base_date, state,
         print(f"[warn] quotes.json 生成于 {gen or '?'}，非今日 → 盘前通道本轮不产出清单")
         return
 
+    blocked, why = _quota_blocked()
+    if blocked:
+        # 额度不足（2026-10-18）：不调 LLM，状态文件写清楚原因（M6 会在推送里说明）
+        state.update(reason="quota_insufficient", detail=why)
+        print(f"[warn] {why}")
+        return
     try:
         digest, count = M3.build_news_digest(news)
         # 板块成分股：**盘前默认不喂**（见 CONSTITUENT_FOR_AM 的理由）。
@@ -3168,8 +3208,9 @@ def record_premarket(rows, today_s, bench, by_code, by_name, base_date, state,
                                constituents=constituents)
     except Exception as e:
         # 可选产出：盘前选股失败不该掐断主链路（复盘在 pm 那次运行里）
-        state.update(reason="llm_error", detail=f"{type(e).__name__}: {str(e)[:80]}")
-        print(f"[warn] 盘前选股失败: {type(e).__name__}: {str(e)[:80]}")
+        reason, detail = _llm_failure_reason(e)
+        state.update(reason=reason, detail=detail)
+        print(f"[warn] 盘前选股失败: {detail}")
         return
 
     if not cands:
@@ -3351,21 +3392,29 @@ def main():
                 if not str(quotes_json.get("generated_at") or "").startswith(today_s):
                     print(f"[warn] quotes.json 生成于 {quotes_json.get('generated_at','?')}，"
                           "非今日：基准价将现抓，且本轮不做 secid 兜底")
-                try:
-                    digest, count = M3.build_news_digest(news)
-                    # 相关板块的成分股（2026-10-05）：只是**新增材料**，取不到就不给
-                    # 这一节。外壳保证它永不抛异常 —— 否则会被下面那个 except 归到
-                    # llm_error，等于本功能把选股整条掐了。
-                    constituents = _constituents_or_empty(today_s, news)
-                    cands = ask_candidates(digest, count, analysis_md,
-                                           quotes_json.get("quotes", []),
-                                           constituents=constituents)
-                except Exception as e:
-                    # 可选产出：选股失败不该影响复盘，也不该掐断主链路
-                    state.update(reason="llm_error",
-                                 detail=f"{type(e).__name__}: {str(e)[:80]}")
-                    print(f"[warn] 选股失败（不影响复盘）: {type(e).__name__}: {str(e)[:80]}")
+                blocked, why = _quota_blocked()
+                cands = []
+                if blocked:
+                    # 额度不足（2026-10-18）：**跳过注定 402 的调用**，状态文件写清楚，
+                    # 复盘照常跑（复盘的价格口径不需要 LLM）。
+                    state.update(reason="quota_insufficient", detail=why)
+                    print(f"[warn] {why}")
                 else:
+                    try:
+                        digest, count = M3.build_news_digest(news)
+                        # 相关板块的成分股（2026-10-05）：只是**新增材料**，取不到就不给
+                        # 这一节。外壳保证它永不抛异常 —— 否则会被下面那个 except 归到
+                        # llm_error，等于本功能把选股整条掐了。
+                        constituents = _constituents_or_empty(today_s, news)
+                        cands = ask_candidates(digest, count, analysis_md,
+                                               quotes_json.get("quotes", []),
+                                               constituents=constituents)
+                    except Exception as e:
+                        # 可选产出：选股失败不该影响复盘，也不该掐断主链路
+                        reason, detail = _llm_failure_reason(e)
+                        state.update(reason=reason, detail=detail)
+                        print(f"[warn] 选股失败（不影响复盘）: {detail}")
+                if not blocked:
                     if not cands:
                         reason, detail = _pick_reason(LAST_LLM)
                         state.update(reason=reason, detail=detail)

@@ -87,6 +87,9 @@ SLOT_CN = observe.SLOT_CN
 PLAN = {"am": "08:10", "pm": "15:40"}
 # 迟到多少分钟以内仍算准点。正常时外部触发在 1 分钟内送达，留 15 分钟余量
 ON_TIME_TOL_MIN = 15
+# 迟到超过这个分钟数才判**严重**（2026-10-18 新增）：Actions 排队 + 管线 6~8 分钟，
+# 正常运行的"迟到"实测 20~22 分钟 —— 原先 15 分钟就判严重，导致体检天天变红（误报）。
+LATE_SEVERE_MIN = 45
 # 过了这个钟点（北京时间），当天的盘后时段就该有结果了 —— 用于推断体检的目标日
 PM_SETTLED_HOUR = 16
 # 一天真正出报的次数上限：盘前、盘后各一次
@@ -302,9 +305,18 @@ def check_date(repo, pages_base, date_str):
         # −475 ≤ 15 成立 → 打印「✓ 准点（早7h55m）」，当晚体检因此输出
         # 「一切正常 ✓」，把一次「测试运行占掉正式时段、当天准点触发被去重挡掉」
         # 的真实故障完整地漏了过去。
-        if delay > ON_TIME_TOL_MIN:
+        if delay > LATE_SEVERE_MIN:
+            # 超过 45 分钟才算"严重"：GitHub Actions 的排队延迟 + 管线自身 6~8 分钟，
+            # 正常运行实测就有 20~22 分钟的"迟到"（2026-10-18 两条都被判严重 →
+            # workflow 变红 → 误报）。15~45 分钟只算提醒：仍然看得见，但不冒充故障。
             problems.append((SEVERE, f"{SLOT_CN[slot]}日报迟 {fmt_delay(delay)}"
                                      f"（计划 {plan_hm}，实到 {got:%H:%M}）"))
+            out.append(f"  {SLOT_CN[slot]}  计划 {plan_hm}  送达 {got:%H:%M:%S}  "
+                       f"⚠ 迟 {fmt_delay(delay)}（超过 {LATE_SEVERE_MIN} 分钟）")
+        elif delay > ON_TIME_TOL_MIN:
+            problems.append((WARN, f"{SLOT_CN[slot]}日报迟 {fmt_delay(delay)}"
+                                   f"（计划 {plan_hm}，实到 {got:%H:%M}）——"
+                                   f"大概率是 Actions 排队，未超 {LATE_SEVERE_MIN} 分钟阈值"))
             out.append(f"  {SLOT_CN[slot]}  计划 {plan_hm}  送达 {got:%H:%M:%S}  "
                        f"⚠ 迟 {fmt_delay(delay)}")
         elif delay < -ON_TIME_TOL_MIN:

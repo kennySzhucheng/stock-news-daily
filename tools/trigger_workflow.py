@@ -364,6 +364,9 @@ def main():
     ap.add_argument("--slot", choices=["am", "pm"], default="",
                     help="时段，留空则按北京时间 12:00 前/后自动判定")
     ap.add_argument("--ref", default="main", help="分支，默认 main")
+    ap.add_argument("--workflow", default="daily.yml",
+                    help="要触发的工作流文件名（默认 daily.yml；"
+                         "体检用 healthcheck.yml —— 见 README 八·五 的第三条 cronjob）")
     ap.add_argument("--token", default="",
                     help="令牌；不传则依次读 GITHUB_TOKEN / GH_PAT 环境变量、本机 gh auth token")
     ap.add_argument("--token-file", default="",
@@ -416,18 +419,29 @@ def main():
 
     repo = detect_repo()
     now_cst = datetime.now(CST)
-    no_push, why = decide_no_push(slot, now_cst, args.push, args.no_push)
+    # --workflow（2026-10-18 新增）：让本工具也能触发别的工作流 —— 目前用于给
+    # **送达体检**加外部触发。体检只有 GitHub schedule，实测被延迟到 16:54/17:52，
+    # 一旦 schedule 丢事件就没人知道"体检没跑"。
+    # 非 daily.yml 的工作流没有 slot / 推送 / 出报去重语义，走下面的 is_daily 分支简化处理。
+    global WORKFLOW
+    WORKFLOW = args.workflow
+    is_daily = (WORKFLOW == "daily.yml")
     print(f"仓库: {repo}   工作流: {WORKFLOW}   分支: {args.ref}")
-    print(f"时段: {slot}（{SLOT_CN[slot]}）   本地时间: {now_cst.strftime('%m-%d %H:%M')}"
-          f"   计划时点: {SLOT_PLAN[slot]}")
-    print(("[-] 本次不发微信推送：" + why + "（--push 可强制开启）") if no_push
-          else f"[+] 本次会发微信推送：{why}")
+    if is_daily:
+        no_push, why = decide_no_push(slot, now_cst, args.push, args.no_push)
+        print(f"时段: {slot}（{SLOT_CN[slot]}）   本地时间: {now_cst.strftime('%m-%d %H:%M')}"
+              f"   计划时点: {SLOT_PLAN[slot]}")
+        print(("[-] 本次不发微信推送：" + why + "（--push 可强制开启）") if no_push
+              else f"[+] 本次会发微信推送：{why}")
+    else:
+        no_push = False
+        print("[i] 非日报工作流：slot / 微信推送 / 出报去重 均不适用")
 
     if args.check:
         check_token(repo, token)
         return
 
-    if not args.force:
+    if is_daily and not args.force:
         date_str = now_cst.strftime("%Y-%m-%d")
         exists = report_exists(repo, token, date_str, slot)
         if exists is True:
@@ -445,8 +459,11 @@ def main():
             print("[warn] 查询 gh-pages 产出失败，按未出报处理，继续触发")
 
     if args.dry_run:
-        print(f"[dry-run] 将触发 {WORKFLOW} @ {args.ref}，"
-              f"inputs.slot={slot} inputs.no_push={'true' if no_push else 'false'}")
+        if is_daily:
+            print(f"[dry-run] 将触发 {WORKFLOW} @ {args.ref}，"
+                  f"inputs.slot={slot} inputs.no_push={'true' if no_push else 'false'}")
+        else:
+            print(f"[dry-run] 将触发 {WORKFLOW} @ {args.ref}（不带 inputs）")
         return
 
     before = {r["id"] for r in
@@ -454,12 +471,16 @@ def main():
                   token=token).get("workflow_runs", [])}
     api("POST", f"/repos/{repo}/actions/workflows/{WORKFLOW}/dispatches",
         body={"ref": args.ref,
-              "inputs": {"slot": slot,
-                         "force": "true" if args.force else "false",
-                         "no_push": "true" if no_push else "false"}},
+              "inputs": ({"slot": slot,
+                          "force": "true" if args.force else "false",
+                          "no_push": "true" if no_push else "false"}
+                         if is_daily else {})},
         token=token)
-    print(f"[OK] 已触发 {SLOT_CN[slot]}日报工作流（HTTP 204）"
-          + ("　（按 no_push 跳过微信推送）" if no_push else ""))
+    if is_daily:
+        print(f"[OK] 已触发 {SLOT_CN[slot]}日报工作流（HTTP 204）"
+              + ("　（按 no_push 跳过微信推送）" if no_push else ""))
+    else:
+        print(f"[OK] 已触发 {WORKFLOW}（HTTP 204）")
 
     if args.wait:
         wait_for_run(repo, token, before)

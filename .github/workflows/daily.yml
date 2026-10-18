@@ -85,6 +85,29 @@ jobs:
             echo "count=0" >> "$GITHUB_OUTPUT"
           fi
 
+      # 运行态缓存（事件索引 / 新闻滚动窗口 / 板块与交易日历缓存）**不放在公开站点上**：
+      # 事件索引 2.5MB 里是全部新闻标题的历史，公开可下载既没必要，也多占每天两次全量
+      # 上传/恢复的时间。它们改存独立的 `state` 分支：这里先恢复，跑完再推回（见保存步骤）。
+      # 任何失败都只警告 —— 缓存没了模块会自己重建，绝不能因此影响出报。
+      - name: 恢复运行态缓存（state 分支）
+        id: state_restore
+        if: always()
+        continue-on-error: true
+        run: |
+          mkdir -p reports/picks
+          if git fetch origin state --depth=1 2>/dev/null; then
+            got=0
+            for f in event_index.jsonl picks/news_roll.jsonl picks/boards.json picks/trading_days.json; do
+              if git show FETCH_HEAD:"$f" > "reports/$f" 2>/dev/null; then
+                echo "已恢复运行态缓存 $f（$(wc -c < "reports/$f") 字节）"
+                got=$((got+1))
+              fi
+            done
+            echo "共恢复 $got 个缓存文件"
+          else
+            echo "[warn] state 分支不存在或取不到 —— 本轮从头重建缓存（不影响出报）"
+          fi
+
       # 盘前/盘后产出不同文件名（YYYY-MM-DD-am/pm.html），两份都保留、互不覆盖。
       # 用 cron 字符串判断最可靠；手动触发时才按北京时间现算。
       #
@@ -317,6 +340,37 @@ jobs:
         if: steps.dup.outputs.skip != 'true'
         continue-on-error: true
         run: python modules/m9_web/export.py
+
+      # 运行态缓存回存到 `state` 分支（2026-10-18）：**推成功之后**才把它们从待发布目录
+      # 删掉 —— 于是公开站点（gh-pages）只留 HTML 与前端资源。删除放在 push 之后：
+      # 一旦 push 失败（continue-on-error），文件仍会按旧行为发布，不会丢数据。
+      - name: 保存运行态缓存（state 分支，失败不阻塞部署）
+        id: state_save
+        if: always() && steps.dup.outputs.skip != 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p .state/picks
+          n=0
+          for f in event_index.jsonl picks/news_roll.jsonl picks/boards.json picks/trading_days.json; do
+            if [ -f "reports/$f" ]; then cp "reports/$f" ".state/$f"; n=$((n+1)); fi
+          done
+          echo "待保存运行态文件: $n 个"
+          REPO_SLUG="${{ github.repository }}"
+          TOKEN="${{ github.token }}"
+          cd .state
+          git init -q
+          git checkout -q -b state
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add -A
+          git commit -qm "state $(date -u +%Y-%m-%dT%H:%M:%SZ)" || echo "本次无变化"
+          git remote add origin "https://x-access-token:${TOKEN}@github.com/${REPO_SLUG}.git"
+          git push -f origin state
+          cd ..
+          rm -f reports/event_index.jsonl reports/picks/news_roll.jsonl \
+                reports/picks/boards.json reports/picks/trading_days.json
+          echo "已把运行态文件移出待发布目录（站点只保留 HTML 与前端资源）"
 
       # **以「历史恢复成功」为前提**：restore 失败时本地 reports/ 里只有今天这几份，
       # 而这个 action 的 keep_files 默认 false（= 用本地整棵树替换 gh-pages），
