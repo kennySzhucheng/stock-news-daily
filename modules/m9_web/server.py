@@ -41,6 +41,46 @@ DATA_FILES = ["raw_news.json", "structured_news.json", "quotes.json", "analysis.
 # M10 账本不在 data/ 下，是唯一跨运行累积的文件，必须单独列出 ——
 # 漏了它，本地改完账本刷新页面看不到变化（mtime 缓存不失效）
 PICKS_FILE = BASE / "reports" / "picks" / "ledger.jsonl"
+# 持仓（2026-10-20）：网页版持仓平时只存浏览器 localStorage，换设备/换浏览器就丢。
+# 本地服务在跑时多存一份到这里 —— **刻意放 data/ 而不是 reports/**：
+# reports/ 会被整树发布到公开站点，持仓是私人数据，绝不能进 gh-pages。
+PORTFOLIO_FILE = BASE / "data" / "portfolio.json"
+
+
+def _portfolio_load():
+    """读 data/portfolio.json 的持仓数组；文件不存在/坏掉一律返回 []（不抛异常）。"""
+    try:
+        if not PORTFOLIO_FILE.exists():
+            return []
+        d = json.loads(PORTFOLIO_FILE.read_text(encoding="utf-8-sig"))
+        hs = d.get("holdings") if isinstance(d, dict) else d
+        if not isinstance(hs, list):
+            return []
+        out = []
+        for h in hs:
+            if not isinstance(h, dict):
+                continue
+            code = str(h.get("code") or "").strip()
+            try:
+                buy = float(h.get("buy"))
+                shares = int(float(h.get("shares")))
+            except (TypeError, ValueError):
+                continue
+            if len(code) == 6 and code.isdigit() and buy > 0 and shares > 0:
+                out.append({"code": code, "buy": buy, "shares": shares})
+        return out
+    except Exception as e:
+        print(f"[warn] 读持仓文件失败（按空处理）: {type(e).__name__}: {e}")
+        return []
+
+
+def _portfolio_write(holdings):
+    """把持仓数组写进 data/portfolio.json（先写 .tmp 再 replace）。"""
+    PORTFOLIO_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = PORTFOLIO_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps({"holdings": holdings}, ensure_ascii=False, indent=2),
+                   encoding="utf-8")
+    tmp.replace(PORTFOLIO_FILE)
 
 
 def _local_files():
@@ -157,6 +197,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if u.path == "/api/ask":
                 return self._ask(payload)
+            if u.path == "/api/portfolio":
+                return self._portfolio_save(payload)
             return self._err(404, "未知接口")
         except Exception as e:
             return self._err(500, f"{type(e).__name__}: {e}")
@@ -177,6 +219,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/overview":
             return self._json(b.overview())
 
+        # 持仓（2026-10-20）：把手机端导出的持仓写进 data/portfolio.json 后，
+        # 本地网页版打开就能自动载入（见 app.js 的 pfSyncFromServer）。
+        if path == "/api/portfolio":
+            return self._json({"holdings": _portfolio_load(),
+                               "path": str(PORTFOLIO_FILE)})
         if path == "/api/news":
             def _int(name, dflt):
                 try:
@@ -235,6 +282,32 @@ class Handler(BaseHTTPRequestHandler):
             scope = []
         result = ask_mod.ask(get_bundle(), question, scope_ids=scope)
         return self._json(result)
+
+    def _portfolio_save(self, payload):
+        """保存持仓到 data/portfolio.json（2026-10-20）。
+
+        用途：手机端 App 把 WebView 里的持仓导出后，写到这儿 → 本地网页版
+        打开时自动载入（app.js 的 pfSyncFromServer）。持仓是私人数据，
+        **只进 data/，绝不进 reports/**（后者会被发布到公开站点）。
+        """
+        hs = payload.get("holdings") if isinstance(payload, dict) else None
+        if not isinstance(hs, list):
+            return self._err(400, "holdings 必须是数组")
+        clean = []
+        for h in hs:
+            if not isinstance(h, dict):
+                continue
+            code = str(h.get("code") or "").strip()
+            try:
+                buy = float(h.get("buy"))
+                shares = int(float(h.get("shares")))
+            except (TypeError, ValueError):
+                continue
+            if len(code) == 6 and code.isdigit() and buy > 0 and shares > 0:
+                clean.append({"code": code, "buy": buy, "shares": shares})
+        _portfolio_write(clean)
+        return self._json({"ok": True, "count": len(clean),
+                           "path": str(PORTFOLIO_FILE)})
 
     # -- 静态文件 ----------------------------------------------------------
     def _static(self, path):

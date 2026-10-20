@@ -529,8 +529,35 @@
     } catch (e) { return []; }
   }
   function pfSave(list) {
-    try { localStorage.setItem(PF_KEY, JSON.stringify(list)); return true; }
+    try { localStorage.setItem(PF_KEY, JSON.stringify(list)); }
     catch (e) { toast('保存失败：' + e.message); return false; }
+    // 2026-10-20：本地服务在跑时同时存一份到服务端（data/portfolio.json）——
+    // 换浏览器/清缓存不丢，也是"手机端持仓同步过来"的落地位置。
+    // 静态版（线上 gh-pages）没有这个接口，静默跳过。
+    if (!STATIC) {
+      try { apiPost('portfolio', { holdings: list }).catch(function () {}); } catch (e) {}
+    }
+    return true;
+  }
+
+  /* 2026-10-20：本地服务若存有持仓而本浏览器还没有，自动载入一份。
+     典型场景：手机上加了持仓 → App 导出 → 写进 data/portfolio.json →
+     电脑打开本地网页版，持仓直接出现（不用手抄代码）。 */
+  function pfSyncFromServer() {
+    if (STATIC) return;
+    apiGet('portfolio').then(function (r) {
+      var server = (r && Array.isArray(r.holdings)) ? r.holdings : [];
+      if (!server.length || S.pfList.length) return;   // 本地已有就不覆盖
+      var list = server.filter(function (h) {
+        return h && /^\d{6}$/.test(String(h.code || '')) && h.buy > 0 && h.shares > 0;
+      });
+      if (!list.length) return;
+      S.pfList = list;
+      try { localStorage.setItem(PF_KEY, JSON.stringify(list)); } catch (e) {}
+      renderPortfolio();
+      pfRefresh(true);
+      toast('已从本机同步 ' + list.length + ' 条持仓');
+    }).catch(function () {});
   }
   /* 只收沪深 A 股：6 开头→沪，0/3 开头→深；
      4/8（北交所）、5（基金）、9（B 股）一律拒收 */
@@ -1337,6 +1364,7 @@
   }
 
   S.pfList = pfLoad();          // 持仓来自 localStorage，与接口数据无关，先行载入
+  pfSyncFromServer();           // 本地服务里有持仓而这里没有时，自动补一份（2026-10-20）
   bind();
   var initial = (location.hash || '').replace('#', '');
   if (initial && $('#panel-' + initial)) switchTab(initial);

@@ -301,6 +301,9 @@ public class MainActivity extends Activity {
                         new SimpleDateFormat("HH:mm", Locale.getDefault())
                                 .format(new Date(lastLoadedAt))));
                 applyTabHighlight(tabIndexForUrl(url));
+                // 2026-10-20：把网页版持仓（localStorage）导出到应用外部目录，
+                // 便于"手机端持仓同步到电脑"（adb pull）与换机备份
+                exportPortfolio();
             }
 
             @Override
@@ -620,6 +623,49 @@ public class MainActivity extends Activity {
             return true;
         }
         return false;
+    }
+
+    /* ===================== 持仓导出（v1.1.1） ===================== */
+
+    /**
+     * 把 WebView 里「交互版 → 持仓」的 localStorage 落成一个 JSON 文件：
+     *   /sdcard/Android/data/<包名>/files/portfolio/portfolio.json
+     * 用途：手机端加的持仓同步到电脑（adb pull 后写进本地 data/portfolio.json，
+     * 本地网页版打开即自动载入）；也是换手机时的备份。文件在应用外部私有目录，
+     * 卸载 App 会一起删掉，不申请任何存储权限。
+     */
+    private void exportPortfolio() {
+        if (webView == null) {
+            return;
+        }
+        webView.evaluateJavascript("localStorage.getItem('snd_portfolio_v1')||''",
+                new android.webkit.ValueCallback<String>() {
+                    @Override
+                    public void onReceiveValue(String value) {
+                        try {
+                            if (value == null || value.length() < 3) {
+                                return;
+                            }
+                            // evaluateJavascript 回的是 JS 字符串字面量（带引号转义），先还原
+                            Object raw = new org.json.JSONTokener(value).nextValue();
+                            String json = String.valueOf(raw);
+                            if (json.isEmpty() || "null".equals(json)) {
+                                return;
+                            }
+                            java.io.File dir = new java.io.File(
+                                    getExternalFilesDir(null), "portfolio");
+                            if (!dir.exists() && !dir.mkdirs()) {
+                                return;
+                            }
+                            java.io.FileWriter w = new java.io.FileWriter(
+                                    new java.io.File(dir, "portfolio.json"), false);
+                            w.write(json);
+                            w.close();
+                        } catch (Exception ignored) {
+                            // 导出是附带能力，失败绝不能影响浏览
+                        }
+                    }
+                });
     }
 
     /* ===================== 错误页 JS 桥 ===================== */
