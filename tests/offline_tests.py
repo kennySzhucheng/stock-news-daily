@@ -1631,13 +1631,17 @@ class RiskLabelsAndRecCount(unittest.TestCase):
         self.rep = load("m5_report", "modules/m5_report/report.py")
         self.psh = load("m6_push", "modules/m6_push/push.py")
 
-    def test_am_prompt_asks_for_three(self):
-        self.assertEqual(self.pk.MAX_REC_AM, 3)
+    def test_am_prompt_count_matches_max(self):
+        """2026-10-20 用户决定"保留 6 只当情报收集"，所以 am 也问 1-6 只。
+
+        真正解决"新手看不清"的是趋势/波动标签与速读行，不是砍数量 ——
+        这条用例钉住数量与常量一致，避免以后改常量忘了改 prompt。
+        """
+        self.assertEqual(self.pk.MAX_REC_AM, self.pk.MAX_STOCKS)
         am = self.pk.build_am_prompt("d", 1, "a", [])
-        self.assertIn("1-3 只", am, "盘前推荐数量要匹配小资金（3 只一手仓 ≈ 1~1.5 万）")
-        self.assertNotIn("1-6 只", am)
+        self.assertIn("1-6 只", am)
         pm = self.pk.build_prompt("d", 1, "a", [])
-        self.assertIn("2-6 只", pm, "盘后记录仍保留 6 只上限（样本量不受影响）")
+        self.assertIn("2-6 只", pm)
 
     def _row(self, name="深科技", trend="逆势", vol="高", price=28.70):
         return {"id": f"2026-10-20-am-s-{name}", "date": "2026-10-20", "slot": "am",
