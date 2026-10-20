@@ -956,6 +956,12 @@
     return '<div class="pick-card">' +
       '<div class="pick-head"><b>' + esc(r.name) + '</b>' +
       '<span class="pick-kind">' + esc(KIND_CN[r.kind] || r.kind) + '</span>' +
+      // 趋势 / 波动徽章（2026-10-20）：与日报同一套字段（M10 记录时算好）
+      (r.trend === '逆势' ? '<span class="risk-badge risk-warn" title="60 日跑输或明显跌破 MA60">逆势</span>'
+        : r.trend === '顺势' ? '<span class="risk-badge risk-ok" title="站上 MA60 且 60 日收益为正">顺势</span>'
+        : r.trend === '走平' ? '<span class="risk-badge risk-flat">走平</span>' : '') +
+      (r.vol_level === '高' ? '<span class="risk-badge risk-warn" title="60 日年化波动 &gt; 45%">高波动</span>'
+        : r.vol_level === '中' ? '<span class="risk-badge risk-flat">波动中</span>' : '') +
       board + streak + conf + '</div>' +
       (r.logic
         ? '<p class="pick-logic"><b>' + logicLabel + '</b>：' + esc(r.logic) + '</p>'

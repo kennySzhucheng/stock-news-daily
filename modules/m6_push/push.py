@@ -749,7 +749,16 @@ def _pick_lines(i, r, streak=""):
     `streak` 是连续推荐的最短标记（同名的相邻记录日 ≤3 自然日的行已合并成这一条）；
     空串时一个字符都不加。
     """
-    tag = "〔板块〕" if r.get("kind") == "board" else ""
+    # 风险标记（2026-10-20）：微信里也要一眼看出"逆势/高波动"，与日报徽章同源
+    # （M10 记录时算好的 trend / vol_level；老账本没有这些列就不加标记）。
+    _marks = []
+    if r.get("kind") == "board":
+        _marks.append("板块")
+    if r.get("trend") == "逆势":
+        _marks.append("逆势")
+    if r.get("vol_level") == "高":
+        _marks.append("高波动")
+    tag = ("〔" + "·".join(_marks) + "〕") if _marks else ""
     conf = f"（{r['confidence']}）" if r.get("confidence") else ""
     is_am = pick_slot(r) == "am"
     extra = ""

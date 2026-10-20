@@ -242,6 +242,10 @@ REVIEW_DAYS = (1, 3, 5)       # 复盘周期
 EXPIRE_AFTER_DAYS = 15
 
 MAX_STOCKS = 6                # 候选数量上限（prompt 里按 slot 写成 2-N / 1-N）
+# 盘前「推荐」只给 3 只（2026-10-20）：用户是新手、资金约 1.15 万，每手 3000~5000 元 ——
+# 6 只一手仓要 3 万+，根本买不起一轮；同时盯 6 只也超出新手精力。推荐 3 只 ≈ 1~1.5 万，
+# 正好是"一手仓"的量级。pm 通道（事后记录）仍用 MAX_STOCKS=6，样本量不受影响。
+MAX_REC_AM = 3
 # 4 → 6（2026-10-05）：这个项目的价值全在"判断的成败被公开回填"，而**样本量**是
 # 一切统计的前提 —— 上限 4 时每天最多 4 条，T+1 攒到 40 个样本要一个月、T+5 更久，
 # 均值在个位数样本上根本没有解释力。
@@ -1552,7 +1556,7 @@ def build_prompt(digest, digest_count, analysis_md, quotes, constituents=None):
 #      entry_zone 会整整偏一天
 AM_PROMPT_HEAD = """你是 A 股研究助理。现在是**开盘前**。下面是今日新闻摘要、一份已完成的市场分析、以及相关个股的行情（**行情里的"昨收"就是上一交易日收盘价，今天还没有成交**）。
 
-请从中挑出 1-{max_stocks} 只**有潜力的个股**，作为「今日潜力个股（推荐）」——每条都必须**明确写出这只票叫什么、以及为什么推荐它**（写进 `logic` 字段），并让读者在**今天开盘后自己盯着盘面**判断这条逻辑还成不成立、值不值得继续跟。
+请从中挑出 1-{max_rec} 只**有潜力的个股**，作为「今日潜力个股（推荐）」——每条都必须**明确写出这只票叫什么、以及为什么推荐它**（写进 `logic` 字段），并让读者在**今天开盘后自己盯着盘面**判断这条逻辑还成不成立、值不值得继续跟。
 
 ## 硬约束（违反即废稿）
 1. 【只能从给定材料里选】候选必须出自市场分析的「值得关注的板块」或「新闻涉及的个股」，
@@ -1622,7 +1626,7 @@ def build_am_prompt(digest, digest_count, analysis_md, quotes, constituents=None
         for q in a_quotes[:60]) or "（今日未取到行情）"
     sec = _constituents_section(constituents or {})
     return AM_PROMPT_HEAD.format(
-        max_stocks=MAX_STOCKS,
+        max_rec=MAX_REC_AM,
         analysis=analysis_md[:12000], quotes=q_lines,
         constituents=("\n\n" + sec) if sec else "",
         digest_count=digest_count, digest=digest)
@@ -2404,6 +2408,67 @@ def _bump(stats, key):
         stats[key] = stats.get(key, 0) + 1
 
 
+RISK_KLINE_DAYS = 130
+
+
+def _risk_stats(code, last_close):
+    """个股近 60 日的趋势 / 波动标签（2026-10-20 新增，纯附加字段）。
+
+    为什么现在加：用户（新手、小资金）反馈"推荐票看不出是不是在下跌趋势里"。
+    实测 10-20 的 5 只推荐里 3 只在 MA60 下方、1 只年化波动 64% —— 与顺势票用同一
+    格式呈现，新手无法分辨。所以在**记录时**算好，展示层只负责显示：
+
+      trend     顺势（站上 MA60 且 60 日收益 >= 0）/ 逆势（60 日收益 <= -10% 或
+                明显跌破 MA60）/ 走平（其余）
+      vol_level 低（年化 < 30%）/ 中（30%~45%）/ 高（> 45%）
+
+    取不到 K 线 → 返回 None：**绝不阻断记录**（这一点与 bench2 的处理一致），
+    展示层按"未知"处理，老账本行没有这些字段也照样渲染。
+    """
+    try:
+        tc = ("sh" if str(code).startswith("6") else "sz") + str(code)
+        url = KLINE_API_TENCENT.format(code=tc, beg="", end="", count=RISK_KLINE_DAYS)
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0", "Referer": "https://gu.qq.com/"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            d = json.loads(r.read().decode("utf-8", "replace"))
+        node = (d.get("data") or {}).get(tc) or {}
+        rows = node.get("qfqday") or node.get("day") or []
+        closes = [float(x[2]) for x in rows if len(x) > 2]
+        if len(closes) < 25:
+            return None
+        last = closes[-1]
+        r60 = (last / closes[-61] - 1) if len(closes) > 60 else None
+        ma60 = (sum(closes[-60:]) / 60) if len(closes) >= 60 else None
+        rets = [closes[i] / closes[i - 1] - 1 for i in range(1, len(closes))]
+        sample = rets[-60:]
+        mean = sum(sample) / len(sample)
+        var = sum((x - mean) ** 2 for x in sample) / len(sample)
+        vol60 = (var ** 0.5) * (252 ** 0.5)
+        trend = None
+        if r60 is not None and ma60:
+            if last >= ma60 and r60 >= 0:
+                trend = "顺势"
+            elif r60 <= -0.10 or last < ma60 * 0.98:
+                trend = "逆势"
+            else:
+                trend = "走平"
+        vol_level = None
+        if vol60 is not None:
+            vol_level = "低" if vol60 < 0.30 else ("中" if vol60 <= 0.45 else "高")
+        return {
+            "r60": round(r60, 4) if r60 is not None else None,
+            "ma60": round(ma60, 3) if ma60 else None,
+            "vol60": round(vol60, 4) if vol60 is not None else None,
+            "trend": trend,
+            "vol_level": vol_level,
+        }
+    except Exception as e:
+        print(f"[warn] 「{code}」K 线取不到，风险标签留空（不影响记录）: "
+              f"{type(e).__name__}: {str(e)[:60]}")
+        return None
+
+
 def record(rows, today, slot, cands, bench, board_map, cache, by_code, by_name,
            am=False, base_date=None, stats=None, bench2=None):
     """把今日候选追加进账本。已存在的 id 跳过 —— 幂等保险。
@@ -2510,6 +2575,10 @@ def record(rows, today, slot, cands, bench, board_map, cache, by_code, by_name,
             row["base_date"] = base_date
             row["entry_zone"] = cand.get("entry_zone") or ""
             row["trigger"] = cand.get("trigger") or ""
+        # 趋势 / 波动标签（2026-10-20，纯附加字段）：记录时算好，展示层只负责显示。
+        # 只对个股算（板块候选的 base_price 是指数点位）；取不到就是 None，不阻断。
+        if cand["kind"] == "stock" and price:
+            row.update(_risk_stats(code, price) or {})
         rows.append(row)
         added += 1
         _bump(stats, "added")

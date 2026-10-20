@@ -1076,6 +1076,55 @@ def picks_stats(rows):
     return out
 
 
+def _risk_badges(r):
+    """趋势 / 波动徽章（2026-10-20）。
+
+    新手最缺的是"这只票现在处在什么位置"——逆势票与顺势票不能长得一样。
+    数据来自 M10 记录时算好的 `trend` / `vol_level`（老账本没有这两列 → 不显示徽章）。
+    """
+    out = []
+    trend = r.get("trend")
+    if trend == "逆势":
+        out.append('<span class="risk-badge risk-warn" title="60 日跑输或明显跌破 MA60">逆势</span>')
+    elif trend == "顺势":
+        out.append('<span class="risk-badge risk-ok" title="站上 MA60 且 60 日收益为正">顺势</span>')
+    elif trend == "走平":
+        out.append('<span class="risk-badge risk-flat">走平</span>')
+    vol = r.get("vol_level")
+    if vol == "高":
+        out.append('<span class="risk-badge risk-warn" title="60 日年化波动 > 45%">高波动</span>')
+    elif vol == "中":
+        out.append('<span class="risk-badge risk-flat" title="60 日年化波动 30%~45%">波动中</span>')
+    return "".join(out)
+
+
+def _risk_line(rows):
+    """候选清单顶部的「速读行」（2026-10-20）。
+
+    解决"推荐样式看不清"：新手先看这一行就知道今天有几只逆势/高波动、一手合计多少钱。
+    没有风险字段（老账本）时返回空串 —— 不出现"逆势 0"这种假统计。
+    """
+    if not rows:
+        return ""
+    n_rev = sum(1 for r in rows if r.get("trend") == "逆势")
+    n_pos = sum(1 for r in rows if r.get("trend") == "顺势")
+    n_high = sum(1 for r in rows if r.get("vol_level") == "高")
+    bits = []
+    if n_pos:
+        bits.append(f"趋势内 {n_pos}")
+    if n_rev:
+        bits.append(f'<b class="risk-warn-text">逆势 {n_rev}</b>')
+    if n_high:
+        bits.append(f'<b class="risk-warn-text">高波动 {n_high}</b>')
+    lot = sum((r.get("base_price") or 0) * 100
+              for r in rows if r.get("kind") == "stock")
+    if lot > 0:
+        bits.append(f"一手合计约 {lot:,.0f} 元")
+    if not bits:
+        return ""
+    return f'<p class="pick-riskline">{" · ".join(bits)}　⚠ 逆势/高波动需更谨慎</p>'
+
+
 def _pick_card(r, streak=""):
     """一条今日候选卡：推荐理由（am）/ 逻辑（pm）+ 推翻条件是主体，价格只是脚注。
 
@@ -1124,8 +1173,9 @@ def _pick_card(r, streak=""):
         base = esc(price)
     inv_check = inv_check_html(r)
     streak_html = f'<span class="pick-streak">{esc(streak)}</span>' if streak else ""
+    risk_html = _risk_badges(r)
     return f"""<div class="pick-card">
-  <div class="pick-head"><b>{esc(r.get("name"))}</b>{tag}{streak_html}
+  <div class="pick-head"><b>{esc(r.get("name"))}</b>{tag}{risk_html}{streak_html}
     <span class="pick-conf">置信度 {esc(r.get("confidence") or "—")}</span></div>
   <p class="pick-logic"><b>{PICK_LOGIC_LABEL["am" if is_am else "pm"]}</b>：{esc(r.get("logic"))}</p>
   {plan}<p class="pick-inval"><b>推翻条件</b>：{esc(r.get("invalidation"))}</p>
@@ -1291,6 +1341,7 @@ def render_picks(picks, date_str):
     n_today = sum(len(rs) for _, rs in groups) if today_rows else 0
     return f"""<section class="block" id="picks">
   <h2>候选观察清单<span class="h2-count">今日 {n_today} 条{count_breakdown}</span></h2>
+  {_risk_line(today_rows)}
   <p class="pick-note">盘前 08:10 那批是<b>推荐</b>：每条都写明推荐的三件事
   （新闻依据 → 传导机制 → 预期差），并给出<b>关注区间</b>与<b>触发条件</b>；
   收盘后那批是当日复盘记录。每条都带<b>推翻条件</b>与新闻依据，其后续表现按
@@ -1575,6 +1626,14 @@ section.block > details > summary > h3{
   border-radius:2px; padding:1px 7px;}
 .pick-tag{font-size:11px; color:var(--accent); border:1px solid var(--accent);
   border-radius:2px; padding:1px 6px;}
+/* 趋势/波动徽章（2026-10-20）：用颜色让"逆势/高波动"一眼可辨，不用读长句 */
+.risk-badge{font-size:11px; border-radius:2px; padding:1px 6px; margin-left:6px;
+  border:1px solid var(--border); color:var(--muted); background:transparent;}
+.risk-badge.risk-warn{color:#B23A2E; border-color:#B23A2E; background:#FBEDEA;}
+.risk-badge.risk-ok{color:#12734F; border-color:#12734F; background:#EAF6F1;}
+.risk-badge.risk-flat{color:#9A6B12; border-color:#D9B96A; background:#FBF3E2;}
+.risk-warn-text{color:#B23A2E;}
+.pick-riskline{margin:6px 0 2px; font-size:13px; color:var(--text);}
 /* 连续推荐标记（2026-10-05）：同名、相邻记录日 ≤3 自然日的行已合并成这一条。
    与 .pick-tag 同版式（既有 token），但语义不同故单独一类，免得改 .pick-tag
    时把"板块"标签一起改了。 */

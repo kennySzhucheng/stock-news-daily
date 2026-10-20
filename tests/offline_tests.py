@@ -1623,5 +1623,62 @@ class P1Reliability(unittest.TestCase):
         self.assertIn('problems.append((WARN, f"{SLOT_CN[slot]}日报迟', src)
 
 
+class RiskLabelsAndRecCount(unittest.TestCase):
+    """2026-10-20：推荐数量降到 3 只 + 趋势/波动徽章（用户"看不清推荐样式"）。"""
+
+    def setUp(self):
+        self.pk = load("m10_picks", "modules/m10_picks/picks.py")
+        self.rep = load("m5_report", "modules/m5_report/report.py")
+        self.psh = load("m6_push", "modules/m6_push/push.py")
+
+    def test_am_prompt_asks_for_three(self):
+        self.assertEqual(self.pk.MAX_REC_AM, 3)
+        am = self.pk.build_am_prompt("d", 1, "a", [])
+        self.assertIn("1-3 只", am, "盘前推荐数量要匹配小资金（3 只一手仓 ≈ 1~1.5 万）")
+        self.assertNotIn("1-6 只", am)
+        pm = self.pk.build_prompt("d", 1, "a", [])
+        self.assertIn("2-6 只", pm, "盘后记录仍保留 6 只上限（样本量不受影响）")
+
+    def _row(self, name="深科技", trend="逆势", vol="高", price=28.70):
+        return {"id": f"2026-10-20-am-s-{name}", "date": "2026-10-20", "slot": "am",
+                "kind": "stock", "name": name, "code": "000021", "board": "",
+                "base_price": price, "logic": "x" * 30, "invalidation": "跌破 27.44",
+                "confidence": "中", "basis_refs": [168], "entry_zone": "27.5~28.8",
+                "trigger": "开盘站稳 28.0", "trend": trend, "vol_level": vol,
+                "vol60": 0.64, "r60": -0.183, "reviews": {}}
+
+    def test_m5_badges_and_speed_read(self):
+        rows = [self._row(), self._row("邮储银行", "顺势", "低", 5.65)]
+        badges = self.rep._risk_badges(rows[0])
+        self.assertIn("逆势", badges)
+        self.assertIn("高波动", badges)
+        line = self.rep._risk_line(rows)
+        self.assertIn("逆势 1", line)
+        self.assertIn("趋势内 1", line)
+        self.assertIn("一手合计约", line)
+        html = self.rep.render_picks(rows, "2026-10-20")
+        self.assertIn("risk-badge", html)
+        self.assertIn("pick-riskline", html)
+
+    def test_old_rows_without_labels_render_clean(self):
+        """老账本行没有 trend/vol_level：不显示徽章、也不要冒出一行"逆势 0"。"""
+        old = self._row()
+        old.pop("trend")
+        old.pop("vol_level")
+        self.assertEqual(self.rep._risk_badges(old), "")
+        self.assertNotIn("逆势 0", self.rep._risk_line([old]))
+
+    def test_m6_marks_risk_in_push(self):
+        line = self.psh._pick_lines(1, self._row())[0]
+        self.assertIn("逆势", line)
+        self.assertIn("高波动", line)
+
+    def test_m9_renders_risk_badges(self):
+        app = (ROOT / "modules/m9_web/web/app.js").read_text(encoding="utf-8")
+        self.assertIn("risk-badge", app)
+        css = (ROOT / "modules/m9_web/web/style.css").read_text(encoding="utf-8")
+        self.assertIn(".risk-badge.risk-warn", css)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
