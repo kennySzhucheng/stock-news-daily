@@ -1,0 +1,1054 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>股市情报日报 · 2026-10-21 盘前</title>
+<style>
+:root{
+  /* 财经媒体风 · 浅色纸面主调：暖白底 / 墨色字 / 细线分割，
+     红绿只上数字，强调色用墨蓝（红绿已被涨跌独占） */
+  --bg:#f7f4ee; --bg2:#efeae1; --card:#ffffff; --border:#ddd6c9;
+  --ink:#1f1d1a; --text:#2b2822; --muted:#7a746a;
+  --accent:#1e4d7a; --warn:#9a6b12;
+  --up:#c4362b; --down:#12734f; --flat:#7a746a;
+  --confirmed:#1e4d7a; --unverified:#9a6b12;
+  --serif:Georgia,"Times New Roman","Songti SC","SimSun","Noto Serif CJK SC",
+    "Source Han Serif SC",serif;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",
+    "Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#15161a; --bg2:#1c1d22; --card:#1c1d22; --border:#2e2f36;
+    --ink:#f0ede6; --text:#ddd9d1; --muted:#97918a;
+    --accent:#7fb0e0; --warn:#e0a94e;
+    --up:#ff6b5e; --down:#3fbd8a; --flat:#97918a;
+    --confirmed:#7fb0e0; --unverified:#e0a94e;
+  }
+}
+*{box-sizing:border-box; margin:0; padding:0;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  background:var(--bg); color:var(--text);
+  font-family:var(--sans);
+  line-height:1.78; font-size:16px; padding:0 0 48px;
+  max-width:760px; margin:0 auto;
+}
+a{color:var(--accent); text-decoration:none; word-break:break-all;}
+/* 报头：报纸双线（粗上细下），无色块无 emoji */
+header.hero{
+  padding:0 16px 8px; background:var(--bg);
+  border-top:4px solid var(--ink); border-bottom:1px solid var(--ink);
+}
+header.hero .kicker{
+  font:12px/1.6 var(--sans); letter-spacing:.18em; color:var(--muted);
+  padding-top:14px;
+}
+header.hero h1{
+  font-family:var(--serif); font-size:26px; font-weight:700;
+  letter-spacing:.02em; line-height:1.25;
+}
+header.hero .date{
+  color:var(--muted); font-size:12.5px; letter-spacing:.06em;
+  margin-top:8px; padding-top:6px; border-top:1px solid var(--border);
+}
+@media (min-width:600px){
+  header.hero h1{font-size:32px;}
+}
+.summary-box{
+  margin:16px 16px 0; padding:14px 16px; background:var(--bg2);
+  border-top:1px solid var(--border); border-bottom:1px solid var(--border);
+  font-size:16px;
+}
+main{padding:0 12px;}
+section.block{margin:24px 8px;}
+section.block > h2,
+section.block > details > summary > h2{
+  font-family:var(--serif); font-size:18px; font-weight:700;
+  margin-bottom:12px; padding-bottom:8px;
+  border-bottom:1px solid var(--border);
+  counter-increment:sec;
+}
+/* 版块序号：纯 CSS 计数（01 02 03），不动模板结构。
+   **计数器必须在 main 上 reset 一次**（2026-10-08 修）：没有这句时每个 h2 各自
+   从 0 起算，全篇序号都是「01」——日报里四个版块全写 01，索引页新加的两个标题
+   也会各写一个 01。这一句让上面那句注释里的「01 02 03」真正成立。 */
+main{counter-reset:sec;}
+section.block > h2::before,
+section.block > details > summary > h2::before{
+  content:counter(sec,decimal-leading-zero) " ";
+  font:400 12px/1 var(--sans); color:var(--muted);
+  letter-spacing:.1em; margin-right:8px; vertical-align:2px;
+}
+@media (min-width:600px){
+  section.block > h2,
+  section.block > details > summary > h2{font-size:20px;}
+}
+/* 分板块新闻默认折叠：它占全文八成篇幅（实测 09-24 盘后 24888/31592 字），
+   展开着会把真正有判断价值的前四块内容淹在几十屏新闻下面 */
+section.block > details > summary{
+  cursor:pointer; list-style:none; display:flex; align-items:center;
+  justify-content:space-between; gap:10px; padding:4px 0;
+  user-select:none; -webkit-tap-highlight-color:transparent;
+}
+section.block > details > summary::-webkit-details-marker{display:none;}
+section.block > details > summary::marker{content:"";}
+section.block > details > summary > h2{margin-bottom:0;}
+section.block > details > summary:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
+.fold-hint{font-size:13px; color:var(--muted); white-space:nowrap;}
+.fold-label::after{content:"展开";}
+details[open] > summary .fold-label::after{content:"收起";}
+/* 折叠箭头：CSS 三角，替代 ▸ 字符 */
+.fold-arrow{
+  display:inline-block; width:0; height:0; margin-left:6px;
+  border-left:5px solid currentColor; border-top:4px solid transparent;
+  border-bottom:4px solid transparent; transition:transform .15s ease;
+}
+details[open] > summary .fold-arrow{transform:rotate(90deg);}
+.news-group{margin-bottom:18px;}
+.news-group h3{
+  font-family:var(--serif); font-size:15.5px; color:var(--ink); font-weight:700;
+  margin:14px 0 8px; display:flex; align-items:center; gap:8px;
+}
+.news-group h3 .count{
+  background:none; color:var(--muted); font:400 12px var(--sans);
+  padding:0; border:0;
+}
+/* 新闻条目流：细线分隔，非卡片 */
+.news-card{
+  background:transparent; border:0; border-bottom:1px solid var(--border);
+  padding:14px 0; margin-bottom:0;
+}
+.news-card:last-of-type{border-bottom:0;}
+.news-text{font-size:15px; word-break:break-word;}
+.news-meta{
+  display:flex; flex-wrap:wrap; align-items:center; gap:6px;
+  margin-top:8px; font-size:13px; color:var(--muted);
+}
+.badge{
+  display:inline-block; font-size:12px; padding:1px 7px;
+  border-radius:2px; line-height:1.5; white-space:nowrap;
+}
+.badge.confirmed{background:none; color:var(--confirmed); border:1px solid var(--confirmed);}
+.badge.unverified{background:none; color:var(--unverified); border:1px solid var(--unverified);}
+/* confirmed 徽章后的来源清单：沿用页面 token（--muted），不引入新颜色。
+   .news-meta 已是 flex-wrap，手机上整段会折到下一行，不会撑破版心。 */
+.src-list{font-size:12px; color:var(--muted); line-height:1.5; min-width:0; overflow-wrap:anywhere;}
+/* 跨天事件追踪标记（2026-10-05，M2 的 continuing）：high 是"确认了同一事件在
+   持续发酵"，low 只是"疑似"，所以 low 用更弱的样式（灰、无边框强调）。
+   只用既有 token（--accent / --muted / --border），不引入新颜色。 */
+.badge.continuing{background:none; color:var(--accent); border:1px solid var(--accent);}
+.badge.continuing.weak{color:var(--muted); border-color:var(--border);}
+.badge.senti{border:1px solid var(--border);}
+.badge.senti.up{color:var(--up); border-color:var(--up); background:none;}
+.badge.senti.down{color:var(--down); border-color:var(--down); background:none;}
+.badge.senti.flat{color:var(--flat);}
+.tag{
+  font-size:12px; padding:1px 6px; border-radius:2px;
+  background:var(--bg2); border:0; color:var(--muted);
+}
+.tag.stock{color:var(--accent); border:1px solid var(--accent); background:none;}
+.src-link{font-size:13px;}
+.table-wrap{overflow-x:auto; -webkit-overflow-scrolling:touch; border-radius:0; border:1px solid var(--border);}
+table.quote-table{width:100%; border-collapse:collapse; background:var(--bg); font-size:14px; min-width:420px; font-variant-numeric:tabular-nums;}
+table.quote-table th, table.quote-table td{
+  padding:10px 12px; text-align:left; border-bottom:1px solid var(--border);
+  white-space:nowrap;
+}
+table.quote-table thead th{
+  background:var(--bg2); color:var(--muted); font-weight:600; font-size:12px;
+  letter-spacing:.06em;
+}
+.q-name{font-weight:600;}
+.q-code{display:block; font-size:12px; color:var(--muted); font-weight:400;}
+.q-mkt{color:var(--muted); font-size:13px;}
+/* 非沪深 A 股单独一栏（2026-10-04）：降饱和 + 子标题说明，避免与主表混为一谈 */
+.muted-table{opacity:.72;}
+.q-sub-title{
+  margin:14px 0 8px; font-size:13px; font-weight:600; color:var(--muted);
+  border-top:1px solid var(--line); padding-top:10px;
+}
+.q-sub-note{font-weight:400; margin-left:8px;}
+.up{color:var(--up);} .down{color:var(--down);} .flat{color:var(--flat);}
+/* 市场分析正文：去卡片化，靠排版层次立结构 */
+.analysis{
+  background:transparent; border:0;
+  padding:0; font-size:15px;
+}
+.analysis h1,.analysis h2,.analysis h3{margin:16px 0 8px; line-height:1.4; font-family:var(--serif);}
+.analysis h1{font-size:20px;} .analysis h2{font-size:18px;} .analysis h3{font-size:16px;}
+.analysis p{margin:8px 0;}
+.analysis ul,.analysis ol{margin:8px 0 8px 22px;}
+.analysis li{margin:4px 0;}
+.analysis hr{border:none; border-top:1px solid var(--border); margin:16px 0;}
+.analysis .md-table{border-collapse:collapse; margin:12px 0; font-size:14px; display:block; overflow-x:auto; max-width:100%;}
+.analysis .md-table th,.analysis .md-table td{
+  border:1px solid var(--border); padding:8px 10px; text-align:left; vertical-align:top;
+}
+.analysis .md-table th{background:var(--bg2); white-space:nowrap;}
+.analysis strong{color:var(--ink);}
+/* 行内引用编号 [n] → 上标弱化；连排时补逗号避免数字粘连误读 */
+.cite-n{font-size:.72em; color:var(--muted); letter-spacing:.02em;
+  vertical-align:super; line-height:1;}
+.cite-n + .cite-n::before{content:",";}
+/* 风险声明：双线规线页脚 */
+footer.risk{
+  margin:28px 8px 8px; padding:16px 0 8px; background:transparent;
+  border:0; border-top:3px double var(--ink); border-radius:0;
+  font-size:13px; color:var(--muted); line-height:1.6;
+}
+footer.risk h3{font-family:var(--serif); font-size:14px; color:var(--ink); margin-bottom:6px;}
+.muted{color:var(--muted);} .small{font-size:13px;} .empty{color:var(--muted); padding:12px 0;}
+.index-item{
+  display:block; background:transparent; border:1px solid var(--border);
+  border-radius:0; padding:14px 16px; margin-bottom:10px; color:var(--text);
+}
+.index-item .d{font-weight:600; font-family:var(--serif); font-size:16px;}
+.index-item .s{color:var(--muted); font-size:13px;}
+.latest-item{border-top:1px solid var(--ink); border-bottom:1px solid var(--ink); margin-bottom:18px;}
+/* 索引页底部：网页版门户入口 */
+.web-entry{
+  display:block; color:var(--text); text-decoration:none;
+  border:1px solid var(--border); border-left:3px solid var(--accent);
+  border-radius:0; padding:14px 16px; margin-top:22px;
+}
+.web-entry .d{font-weight:600; font-family:var(--serif); font-size:16px; color:var(--ink);}
+.web-entry .s{color:var(--muted); font-size:13px; margin-top:3px;}
+.web-entry .go{color:var(--accent); font-size:13px; margin-top:8px;}
+.web-entry:hover .d{color:var(--accent);}
+
+/* 时段徽章：盘前 / 盘后 */
+.slot-badge{
+  display:inline-block; font-size:12px; padding:1px 7px; border-radius:2px;
+  margin-right:6px; vertical-align:1px; white-space:nowrap;
+}
+.slot-badge.am{background:none; color:var(--warn); border:1px solid var(--warn);}
+.slot-badge.pm{background:none; color:var(--accent); border:1px solid var(--accent);}
+
+/* 定时延迟提示条 */
+.delay-banner{
+  margin:12px 16px 0; padding:10px 14px; border-radius:0;
+  background:var(--bg2); border:0; border-left:3px solid var(--warn);
+  font-size:13px; line-height:1.6; color:var(--text);
+}
+.delay-banner b{color:var(--warn);}
+
+/* 顶部版块跳转：竖线分隔的文字索引（报刊目录式），非胶囊 */
+nav.toc{
+  display:flex; gap:0; padding:10px 16px; background:var(--bg);
+  border-bottom:1px solid var(--border); overflow-x:auto;
+  -webkit-overflow-scrolling:touch;
+}
+nav.toc a{
+  font-size:13px; padding:4px 10px; white-space:nowrap;
+  background:none; border:0; color:var(--text);
+}
+nav.toc a:first-child{padding-left:0;}
+nav.toc a + a{border-left:1px solid var(--border);}
+nav.toc a:hover{color:var(--accent);}
+section.block{scroll-margin-top:8px;}
+section.block > h2{display:flex; align-items:center; gap:8px;}
+.h2-count{
+  font-size:12.5px; font-weight:400; color:var(--muted);
+  background:none; border:0; padding:0;
+}
+
+/* 候选观察清单（M10）。折叠的 h3 需要自己一份标题样式 —— 上面那条
+   `section.block > details > summary > h2` 只管 h2，h3 拿不到。 */
+section.block > details > summary > h3{
+  font-family:var(--serif); font-size:16px; font-weight:700; margin-bottom:0;
+  padding-bottom:6px; border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:8px;
+}
+.pick-note{font-size:12.5px; color:var(--muted); line-height:1.6; margin:0 0 12px;}
+.pick-empty{font-size:13.5px; color:var(--muted); background:var(--bg2);
+  border:0; border-radius:0; padding:12px 14px;}
+.pick-card{background:transparent; border:0; border-bottom:1px solid var(--border);
+  border-radius:0; padding:14px 0; margin-bottom:0;}
+.pick-card:last-of-type{border-bottom:0;}
+.pick-head{display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:15px;}
+.pick-conf{font-size:11.5px; color:var(--muted); border:1px solid var(--border);
+  border-radius:2px; padding:1px 7px;}
+.pick-tag{font-size:11px; color:var(--accent); border:1px solid var(--accent);
+  border-radius:2px; padding:1px 6px;}
+/* 趋势/波动徽章（2026-10-20）：用颜色让"逆势/高波动"一眼可辨，不用读长句 */
+.risk-badge{font-size:11px; border-radius:2px; padding:1px 6px; margin-left:6px;
+  border:1px solid var(--border); color:var(--muted); background:transparent;}
+.risk-badge.risk-warn{color:#B23A2E; border-color:#B23A2E; background:#FBEDEA;}
+.risk-badge.risk-ok{color:#12734F; border-color:#12734F; background:#EAF6F1;}
+.risk-badge.risk-flat{color:#9A6B12; border-color:#D9B96A; background:#FBF3E2;}
+.risk-warn-text{color:#B23A2E;}
+.pick-riskline{margin:6px 0 2px; font-size:13px; color:var(--text);}
+/* 连续推荐标记（2026-10-05）：同名、相邻记录日 ≤3 自然日的行已合并成这一条。
+   与 .pick-tag 同版式（既有 token），但语义不同故单独一类，免得改 .pick-tag
+   时把"板块"标签一起改了。 */
+.pick-streak{font-size:11px; color:var(--warn); border:1px solid var(--warn);
+  border-radius:2px; padding:1px 6px;}
+.pick-logic{font-size:14px; line-height:1.65; margin:8px 0 6px;}
+.pick-inval{font-size:13px; line-height:1.6; margin:0; color:var(--muted);}
+.pick-inval b{color:var(--text);}
+/* 推翻条件核查（2026-10-05）：triggered 是"逻辑破产"，要一眼看见；
+   未核查/未触发/无法判断都归为弱提示。沿用既有 token（--up 在浅色里就是红）。 */
+.pick-inval-check{font-size:13px; line-height:1.6; margin:4px 0 0; color:var(--muted);}
+.pick-inval-check b{color:var(--text);}
+.pick-inval-check.inv-triggered{color:var(--up); border-left:3px solid currentColor;
+  padding-left:8px;}
+.pick-inval-check.inv-triggered b{color:var(--up);}
+.pick-inval-warn{color:var(--up) !important; font-weight:600;}
+.pick-foot{font-size:12px; color:var(--muted); margin-top:8px;
+  display:flex; flex-wrap:wrap; gap:6px; align-items:center;}
+.pick-ref{background:var(--bg2); border:0;
+  border-radius:2px; padding:0 5px;}
+/* 回填明细：逐条列出，跑输的与跑赢的同版式同字号 */
+.pick-row{background:transparent; border:0; border-bottom:1px solid var(--border);
+  border-radius:0; padding:12px 0; margin-bottom:0;}
+.pick-row:last-of-type{border-bottom:0;}
+.pick-row-head{font-size:13px; display:flex; flex-wrap:wrap; gap:6px; align-items:center;}
+.pick-base{font-size:12px; color:var(--muted);}
+.pick-tiers{display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;}
+.pick-tier{flex:1 1 84px; background:var(--bg2); border:1px solid var(--border);
+  border-radius:0; padding:6px 8px; font-size:13px; display:flex;
+  flex-direction:column; gap:2px; font-variant-numeric:tabular-nums;}
+.pick-tier-k{font-size:11px; color:var(--muted);}
+.pick-alpha{font-size:11.5px; color:var(--muted);}
+.pick-pending{font-size:12px; color:var(--muted);}
+.pick-lag{font-size:10.5px; color:var(--muted); border:1px solid var(--border);
+  border-radius:2px; padding:0 5px; margin-left:4px;}
+.pick-stats{font-size:13px; background:var(--bg2); border:0;
+  border-radius:0; padding:8px 12px; margin:0 0 10px; line-height:1.7;}
+/* 候选分组（2026-10-04 盘前通道）：盘前（今日可执行）在前、盘后（收盘复盘后记录）
+   在后；两组都有时才渲染标题（只有一组时没有可比对象）。沿用版块标题的衬线字号
+   与细线，不引入新颜色。 */
+.pick-group{margin-top:14px;}
+.pick-group-title{
+  font-family:var(--serif); font-size:15.5px; font-weight:700; color:var(--ink);
+  margin:14px 0 8px; padding-bottom:6px; border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:8px;
+}
+/* 盘前条目独有的两行：关注区间 / 触发条件。字段为空串时整行不渲染，
+   不会留下「关注区间：」后面空着的一行。 */
+.pick-plan{font-size:13px; line-height:1.65; margin:0 0 4px;}
+.pick-plan b{color:var(--text);}
+
+/* 索引页：按日期分组 */
+.day-group{
+  background:transparent; border:0; border-bottom:1px solid var(--border);
+  border-radius:0; padding:14px 0; margin-bottom:0;
+}
+.day-group:last-of-type{border-bottom:0;}
+.day-date{font-family:var(--serif); font-weight:700; font-size:17px; margin-bottom:8px;}
+.day-links{display:flex; flex-wrap:wrap; gap:8px;}
+.slot-link{
+  display:flex; align-items:center; gap:8px; flex:1 1 120px;
+  padding:8px 12px; border-radius:0; background:var(--bg2);
+  border:1px solid var(--border); color:var(--text); font-size:14px;
+}
+.slot-link.am{border-left:3px solid var(--unverified);}
+.slot-link.pm{border-left:3px solid var(--accent);}
+.slot-link.na{border-left:3px solid var(--border);}
+.slot-link.na .slot-name{color:var(--muted);}
+.slot-link .slot-go{margin-left:auto; color:var(--muted); font-size:12px;}
+.day-latest{margin-top:8px; font-size:13px; text-align:right;}
+
+/* 索引页「今日速览」（2026-10-08）：手机上打开首页要一眼看到"今天发生了什么"。
+   窄屏（320~430）用两列小格子 + 卡片，**不用宽表格**，所以不会横向滚动。
+   配色与字号全部沿用上面的 token 与衬线标题，不引入新颜色。 */
+.brief-concl{
+  margin:0 0 12px; padding:12px 14px; background:var(--bg2);
+  border-left:3px solid var(--accent); font-size:15px; line-height:1.7;
+  overflow-wrap:anywhere;
+}
+.brief-bias{
+  display:inline-block; font-size:12px; padding:1px 8px; border-radius:2px;
+  margin-right:8px; vertical-align:1px; white-space:nowrap;
+  border:1px solid currentColor;
+}
+.brief-bias.up{color:var(--up);}
+.brief-bias.down{color:var(--down);}
+.brief-bias.flat{color:var(--flat);}
+.brief-grid{display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:0;}
+.brief-cell{
+  background:var(--bg2); border:1px solid var(--border); padding:8px 10px;
+  min-width:0;
+}
+.brief-cell .k{font-size:12px; color:var(--muted);}
+.brief-cell .v{
+  font-family:var(--serif); font-size:20px; font-weight:700; color:var(--ink);
+  line-height:1.35; font-variant-numeric:tabular-nums; overflow-wrap:anywhere;
+}
+.brief-cell .v.na{font-size:14px; font-weight:400; color:var(--muted);}
+.brief-sub{
+  font-family:var(--serif); font-size:15px; font-weight:700; color:var(--ink);
+  margin:16px 0 8px; padding-bottom:6px; border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:8px;
+}
+.brief-pick{border-bottom:1px solid var(--border); padding:10px 0;}
+.brief-pick:last-of-type{border-bottom:0;}
+.brief-pick .bp-head{
+  display:flex; align-items:center; gap:6px; flex-wrap:wrap; font-size:14.5px;
+}
+.brief-zone{
+  font-size:12.5px; color:var(--muted); line-height:1.6; margin-top:5px;
+  overflow-wrap:anywhere;
+}
+.brief-links{display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:16px;}
+.brief-link{
+  display:block; min-width:0; padding:10px 12px; background:var(--card);
+  border:1px solid var(--border); border-left:3px solid var(--accent); color:var(--text);
+}
+.brief-link .t{display:block; font-size:14px; font-weight:600; color:var(--ink);}
+.brief-link .s{display:block; font-size:12px; color:var(--muted); margin-top:2px;}
+.brief-link:hover .t{color:var(--accent);}
+@media (min-width:600px){
+  .brief-grid{grid-template-columns:repeat(4,1fr);}
+  .brief-links{grid-template-columns:repeat(3,1fr);}
+}
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="kicker">STOCK NEWS DAILY</div>
+  <h1>股市情报日报</h1>
+  <div class="date">
+    <span class="slot-badge am">盘前</span>
+    2026-10-21 · AI 自动生成 · 仅供参考
+  </div>
+</header>
+
+<nav class="toc">
+  <a href="#market">市场分析</a>
+  <a href="#picks">候选清单</a>
+  <a href="#quotes">个股行情</a>
+  <a href="#news">分板块新闻</a>
+</nav>
+
+
+
+<div class="summary-box">今日市场：中性偏谨慎（置信度:中）</div>
+
+<main>
+  <section class="block" id="market">
+    <h2>市场分析</h2>
+    <div class="analysis"><h1 class='md-h1'>今日市场分析</h1>
+<h2 class='md-h2'>一、市场情绪概览</h2>
+<p>今日新闻面呈现&quot;政策暖风+结构分化&quot;特征：金融街论坛释放的稳市信号被多家机构解读为积极（<sup class="cite-n">10</sup>），北交所市值配售改革预期带动北证50单日涨近4%（<sup class="cite-n">161</sup>），但债市被判断为&quot;缓慢偏强、短期或回撤&quot;（<sup class="cite-n">1</sup>），且多条行业新闻带有规范整顿色彩（<sup class="cite-n">2</sup><sup class="cite-n">4</sup>）。海外方面日韩股市高开（<sup class="cite-n">115</sup><sup class="cite-n">118</sup><sup class="cite-n">119</sup>），但美联储10月维持利率不变概率83.9%（<sup class="cite-n">100</sup>），外部流动性预期偏紧。</p>
+<p>结论：<strong>中性偏谨慎</strong>（置信度:中）</p>
+<h2 class='md-h2'>二、值得关注的板块（2-4 个）</h2>
+<h3 class='md-h3'>半导体设备</h3>
+<ul>
+<li>新闻依据：<sup class="cite-n">78</sup><sup class="cite-n">170</sup></li>
+</ul>
+<ul>
+<li>逻辑链：中信建投研报援引SEMI预测，2026年全球半导体制造设备销售额创1659亿美元历史新高、同比+23.2%，并称增长持续至2028年（<sup class="cite-n">78</sup>）；同一研报另提到&quot;全球半导体设备零部件正经历历史罕见全链条涨价潮&quot;（<sup class="cite-n">170</sup>）→ 行业景气度与涨价逻辑若被市场认可，可能提升该板块的订单与盈利预期关注度。</li>
+</ul>
+<ul>
+<li>（置信度:中，因<sup class="cite-n">170</sup>为unve单源，<sup class="cite-n">78</sup>为conf多源）</li>
+</ul>
+<h3 class='md-h3'>液冷</h3>
+<ul>
+<li>新闻依据：<sup class="cite-n">76</sup></li>
+</ul>
+<ul>
+<li>逻辑链：中信建投判断&quot;兆瓦级液冷落地，行业进入标准化放量新阶段&quot;，并给出&quot;四季度至2027年一季度是液冷板块业绩分水岭&quot;的时间判断（<sup class="cite-n">76</sup>）→ 若标准化放量兑现，代工链利润可能先于品牌链体现，构成板块内部分化的观察线索。</li>
+</ul>
+<ul>
+<li>（置信度:中，单一券商研报来源，属conf但仅一家机构观点）</li>
+</ul>
+<h3 class='md-h3'>创新药 / ADC</h3>
+<ul>
+<li>新闻依据：<sup class="cite-n">81</sup><sup class="cite-n">88</sup><sup class="cite-n">35</sup></li>
+</ul>
+<ul>
+<li>逻辑链：发改委披露前三季度创新药对外技术授权约1300亿美元、接近去年全年（<sup class="cite-n">88</sup>）；ADC赛道频现大额交易、跨国药企关注从单一产品向平台延伸（<sup class="cite-n">81</sup>）→ 对外授权金额与交易活跃度若持续，可能强化市场对创新药企研发价值兑现的预期。另<sup class="cite-n">35</sup>提及创新药高增长股（unve）。</li>
+</ul>
+<ul>
+<li>（置信度:中，<sup class="cite-n">88</sup><sup class="cite-n">81</sup>为conf，<sup class="cite-n">35</sup>为unve不单独支撑判断）</li>
+</ul>
+<h3 class='md-h3'>机器人（人形机器人）</h3>
+<ul>
+<li>新闻依据：<sup class="cite-n">77</sup><sup class="cite-n">84</sup></li>
+</ul>
+<ul>
+<li>逻辑链：中信建投称人形机器人&quot;T链积极推进审厂、量产&quot;，大客户产品发布及量产推进有望带来催化（<sup class="cite-n">77</sup>）；华泰证券称农业机器人进入&quot;可复制、可盈利&quot;新阶段（<sup class="cite-n">84</sup>）→ 量产与审厂进展若被证实，可能影响供应链相关公司的订单预期。</li>
+</ul>
+<ul>
+<li>（置信度:中，均为券商研报观点，非公司公告）</li>
+</ul>
+<h2 class='md-h2'>三、新闻涉及的个股（仅列新闻中出现过的）</h2>
+<table class="md-table">
+<tr>
+<th>个股</th>
+<th>新闻要点</th>
+<th>关联点与不确定性</th>
+<th>置信度</th>
+</tr>
+<tr>
+<td>超微电脑</td>
+<td>初步业绩营收185-195亿美元，高于分析师平均预期150亿美元；毛利率12%-12.5%（<sup class="cite-n">16</sup>）</td>
+<td>业绩超预期为conf多源；但公司未说明为何提前披露初步数据，披露原因不明构成不确定性</td>
+<td>中</td>
+</tr>
+<tr>
+<td>中国巨石</td>
+<td>第三季度净利润同比增173%；总经理判断电子布本轮景气价格高度和持续时间可能超以往周期（<sup class="cite-n">25</sup>）</td>
+<td>业绩数据与行业判断同源；&quot;超以往周期&quot;为管理层判断，非已实现事实</td>
+<td>中</td>
+</tr>
+<tr>
+<td>和黄医药</td>
+<td>与葛兰素史克的KRAS-EGFR抗体偶联疗法中国以外地区许可协议完成交易（<sup class="cite-n">21</sup>）</td>
+<td>交易完成属确定性事件；但对业绩的实际贡献金额新闻未披露</td>
+<td>中</td>
+</tr>
+<tr>
+<td>中国生物制药</td>
+<td>TQC2731注射液（TSLP单抗）慢性鼻窦炎伴鼻息肉维持治疗III期注册临床完成全部入组（<sup class="cite-n">24</sup>）</td>
+<td>临床进度事件；后续数据读出时间与结果新闻未提及</td>
+<td>中</td>
+</tr>
+<tr>
+<td>美的集团、中国平安、贵州茅台</td>
+<td>注销式回购金额分别超283亿、近110亿、50亿以上（<sup class="cite-n">18</sup>）</td>
+<td>回购注销为conf；但回购规模是历史累计口径，非新增信号</td>
+<td>中</td>
+</tr>
+<tr>
+<td>澜起科技</td>
+<td>2026年第三季度业绩预增自愿性披露（<sup class="cite-n">60</sup>）</td>
+<td>仅公告标题，预增幅度未在新闻中给出</td>
+<td>低</td>
+</tr>
+<tr>
+<td>天齐锂业</td>
+<td>2026年前三季度业绩预告（<sup class="cite-n">61</sup>）</td>
+<td>仅公告标题，盈亏方向与幅度未披露</td>
+<td>低</td>
+</tr>
+<tr>
+<td>英伟达 / Firmus</td>
+<td>英伟达洽谈向澳大利亚AI云服务商Firmus投资数亿美元，后者此前撤回IPO（<sup class="cite-n">29</sup><sup class="cite-n">31</sup><sup class="cite-n">33</sup><sup class="cite-n">34</sup><sup class="cite-n">95</sup>）</td>
+<td>多源报道但均为&quot;洽谈&quot;阶段；新闻同时提示这类neocloud商业模式尚未验证、承压资金压力</td>
+<td>中</td>
+</tr>
+<tr>
+<td>速豹科技</td>
+<td>戴姆勒卡车前高管出任欧洲区执行副总裁（<sup class="cite-n">17</sup>）</td>
+<td>人事任命事件，对经营的量化影响未披露</td>
+<td>低</td>
+</tr>
+<tr>
+<td>数据港</td>
+<td>持股5%以上股东减持结果暨权益变动触及1%刻度（<sup class="cite-n">45</sup>）</td>
+<td>减持类公告，仅标题信息</td>
+<td>低</td>
+</tr>
+<tr>
+<td>中公教育</td>
+<td>股东部分股份将被司法拍卖（<sup class="cite-n">42</sup>）</td>
+<td>仅公告标题，拍卖规模未披露</td>
+<td>低</td>
+</tr>
+</table>
+<h2 class='md-h2'>四、风险提示</h2>
+<ol>
+<li><strong>新闻动向≠股价表现，已被消化的利好可能导致&quot;利好出尽&quot;</strong>。例如北交所市值配售消息公布后北证50已单日涨3.88%（<sup class="cite-n">161</sup>），半导体设备、液冷等板块的研报利好亦可能已部分反映在预期中；本报告无历史价格数据，无法判断当前位置。</li>
+</ol>
+<ol>
+<li><strong>单源待核实信息占比较高</strong>。本报告引用的<sup class="cite-n">7</sup><sup class="cite-n">8</sup><sup class="cite-n">9</sup><sup class="cite-n">10</sup><sup class="cite-n">25</sup><sup class="cite-n">26</sup><sup class="cite-n">35</sup>[76以外多数行业条目]等均为unve单源，其中<sup class="cite-n">10</sup>&quot;机构看好中国资产价值重估&quot;、<sup class="cite-n">26</sup>&quot;算力服务订单&quot;等属机构观点或研报转述，未经公司公告印证，解读偏差风险较大。</li>
+</ol>
+<ol>
+<li><strong>政策类新闻存在&quot;预期→落地&quot;的时滞与不确定性</strong>。专精特新赋能中心（<sup class="cite-n">7</sup><sup class="cite-n">169</sup>）、广告产业&quot;十五五&quot;规划（<sup class="cite-n">9</sup>）、汽车产品研发测试验证征求意见稿（<sup class="cite-n">4</sup>）均处于通知/征求意见阶段，最终执行口径与受益范围尚不明确。</li>
+</ol>
+<ol>
+<li><strong>海外流动性预期偏紧</strong>。美联储10月维持利率不变概率83.9%、12月累计加息25bp概率76.1%（<sup class="cite-n">100</sup>），中泰证券亦提示科技板块行情持续性需关注海外利率环境与全球风险偏好（<sup class="cite-n">79</sup>），外部变量可能压制成长板块估值情绪。</li>
+</ol>
+<ol>
+<li><strong>减持与司法拍卖类公告密集</strong>。新闻中出现数据港（<sup class="cite-n">45</sup>）、惠泰医疗（<sup class="cite-n">51</sup>）、奕瑞科技（<sup class="cite-n">59</sup>）、中公教育（<sup class="cite-n">42</sup>）等多条减持/拍卖类公告，虽均为单条标题信息，但集中出现值得纳入跟踪清单观察。</li>
+</ol>
+<hr>
+<p><em>本报告由 AI 自动生成，仅供参考，不构成任何投资建议。所有判断基于文中列出新闻，新闻解读可能存在偏差。市场有风险，投资需谨慎。</em></p></div>
+  </section>
+
+  <section class="block" id="picks">
+  <h2>候选观察清单<span class="h2-count">今日 3 条</span></h2>
+  <p class="pick-riskline"><b class="risk-warn-text">逆势 3</b> · <b class="risk-warn-text">高波动 2</b> · 一手合计约 6,218 元　⚠ 逆势/高波动需更谨慎</p>
+  <p class="pick-note">盘前 08:10 那批是<b>推荐</b>：每条都写明推荐的三件事
+  （新闻依据 → 传导机制 → 预期差），并给出<b>关注区间</b>与<b>触发条件</b>；
+  收盘后那批是当日复盘记录。每条都带<b>推翻条件</b>与新闻依据，其后续表现按
+  T+1/T+3/T+5 原样回填，<b>含跑输的</b>（超额同时给沪深300 与中证1000）。
+  <b>不是买入指令</b>，决策权归您本人。</p>
+  <div class="pick-card">
+  <div class="pick-head"><b>中国巨石</b><span class="risk-badge risk-warn" title="60 日跑输或明显跌破 MA60">逆势</span><span class="risk-badge risk-warn" title="60 日年化波动 > 45%">高波动</span>
+    <span class="pick-conf">置信度 中</span></div>
+  <p class="pick-logic"><b>为什么推荐</b>：为什么推荐：①依据 [25] 公司三季报披露前三季度营收180.78亿元同比增30.02%、第三季度净利润同比增173%，总经理同时判断电子布本轮景气在价格高度和持续时间上可能超以往周期；②传导机制是电子布/玻纤提价直接抬升单位产品毛利，叠加销量增长，量价齐升推动季度利润弹性远大于收入增速，若四季度价格维持则盈利预测存在上修空间；③预期差在于市场此前多把玻纤当作周期底部品种，对涨价持续性和幅度定价不足，管理层“超以往周期”的判断尚未被卖方一致预期充分反映。</p>
+  <p class="pick-plan"><b>关注区间</b>：33.5~35.5</p><p class="pick-plan"><b>触发条件</b>：开盘半小时站稳34.7以上，且当日成交额较上一交易日同期放大两成以上</p><p class="pick-inval"><b>推翻条件</b>：若盘中跌破33.0且成交额较昨日同期萎缩，或公司后续公告显示电子布价格出现回落</p>
+  <p class="pick-inval-check muted">推翻条件核查：未核查</p>
+  <div class="pick-foot">基准 昨收 34.66
+    
+    · 新闻依据 <span class="pick-ref">[25]</span></div>
+</div><div class="pick-card">
+  <div class="pick-head"><b>新疆众和</b><span class="risk-badge risk-warn" title="60 日跑输或明显跌破 MA60">逆势</span><span class="risk-badge risk-flat" title="60 日年化波动 30%~45%">波动中</span>
+    <span class="pick-conf">置信度 中</span></div>
+  <p class="pick-logic"><b>为什么推荐</b>：为什么推荐：①依据 [62] 公司发布2026年前三季度业绩预增公告，[82] 已有22家化工类上市公司披露前三季度预告、仅2家下滑、多数净利增幅超50%；②传导机制是业绩预增意味着前三季度利润已落袋，若主营电子铝箔/电极箔下游需求与价格维持，四季度盈利有望延续，预增公告本身会触发卖方上调全年盈利预测；③预期差在于该股昨收仅8.75元、绝对价格低，市场对预增公告的幅度与结构关注度不高，低价小市值品种在业绩兑现期往往存在补涨空间。</p>
+  <p class="pick-plan"><b>关注区间</b>：8.5~9.0</p><p class="pick-plan"><b>触发条件</b>：开盘半小时站稳8.8以上，且成交额较上一交易日同期放大</p><p class="pick-inval"><b>推翻条件</b>：若公司后续披露的预增幅度低于市场预期，或股价跌破8.4且成交额萎缩</p>
+  <p class="pick-inval-check muted">推翻条件核查：未核查</p>
+  <div class="pick-foot">基准 昨收 8.75
+    
+    · 新闻依据 <span class="pick-ref">[62]</span><span class="pick-ref">[82]</span></div>
+</div><div class="pick-card">
+  <div class="pick-head"><b>兖矿能源</b><span class="risk-badge risk-warn" title="60 日跑输或明显跌破 MA60">逆势</span><span class="risk-badge risk-warn" title="60 日年化波动 > 45%">高波动</span>
+    <span class="pick-conf">置信度 中</span></div>
+  <p class="pick-logic"><b>为什么推荐</b>：为什么推荐：①依据 [65] 公司发布2026年前三季度业绩预增公告，[103] 美国战略石油储备降至44年最低、两艘油轮在霍尔木兹海峡触雷，能源价格风险溢价上升；②传导机制是煤价与油价存在替代与联动，油价风险溢价抬升利好动力煤价格中枢，公司作为动力煤龙头在产量稳定的前提下，煤价每上涨一档直接转化为吨煤毛利与季度利润；③预期差在于市场当前更多关注油轮事件对原油的短期冲击，尚未把能源整体风险溢价传导至煤炭板块的盈利上修，且该股上一交易日跌2.65%，存在预期修复空间。</p>
+  <p class="pick-plan"><b>关注区间</b>：18.3~19.2</p><p class="pick-plan"><b>触发条件</b>：开盘半小时站稳18.8以上，且成交额较上一交易日同期放大</p><p class="pick-inval"><b>推翻条件</b>：若油价风险溢价快速回落、或公司公告显示前三季度预增幅度低于市场预期，或股价跌破18.0且量能萎缩</p>
+  <p class="pick-inval-check muted">推翻条件核查：未核查</p>
+  <div class="pick-foot">基准 昨收 18.77
+    
+    · 新闻依据 <span class="pick-ref">[65]</span><span class="pick-ref">[103]</span></div>
+</div><p class="pick-note">以上是 AI 依据当日新闻给出的<b>观察建议</b>（含关注区间与触发条件），<b>不是买入指令、不构成投资建议</b>；新闻≠股价，已被消化的利好可能“利好出尽”；每条都写了推翻条件，跑输的记录不会删。</p>
+  <p class="pick-stats">T+1 均超额 +0.96%（相对沪深300） / +0.99%（相对中证1000）· 中位 +0.00% · 35/61 跑赢 · 样本 61 条　T+3 均超额 +1.44%（相对沪深300） / +2.64%（相对中证1000）· 中位 -1.37% · 23/45 跑赢 · 样本 45 条　T+5 均超额 +1.78%（相对沪深300） / +4.27%（相对中证1000）· 中位 -2.44% · 22/39 跑赢 · 样本 39 条</p>
+  <p class="pick-stats pick-inval-warn">⚠️ 已复核 130 档中有 0 档逻辑破产（价格仍跑赢 0 档）—— 这类"蒙对"不计入判断能力（口径：本版块展示窗口内的往期回填）</p>
+  <p class="pick-note">超额同时给沪深300 与中证1000：候选偏中小盘，只用沪深300 会高估水平</p>
+  <details class="fold">
+  <summary>
+    <h3>往期候选回填<span class="h2-count">68 条</span></h3>
+    <span class="fold-hint"><span class="fold-label"></span><span class="fold-arrow"></span></span>
+  </summary>
+  <div class="pick-row">
+  <div class="pick-row-head">2026-10-20 · <b>永茂泰</b>
+    <span class="pick-base">基准 13.23</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><span class="pick-pending">T+1 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><span class="pick-pending">T+3 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告提前终止回购方案，或披露的回购金额触及下限1.5亿元后不再新增，则视为逻辑失效。</p>
+  <p class="pick-inval-check muted">推翻条件核查：未核查</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-20 · <b>宁夏建材</b>
+    <span class="pick-base">基准 12.11</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><span class="pick-pending">T+1 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><span class="pick-pending">T+3 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告终止回购方案，或后续披露的回购进度连续两个月零新增，则视为逻辑失效。</p>
+  <p class="pick-inval-check muted">推翻条件核查：未核查</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-20 · <b>中国电影</b>
+    <span class="pick-base">基准 14.33</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><span class="pick-pending">T+1 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><span class="pick-pending">T+3 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告否认参与该片发行，或该片内地上映档期发生变更/撤档，则视为逻辑失效。</p>
+  <p class="pick-inval-check muted">推翻条件核查：未核查</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-20 · <b>算力/人工智能基础设施</b><span class="pick-tag" title="板块指数，不是个股，不能直接买入">板块指数·非个股</span>
+    <span class="pick-base">基准 —</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><span class="pick-pending">T+1 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><span class="pick-pending">T+3 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若后续披露的智能算力规模增速回落至100%以下，或韩国Elice类AI基础设施新股破发情绪传导导致A股算力板块成交额连续两日萎缩，则视为逻辑失效。</p>
+  <p class="pick-inval-check muted">推翻条件核查：未核查</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-20 · <b>智能制造</b><span class="pick-tag" title="板块指数，不是个股，不能直接买入">板块指数·非个股</span>
+    <span class="pick-base">基准 —</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><span class="pick-pending">T+1 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><span class="pick-pending">T+3 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若工信部后续发布的新一代智能制造政策文件中未出现装备/工业软件相关实质性支持条款，或板块成交额连续两日萎缩，则视为逻辑失效。</p>
+  <p class="pick-inval-check muted">推翻条件核查：未核查</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-20 · <b>邮储银行</b>
+    <span class="pick-base">基准 5.68</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-0.53%</b><span class="pick-alpha">超额 沪深300 +0.01%</span><span class="pick-alpha">中证1000 -1.55%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><span class="pick-pending">T+3 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若银行板块整体冲高回落、邮储银行跌破5.55且成交额明显放大</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-20 · <b>科大讯飞</b>
+    <span class="pick-base">基准 36.12</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+2.55%</b><span class="pick-alpha">超额 沪深300 +3.09%</span><span class="pick-alpha">中证1000 +1.53%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><span class="pick-pending">T+3 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司后续公告修正业绩数据，或盘中跌破35.0且AI应用板块整体走弱</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-20 · <b>深科技</b>
+    <span class="pick-base">基准 28.25</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+1.59%</b><span class="pick-alpha">超额 沪深300 +2.13%</span><span class="pick-alpha">中证1000 +0.57%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><span class="pick-pending">T+3 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若盘中跌破27.0且存储板块整体成交额较昨日萎缩，或公司公告澄清投资进度延后</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-20 · <b>恒力石化</b>
+    <span class="pick-base">基准 15.74</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-1.52%</b><span class="pick-alpha">超额 沪深300 -0.98%</span><span class="pick-alpha">中证1000 -2.54%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><span class="pick-pending">T+3 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司披露的预增幅度低于市场预期，或盘中跌破15.2且化工板块整体走弱</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-19 · <b>航天彩虹</b>
+    <span class="pick-base">基准 19.25</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-1.82%</b><span class="pick-alpha">超额 沪深300 -1.28%</span><span class="pick-alpha">中证1000 -2.84%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><span class="pick-pending">T+3 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告澄清未取得相关出口许可，或披露无人机出口订单同比下滑，则话题关联失效</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-19 · <b>纽威数控</b>
+    <span class="pick-base">基准 12.86</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-2.72%</b><span class="pick-alpha">超额 沪深300 -2.18%</span><span class="pick-alpha">中证1000 -3.74%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><span class="pick-pending">T+3 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司后续公告修正业绩数据，或下一报告期营收/净利同比增速转负，则业绩景气逻辑被证伪</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-19 · <b>科德数控</b>
+    <span class="pick-base">基准 44.87</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+0.53%</b><span class="pick-alpha">超额 沪深300 +1.07%</span><span class="pick-alpha">中证1000 -0.49%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><span class="pick-pending">T+3 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司后续公告确认与凯众股份存在业务合作，或披露五轴机床订单大幅增长，则当前澄清口径被推翻</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-19 · <b>人工智能/算力基础设施</b><span class="pick-tag" title="板块指数，不是个股，不能直接买入">板块指数·非个股</span>
+    <span class="pick-base">基准 1664.84</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><span class="pick-pending">T+1 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><span class="pick-pending">T+3 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若创业板人工智能相关ETF连续两日转为净赎回，或半导体设备板块成交额连续两日萎缩，则资金面支撑逻辑被证伪</p>
+  <p class="pick-inval-check muted">推翻条件核查：未核查</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-19 · <b>渤海汽车</b>
+    <span class="pick-base">基准 3.82</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+0.79%</b><span class="pick-alpha">超额 沪深300 +0.70%</span><span class="pick-alpha">中证1000 +0.55%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><span class="pick-pending">T+3 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告增持计划终止或实际增持金额显著低于预期，或开盘后放量跌破3.70且全天成交额萎缩</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-19 · <b>格科微</b>
+    <span class="pick-base">基准 11.97</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+4.26%</b><span class="pick-alpha">超额 沪深300 +4.17%</span><span class="pick-alpha">中证1000 +4.02%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><span class="pick-pending">T+3 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告回购提议未获董事会通过或回购方案终止，或开盘后放量跌破11.5且全天成交额萎缩</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-19 · <b>恒力石化</b>
+    <span class="pick-base">基准 15.4</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+2.21%</b><span class="pick-alpha">超额 沪深300 +2.12%</span><span class="pick-alpha">中证1000 +1.97%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><span class="pick-pending">T+3 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司后续公告下修预增幅度，或开盘后放量跌破15.0且全天成交额低于昨日</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-19 · <b>华明装备</b>
+    <span class="pick-base">基准 18.85</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+1.22%</b><span class="pick-alpha">超额 沪深300 +1.13%</span><span class="pick-alpha">中证1000 +0.98%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><span class="pick-pending">T+3 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告回购计划终止或实际回购金额显著低于预期，或开盘后放量跌破18.0且全天成交额萎缩</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-16 · <b>睿创微纳</b>
+    <span class="pick-base">基准 164.77</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-4.24%</b><span class="pick-alpha">超额 沪深300 -4.33%</span><span class="pick-alpha">中证1000 -4.48%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><span class="pick-pending">T+3 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若正式三季报净利润增速低于预告区间下限，或半导体板块连续两日跑输大盘</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-16 · <b>桐昆股份</b>
+    <span class="pick-base">基准 20.26</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+3.36%</b><span class="pick-alpha">超额 沪深300 +3.27%</span><span class="pick-alpha">中证1000 +3.12%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><span class="pick-pending">T+3 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司正式披露的三季报净利润同比增速低于预告下限，或化纤板块成交额连续两日萎缩且龙头股回吐涨停涨幅</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-16 · <b>中科曙光</b>
+    <span class="pick-base">基准 70.48</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+4.94%</b><span class="pick-alpha">超额 沪深300 +4.85%</span><span class="pick-alpha">中证1000 +4.70%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><span class="pick-pending">T+3 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若业绩快报显示净利润同比下滑，或算力设备板块成交额连续两日萎缩</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-16 · <b>三孚新科</b>
+    <span class="pick-base">基准 82.38</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-4.58%</b><span class="pick-alpha">超额 沪深300 -4.67%</span><span class="pick-alpha">中证1000 -4.82%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><span class="pick-pending">T+3 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告澄清该设备尚未形成实际订单或收入，或AI服务器PCB产业链相关个股连续两日集体走弱</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-16 · <b>低空经济</b><span class="pick-tag" title="板块指数，不是个股，不能直接买入">板块指数·非个股</span>
+    <span class="pick-base">基准 1474.82</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+0.21%</b><span class="pick-alpha">超额 沪深300 +0.12%</span><span class="pick-alpha">中证1000 -0.03%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><span class="pick-pending">T+3 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若后续无新增地方或部委级低空经济政策落地，且板块成交额连续两日萎缩、龙头股涨停打开后回落</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-16 · <b>龙芯中科</b>
+    <span class="pick-base">基准 90.46</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-0.72%</b><span class="pick-alpha">超额 沪深300 -0.83%</span><span class="pick-alpha">中证1000 -0.77%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>+1.09%</b><span class="pick-alpha">超额 沪深300 +1.42%</span><span class="pick-alpha">中证1000 -0.23%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告增持计划终止或实际增持金额显著低于市场预期，或股价跌破88元且成交额持续萎缩</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-16 · <b>鹏鼎控股</b>
+    <span class="pick-base">基准 75.26</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-1.45%</b><span class="pick-alpha">超额 沪深300 -1.56%</span><span class="pick-alpha">中证1000 -1.50%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-1.87%</b><span class="pick-alpha">超额 沪深300 -1.54%</span><span class="pick-alpha">中证1000 -3.19%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告回购方案未获通过或回购金额显著低于预期，或股价跌破73元且成交额持续萎缩</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-16 · <b>长川科技</b>
+    <span class="pick-base">基准 219.56</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-2.34%</b><span class="pick-alpha">超额 沪深300 -2.45%</span><span class="pick-alpha">中证1000 -2.39%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-7.40%</b><span class="pick-alpha">超额 沪深300 -7.07%</span><span class="pick-alpha">中证1000 -8.72%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告回购方案未获通过或回购金额显著低于预期，或股价跌破215元且成交额持续萎缩</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-16 · <b>维信诺</b>
+    <span class="pick-base">基准 6.59</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-1.97%</b><span class="pick-alpha">超额 沪深300 -2.08%</span><span class="pick-alpha">中证1000 -2.02%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-2.28%</b><span class="pick-alpha">超额 沪深300 -1.95%</span><span class="pick-alpha">中证1000 -3.60%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告澄清该技术尚未进入客户量产导入阶段，或全天成交额较昨日萎缩且股价跌破6.4元</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-16 · <b>佰维存储</b>
+    <span class="pick-base">基准 154.0</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-0.34%</b><span class="pick-alpha">超额 沪深300 -0.45%</span><span class="pick-alpha">中证1000 -0.39%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>+3.33%</b><span class="pick-alpha">超额 沪深300 +3.66%</span><span class="pick-alpha">中证1000 +2.01%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告回购方案未获董事会通过或回购金额显著低于预期，或股价跌破148元且成交额持续萎缩</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-13 · <b>鑫源智造</b>
+    <span class="pick-base">基准 9.58</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+0.63%</b><span class="pick-alpha">超额 沪深300 +1.99%</span><span class="pick-alpha">中证1000 +2.31%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-0.73%</b><span class="pick-alpha">超额 沪深300 +1.73%</span><span class="pick-alpha">中证1000 +4.13%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-2.82%</b><span class="pick-alpha">超额 沪深300 +0.07%</span><span class="pick-alpha">中证1000 +0.83%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告称割草机器人小批量上市计划延期或取消，或互动平台不再披露推进进展，则视为证伪。</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-13 · <b>天永智能</b>
+    <span class="pick-base">基准 25.18</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-1.35%</b><span class="pick-alpha">超额 沪深300 +0.01%</span><span class="pick-alpha">中证1000 +0.33%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-1.71%</b><span class="pick-alpha">超额 沪深300 +0.75%</span><span class="pick-alpha">中证1000 +3.15%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-1.47%</b><span class="pick-alpha">超额 沪深300 +1.42%</span><span class="pick-alpha">中证1000 +2.18%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告称未与招标方签订正式合同或项目中标被取消，则视为证伪。</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-13 · <b>华工科技</b>
+    <span class="pick-base">基准 83.61</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-4.14%</b><span class="pick-alpha">超额 沪深300 -2.78%</span><span class="pick-alpha">中证1000 -2.46%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-9.46%</b><span class="pick-alpha">超额 沪深300 -7.00%</span><span class="pick-alpha">中证1000 -4.60%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-8.86%</b><span class="pick-alpha">超额 沪深300 -5.97%</span><span class="pick-alpha">中证1000 -5.21%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告增持计划终止或控股股东转为减持，则视为证伪。</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-13 · <b>中坚科技</b>
+    <span class="pick-base">基准 74.15</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-2.78%</b><span class="pick-alpha">超额 沪深300 -1.42%</span><span class="pick-alpha">中证1000 -1.10%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-0.47%</b><span class="pick-alpha">超额 沪深300 +1.99%</span><span class="pick-alpha">中证1000 +4.39%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>+6.68%</b><span class="pick-alpha">超额 沪深300 +9.57%</span><span class="pick-alpha">中证1000 +10.33%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告否认该子公司设立或澄清其不涉及智能机器人业务，则视为证伪。</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-13 · <b>PCB</b><span class="pick-tag" title="板块指数，不是个股，不能直接买入">板块指数·非个股</span>
+    <span class="pick-base">基准 3819.99</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-1.59%</b><span class="pick-alpha">超额 沪深300 -0.23%</span><span class="pick-alpha">中证1000 +0.09%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-6.00%</b><span class="pick-alpha">超额 沪深300 -3.54%</span><span class="pick-alpha">中证1000 -1.14%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若PCB板块成交额连续两日萎缩，或已披露三季报预喜的PCB龙头出现业绩不及预告区间下修，则视为逻辑证伪。</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-13 · <b>颀中科技</b>
+    <span class="pick-base">基准 14.77</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+0.88%</b><span class="pick-alpha">超额 沪深300 +1.17%</span><span class="pick-alpha">中证1000 +0.86%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-8.73%</b><span class="pick-alpha">超额 沪深300 -5.89%</span><span class="pick-alpha">中证1000 -3.85%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-10.56%</b><span class="pick-alpha">超额 沪深300 -7.91%</span><span class="pick-alpha">中证1000 -5.96%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告回购计划终止或回购金额极小，或开盘后放量跌破14.0</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-13 · <b>翰宇药业</b>
+    <span class="pick-base">基准 24.89</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+2.65%</b><span class="pick-alpha">超额 沪深300 +2.94%</span><span class="pick-alpha">中证1000 +2.63%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-1.37%</b><span class="pick-alpha">超额 沪深300 +1.47%</span><span class="pick-alpha">中证1000 +3.51%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>+5.66%</b><span class="pick-alpha">超额 沪深300 +8.31%</span><span class="pick-alpha">中证1000 +10.26%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若业绩预告显示净利润同比下滑，或开盘后放量跌破23.5</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-13 · <b>江苏北人</b>
+    <span class="pick-base">基准 37.61</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-1.62%</b><span class="pick-alpha">超额 沪深300 -1.33%</span><span class="pick-alpha">中证1000 -1.64%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-5.82%</b><span class="pick-alpha">超额 沪深300 -2.98%</span><span class="pick-alpha">中证1000 -0.94%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-4.36%</b><span class="pick-alpha">超额 沪深300 -1.71%</span><span class="pick-alpha">中证1000 +0.24%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告澄清海外订单占比预期不实，或盘中跌破35.5且无承接</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-13 · <b>天阳科技</b>
+    <span class="pick-base">基准 16.56</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-0.97%</b><span class="pick-alpha">超额 沪深300 -0.68%</span><span class="pick-alpha">中证1000 -0.99%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-6.88%</b><span class="pick-alpha">超额 沪深300 -4.04%</span><span class="pick-alpha">中证1000 -2.00%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-10.33%</b><span class="pick-alpha">超额 沪深300 -7.68%</span><span class="pick-alpha">中证1000 -5.73%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司后续公告说明该合同金额极小、对当期业绩无重大影响，或开盘后放量跌破16.0</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-13 · <b>华工科技</b>
+    <span class="pick-base">基准 82.58</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+1.25%</b><span class="pick-alpha">超额 沪深300 +1.54%</span><span class="pick-alpha">中证1000 +1.23%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-7.64%</b><span class="pick-alpha">超额 沪深300 -4.80%</span><span class="pick-alpha">中证1000 -2.76%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-8.91%</b><span class="pick-alpha">超额 沪深300 -6.26%</span><span class="pick-alpha">中证1000 -4.31%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告增持计划终止或减持，或开盘后放量跌破79.0</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-13 · <b>北方稀土</b>
+    <span class="pick-base">基准 34.85</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+3.50%</b><span class="pick-alpha">超额 沪深300 +3.79%</span><span class="pick-alpha">中证1000 +3.48%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>+0.83%</b><span class="pick-alpha">超额 沪深300 +3.67%</span><span class="pick-alpha">中证1000 +5.71%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>+1.09%</b><span class="pick-alpha">超额 沪深300 +3.74%</span><span class="pick-alpha">中证1000 +5.69%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司披露的预增幅度显著低于市场预期，或开盘后放量跌破33.5</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-12 · <b>金钼股份</b>
+    <span class="pick-base">基准 18.45</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+2.11%</b><span class="pick-alpha">超额 沪深300 +2.40%</span><span class="pick-alpha">中证1000 +2.09%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-3.09%</b><span class="pick-alpha">超额 沪深300 -0.25%</span><span class="pick-alpha">中证1000 +1.79%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-2.44%</b><span class="pick-alpha">超额 沪深300 +0.21%</span><span class="pick-alpha">中证1000 +2.16%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若钼精矿现货价格出现连续两周下跌，或公司后续公告显示Q4产销环比明显走弱，则业绩弹性逻辑被打破。</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-12 · <b>绿色动力</b>
+    <span class="pick-base">基准 8.32</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-0.84%</b><span class="pick-alpha">超额 沪深300 -0.55%</span><span class="pick-alpha">中证1000 -0.86%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-3.37%</b><span class="pick-alpha">超额 沪深300 -0.53%</span><span class="pick-alpha">中证1000 +1.51%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-0.84%</b><span class="pick-alpha">超额 沪深300 +1.81%</span><span class="pick-alpha">中证1000 +3.76%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司后续公告明确否认近期有具体并购标的或整合计划，或垃圾焚烧发电板块成交额连续两日萎缩，则整合预期落空。</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-12 · <b>中国人寿</b>
+    <span class="pick-base">基准 36.58</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-3.28%</b><span class="pick-alpha">超额 沪深300 -2.99%</span><span class="pick-alpha">中证1000 -3.30%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-5.55%</b><span class="pick-alpha">超额 沪深300 -2.71%</span><span class="pick-alpha">中证1000 -0.67%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-5.96%</b><span class="pick-alpha">超额 沪深300 -3.31%</span><span class="pick-alpha">中证1000 -1.36%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司后续披露的三季度报告显示新业务价值增速转负，或AI相关投入未带来理赔时效等运营指标的持续改善，则逻辑失效。</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-12 · <b>汽车</b><span class="pick-tag" title="板块指数，不是个股，不能直接买入">板块指数·非个股</span>
+    <span class="pick-base">基准 3752.86</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-0.32%</b><span class="pick-alpha">超额 沪深300 -0.03%</span><span class="pick-alpha">中证1000 -0.34%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-5.70%</b><span class="pick-alpha">超额 沪深300 -2.86%</span><span class="pick-alpha">中证1000 -0.82%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-2.94%</b><span class="pick-alpha">超额 沪深300 -0.29%</span><span class="pick-alpha">中证1000 +1.66%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若中汽协后续月度数据显示汽车出口量同比转负，或新能源汽车月度销量占比回落至50%以下，则景气延续逻辑被证伪。</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-12 · <b>人工智能/算力</b><span class="pick-tag" title="板块指数，不是个股，不能直接买入">板块指数·非个股</span>
+    <span class="pick-base">基准 —</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><span class="pick-pending">T+1 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><span class="pick-pending">T+3 未到期</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><span class="pick-pending">T+5 未到期</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若后续海外主要云厂商或芯片厂商下调AI资本开支指引，或国内AI大模型周度调用量出现连续两周环比下滑，则算力需求逻辑被削弱。</p>
+  <p class="pick-inval-check muted">推翻条件核查：未核查</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-12 · <b>特变电工</b>
+    <span class="pick-base">基准 17.74</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+0.90%</b><span class="pick-alpha">超额 沪深300 +1.58%</span><span class="pick-alpha">中证1000 +2.78%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-2.20%</b><span class="pick-alpha">超额 沪深300 +0.11%</span><span class="pick-alpha">中证1000 +1.30%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-2.76%</b><span class="pick-alpha">超额 沪深300 +0.64%</span><span class="pick-alpha">中证1000 +3.86%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若股价跌破17.4或公司后续公告回购规模远低于预期</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-12 · <b>宁波韵升</b>
+    <span class="pick-base">基准 10.88</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-0.64%</b><span class="pick-alpha">超额 沪深300 +0.04%</span><span class="pick-alpha">中证1000 +1.24%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-4.14%</b><span class="pick-alpha">超额 沪深300 -1.83%</span><span class="pick-alpha">中证1000 -0.64%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-9.01%</b><span class="pick-alpha">超额 沪深300 -5.61%</span><span class="pick-alpha">中证1000 -2.39%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若磁材板块整体走弱且该股跌破10.6，或稀土精矿现货报价回落</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-12 · <b>国泰海通</b>
+    <span class="pick-base">基准 16.81</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+2.32%</b><span class="pick-alpha">超额 沪深300 +3.00%</span><span class="pick-alpha">中证1000 +4.20%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>+0.83%</b><span class="pick-alpha">超额 沪深300 +3.14%</span><span class="pick-alpha">中证1000 +4.33%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-0.95%</b><span class="pick-alpha">超额 沪深300 +2.45%</span><span class="pick-alpha">中证1000 +5.67%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若券商板块集体走弱且该股跌破16.5，或评级机构后续下调展望</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-12 · <b>包钢股份</b>
+    <span class="pick-base">基准 2.12</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+0.00%</b><span class="pick-alpha">超额 沪深300 +0.68%</span><span class="pick-alpha">中证1000 +1.88%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-0.47%</b><span class="pick-alpha">超额 沪深300 +1.84%</span><span class="pick-alpha">中证1000 +3.03%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-1.42%</b><span class="pick-alpha">超额 沪深300 +1.98%</span><span class="pick-alpha">中证1000 +5.20%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若盘中跌破2.05且稀土永磁板块整体翻绿，或公司公告否认提价执行</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-12 · <b>中国联通</b>
+    <span class="pick-base">基准 4.3</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+0.93%</b><span class="pick-alpha">超额 沪深300 +1.61%</span><span class="pick-alpha">中证1000 +2.81%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>+2.33%</b><span class="pick-alpha">超额 沪深300 +4.64%</span><span class="pick-alpha">中证1000 +5.83%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>+1.86%</b><span class="pick-alpha">超额 沪深300 +5.26%</span><span class="pick-alpha">中证1000 +8.48%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司或行业公告显示用户净增大幅下滑，或股价跌破4.22</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-09 · <b>金开新能</b>
+    <span class="pick-base">基准 5.68</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-1.94%</b><span class="pick-alpha">超额 沪深300 -1.26%</span><span class="pick-alpha">中证1000 -0.06%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-2.82%</b><span class="pick-alpha">超额 沪深300 -0.51%</span><span class="pick-alpha">中证1000 +0.68%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-6.16%</b><span class="pick-alpha">超额 沪深300 -2.76%</span><span class="pick-alpha">中证1000 +0.46%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告终止或下调回购方案，或10月未继续实施回购</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-09 · <b>立讯精密</b>
+    <span class="pick-base">基准 47.59</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-2.67%</b><span class="pick-alpha">超额 沪深300 -1.99%</span><span class="pick-alpha">中证1000 -0.79%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-5.57%</b><span class="pick-alpha">超额 沪深300 -3.26%</span><span class="pick-alpha">中证1000 -2.07%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-6.14%</b><span class="pick-alpha">超额 沪深300 -2.74%</span><span class="pick-alpha">中证1000 +0.48%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司后续公告披露海外客户订单调整或相关管制措施实际影响经营</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-09 · <b>中亦科技</b>
+    <span class="pick-base">基准 30.55</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-1.77%</b><span class="pick-alpha">超额 沪深300 -1.09%</span><span class="pick-alpha">中证1000 +0.11%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-1.57%</b><span class="pick-alpha">超额 沪深300 +0.74%</span><span class="pick-alpha">中证1000 +1.93%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-6.35%</b><span class="pick-alpha">超额 沪深300 -2.95%</span><span class="pick-alpha">中证1000 +0.27%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告澄清未收到中标通知书或框架合同未实际签署</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-09 · <b>算力/AI算力</b><span class="pick-tag" title="板块指数，不是个股，不能直接买入">板块指数·非个股</span>
+    <span class="pick-base">基准 1210.89</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-0.09%</b><span class="pick-alpha">超额 沪深300 +0.59%</span><span class="pick-alpha">中证1000 +1.79%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-0.35%</b><span class="pick-alpha">超额 沪深300 +1.96%</span><span class="pick-alpha">中证1000 +3.15%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-4.07%</b><span class="pick-alpha">超额 沪深300 -0.67%</span><span class="pick-alpha">中证1000 +2.55%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若算力相关ETF连续两日净赎回或板块成交额持续萎缩</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-09 · <b>汽车</b><span class="pick-tag" title="板块指数，不是个股，不能直接买入">板块指数·非个股</span>
+    <span class="pick-base">基准 3802.62</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-1.31%</b><span class="pick-alpha">超额 沪深300 -0.63%</span><span class="pick-alpha">中证1000 +0.57%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-3.95%</b><span class="pick-alpha">超额 沪深300 -1.64%</span><span class="pick-alpha">中证1000 -0.45%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-4.95%</b><span class="pick-alpha">超额 沪深300 -1.55%</span><span class="pick-alpha">中证1000 +1.67%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若10月乘联会零售数据环比转负或汽车消费指数下期回落</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-09 · <b>本川智能</b>
+    <span class="pick-base">基准 67.54</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+9.55%</b><span class="pick-alpha">超额 沪深300 +9.39%</span><span class="pick-alpha">中证1000 +9.31%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>+24.37%</b><span class="pick-alpha">超额 沪深300 +25.17%</span><span class="pick-alpha">中证1000 +25.99%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>+14.02%</b><span class="pick-alpha">超额 沪深300 +17.37%</span><span class="pick-alpha">中证1000 +20.46%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告业绩预增幅度低于市场预期，或PCB板块成交额连续两日萎缩</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-09 · <b>新华保险</b>
+    <span class="pick-base">基准 56.12</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+1.39%</b><span class="pick-alpha">超额 沪深300 +1.23%</span><span class="pick-alpha">中证1000 +1.15%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-1.78%</b><span class="pick-alpha">超额 沪深300 -0.98%</span><span class="pick-alpha">中证1000 -0.16%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-6.68%</b><span class="pick-alpha">超额 沪深300 -3.33%</span><span class="pick-alpha">中证1000 -0.24%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告减持相关权益资产，或保险板块连续两日跑输大盘且成交额萎缩</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-09 · <b>广汇能源</b>
+    <span class="pick-base">基准 6.8</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+5.88%</b><span class="pick-alpha">超额 沪深300 +5.72%</span><span class="pick-alpha">中证1000 +5.64%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>+7.50%</b><span class="pick-alpha">超额 沪深300 +8.30%</span><span class="pick-alpha">中证1000 +9.12%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>+2.21%</b><span class="pick-alpha">超额 沪深300 +5.56%</span><span class="pick-alpha">中证1000 +8.65%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告业绩预增幅度显著低于市场预期，或布伦特原油跌破100美元/桶且煤化工产品价格同步走弱</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-09 · <b>保利发展</b>
+    <span class="pick-base">基准 5.77</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-2.08%</b><span class="pick-alpha">超额 沪深300 -2.24%</span><span class="pick-alpha">中证1000 -2.32%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-5.20%</b><span class="pick-alpha">超额 沪深300 -4.40%</span><span class="pick-alpha">中证1000 -3.58%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-8.67%</b><span class="pick-alpha">超额 沪深300 -5.32%</span><span class="pick-alpha">中证1000 -2.23%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若后续公布的周度新房成交数据同比转负，或公司公告销售金额同比继续下滑</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-09 · <b>东岳硅材</b>
+    <span class="pick-base">基准 14.29</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+20.01%</b><span class="pick-alpha">超额 沪深300 +19.85%</span><span class="pick-alpha">中证1000 +19.77%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>+34.71%</b><span class="pick-alpha">超额 沪深300 +35.51%</span><span class="pick-alpha">中证1000 +36.33%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>+28.20%</b><span class="pick-alpha">超额 沪深300 +31.55%</span><span class="pick-alpha">中证1000 +34.64%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告下修业绩预告区间，或DMC报价出现连续下调、有机硅板块成交额明显萎缩</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-08 · <b>陕西煤业</b>
+    <span class="pick-base">基准 26.6</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+1.39%</b><span class="pick-alpha">超额 沪深300 +1.23%</span><span class="pick-alpha">中证1000 +1.15%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>+3.27%</b><span class="pick-alpha">超额 沪深300 +4.07%</span><span class="pick-alpha">中证1000 +4.89%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>+5.64%</b><span class="pick-alpha">超额 沪深300 +8.99%</span><span class="pick-alpha">中证1000 +12.08%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告9月产量或发电量数据更正下修，或环渤海动力煤价格指数连续两周下跌。</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-08 · <b>广州港</b>
+    <span class="pick-base">基准 3.16</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-0.63%</b><span class="pick-alpha">超额 沪深300 -0.79%</span><span class="pick-alpha">中证1000 -0.87%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-0.95%</b><span class="pick-alpha">超额 沪深300 -0.15%</span><span class="pick-alpha">中证1000 +0.67%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-1.90%</b><span class="pick-alpha">超额 沪深300 +1.45%</span><span class="pick-alpha">中证1000 +4.54%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司披露9月吞吐量数据修正为负增长，或10月单月集装箱吞吐量同比转负。</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-08 · <b>华海药业</b>
+    <span class="pick-base">基准 16.65</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+4.80%</b><span class="pick-alpha">超额 沪深300 +4.64%</span><span class="pick-alpha">中证1000 +4.56%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>+1.32%</b><span class="pick-alpha">超额 沪深300 +2.12%</span><span class="pick-alpha">中证1000 +2.94%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-0.96%</b><span class="pick-alpha">超额 沪深300 +2.39%</span><span class="pick-alpha">中证1000 +5.48%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司披露业绩预增公告更正或下修，或正式三季报净利润增速低于预告下限。</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-08 · <b>中远海控</b>
+    <span class="pick-base">基准 16.6</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+0.42%</b><span class="pick-alpha">超额 沪深300 +0.26%</span><span class="pick-alpha">中证1000 +0.18%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>+3.25%</b><span class="pick-alpha">超额 沪深300 +4.05%</span><span class="pick-alpha">中证1000 +4.87%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>+1.99%</b><span class="pick-alpha">超额 沪深300 +5.34%</span><span class="pick-alpha">中证1000 +8.43%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告回购股份被减持或注销计划变更，或集运运价指数（SCFI）连续两周回落。</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-08 · <b>航运</b><span class="pick-tag" title="板块指数，不是个股，不能直接买入">板块指数·非个股</span>
+    <span class="pick-base">基准 1681.86</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+0.15%</b><span class="pick-alpha">超额 沪深300 -0.01%</span><span class="pick-alpha">中证1000 -0.09%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-1.12%</b><span class="pick-alpha">超额 沪深300 -0.32%</span><span class="pick-alpha">中证1000 +0.50%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-6.09%</b><span class="pick-alpha">超额 沪深300 -2.74%</span><span class="pick-alpha">中证1000 +0.35%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若马士基公告撤回或下调该附加费，或航运板块成交额连续两日萎缩且中远海能等龙头回吐今日涨幅。</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-08 · <b>核电</b><span class="pick-tag" title="板块指数，不是个股，不能直接买入">板块指数·非个股</span>
+    <span class="pick-base">基准 2667.26</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-0.33%</b><span class="pick-alpha">超额 沪深300 -0.49%</span><span class="pick-alpha">中证1000 -0.57%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>-1.16%</b><span class="pick-alpha">超额 沪深300 -0.36%</span><span class="pick-alpha">中证1000 +0.46%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>-6.05%</b><span class="pick-alpha">超额 沪深300 -2.70%</span><span class="pick-alpha">中证1000 +0.39%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若中国核电公告田湾7号机组并网或投运时间推迟，或融发核电等产业链公司披露锻压机调试再度延期。</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-08 · <b>玲珑轮胎</b>
+    <span class="pick-base">基准 10.49</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>-0.19%</b><span class="pick-alpha">超额 沪深300 +0.90%</span><span class="pick-alpha">中证1000 +2.01%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>+2.29%</b><span class="pick-alpha">超额 沪深300 +3.89%</span><span class="pick-alpha">中证1000 +6.09%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>+0.76%</b><span class="pick-alpha">超额 沪深300 +3.97%</span><span class="pick-alpha">中证1000 +6.15%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告埃及项目进度延期或投资规模缩减，或股价跌破10.3且成交持续萎缩</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-08 · <b>华海药业</b>
+    <span class="pick-base">基准 16.34</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+1.90%</b><span class="pick-alpha">超额 沪深300 +2.99%</span><span class="pick-alpha">中证1000 +4.10%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>+3.30%</b><span class="pick-alpha">超额 沪深300 +4.90%</span><span class="pick-alpha">中证1000 +7.10%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>+0.98%</b><span class="pick-alpha">超额 沪深300 +4.19%</span><span class="pick-alpha">中证1000 +6.37%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司后续补充公告显示预增幅度低于市场普遍预期，或股价跌破16.0且成交萎缩</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-08 · <b>五洲交通</b>
+    <span class="pick-base">基准 4.11</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+3.89%</b><span class="pick-alpha">超额 沪深300 +4.98%</span><span class="pick-alpha">中证1000 +6.09%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>+1.95%</b><span class="pick-alpha">超额 沪深300 +3.55%</span><span class="pick-alpha">中证1000 +5.75%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>+4.38%</b><span class="pick-alpha">超额 沪深300 +7.59%</span><span class="pick-alpha">中证1000 +9.77%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若公司公告控股股东增持计划终止或实际增持数量显著低于计划下限</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div><div class="pick-row">
+  <div class="pick-row-head">2026-10-08 · <b>中远海控</b>
+    <span class="pick-base">基准 16.37</span></div>
+  <div class="pick-tiers"><div class="pick-tier"><span class="pick-tier-k">T+1</span><b>+1.41%</b><span class="pick-alpha">超额 沪深300 +2.50%</span><span class="pick-alpha">中证1000 +3.61%</span></div><div class="pick-tier"><span class="pick-tier-k">T+3</span><b>+3.05%</b><span class="pick-alpha">超额 沪深300 +4.65%</span><span class="pick-alpha">中证1000 +6.85%</span></div><div class="pick-tier"><span class="pick-tier-k">T+5</span><b>+5.68%</b><span class="pick-alpha">超额 沪深300 +8.89%</span><span class="pick-alpha">中证1000 +11.07%</span></div></div>
+  <p class="pick-inval"><b>推翻条件</b>：若布伦特原油回落至95美元/桶下方且集运即期运价指数连续两日下行</p>
+  <p class="pick-inval-check muted">推翻条件：无法判断（窗口内无相关信息）</p>
+</div>
+  <p class="pick-note">收益率为<b>未复权</b>口径；区间内若发生除权除息，该档会被低估。
+  每档给两行超额：沪深300 与 中证1000；没有第二个口径的旧记录显示
+  「—」（不计入均值）。「补」表示实际打分日与到期日不同（周末/停牌/限流所致）。</p>
+</details>
+</section>
+  <section class="block" id="quotes">
+    <h2>个股行情一览<span class="h2-count">50 只（沪深 A 股 37 只 / 其它市场 13 只）</span></h2>
+    <div class="table-wrap"><table class="quote-table"><thead><tr><th>个股</th><th>市场</th><th>现价</th><th>涨跌</th></tr></thead><tbody><tr><td class='q-name'>昂立教育<span class='q-code'>600661</span></td><td class='q-mkt'>沪A</td><td class='q-price'>10.12</td><td class='up'>+10.00%</td></tr><tr><td class='q-name'>江顺科技<span class='q-code'>001400</span></td><td class='q-mkt'>深A</td><td class='q-price'>79.67</td><td class='up'>+9.12%</td></tr><tr><td class='q-name'>隆达股份<span class='q-code'>688231</span></td><td class='q-mkt'>科创板</td><td class='q-price'>24.96</td><td class='down'>-7.59%</td></tr><tr><td class='q-name'>豪威集团<span class='q-code'>603501</span></td><td class='q-mkt'>沪A</td><td class='q-price'>76.91</td><td class='up'>+5.73%</td></tr><tr><td class='q-name'>龙迅股份<span class='q-code'>688486</span></td><td class='q-mkt'>科创板</td><td class='q-price'>43.69</td><td class='up'>+5.68%</td></tr><tr><td class='q-name'>金龙汽车<span class='q-code'>600686</span></td><td class='q-mkt'>沪A</td><td class='q-price'>9.85</td><td class='down'>-4.83%</td></tr><tr><td class='q-name'>威派格<span class='q-code'>603956</span></td><td class='q-mkt'>沪A</td><td class='q-price'>8.07</td><td class='up'>+4.67%</td></tr><tr><td class='q-name'>中国巨石<span class='q-code'>600176</span></td><td class='q-mkt'>沪A</td><td class='q-price'>34.66</td><td class='up'>+2.79%</td></tr><tr><td class='q-name'>兖矿能源<span class='q-code'>600188</span></td><td class='q-mkt'>沪A</td><td class='q-price'>18.77</td><td class='down'>-2.65%</td></tr><tr><td class='q-name'>奕瑞科技<span class='q-code'>688301</span></td><td class='q-mkt'>科创板</td><td class='q-price'>77.70</td><td class='up'>+2.64%</td></tr><tr><td class='q-name'>拓邦股份<span class='q-code'>002139</span></td><td class='q-mkt'>深A</td><td class='q-price'>9.55</td><td class='up'>+2.58%</td></tr><tr><td class='q-name'>浙江美大<span class='q-code'>002677</span></td><td class='q-mkt'>深A</td><td class='q-price'>6.17</td><td class='up'>+2.49%</td></tr><tr><td class='q-name'>秦川机床<span class='q-code'>000837</span></td><td class='q-mkt'>深A</td><td class='q-price'>9.27</td><td class='up'>+2.43%</td></tr><tr><td class='q-name'>澜起科技<span class='q-code'>688008</span></td><td class='q-mkt'>科创板</td><td class='q-price'>169.27</td><td class='up'>+2.43%</td></tr><tr><td class='q-name'>数据港<span class='q-code'>603881</span></td><td class='q-mkt'>沪A</td><td class='q-price'>21.21</td><td class='up'>+1.97%</td></tr><tr><td class='q-name'>安阳钢铁<span class='q-code'>600569</span></td><td class='q-mkt'>沪A</td><td class='q-price'>1.72</td><td class='down'>-1.71%</td></tr><tr><td class='q-name'>鹏鼎控股<span class='q-code'>002938</span></td><td class='q-mkt'>深A</td><td class='q-price'>73.85</td><td class='up'>+1.58%</td></tr><tr><td class='q-name'>国药一致<span class='q-code'>000028</span></td><td class='q-mkt'>深A</td><td class='q-price'>20.13</td><td class='down'>-1.56%</td></tr><tr><td class='q-name'>美的集团<span class='q-code'>000333</span></td><td class='q-mkt'>深A</td><td class='q-price'>85.28</td><td class='down'>-1.46%</td></tr><tr><td class='q-name'>崇达技术<span class='q-code'>002815</span></td><td class='q-mkt'>深A</td><td class='q-price'>22.00</td><td class='down'>-1.35%</td></tr><tr><td class='q-name'>宝钢股份<span class='q-code'>600019</span></td><td class='q-mkt'>沪A</td><td class='q-price'>6.02</td><td class='down'>-1.31%</td></tr><tr><td class='q-name'>盛美上海<span class='q-code'>688082</span></td><td class='q-mkt'>科创板</td><td class='q-price'>243.33</td><td class='down'>-1.29%</td></tr><tr><td class='q-name'>海南矿业<span class='q-code'>601969</span></td><td class='q-mkt'>沪A</td><td class='q-price'>8.37</td><td class='down'>-1.18%</td></tr><tr><td class='q-name'>中公教育<span class='q-code'>002607</span></td><td class='q-mkt'>深A</td><td class='q-price'>1.82</td><td class='up'>+1.11%</td></tr><tr><td class='q-name'>顺丰控股<span class='q-code'>002352</span></td><td class='q-mkt'>深A</td><td class='q-price'>31.49</td><td class='down'>-1.04%</td></tr><tr><td class='q-name'>中国平安<span class='q-code'>601318</span></td><td class='q-mkt'>沪A</td><td class='q-price'>51.20</td><td class='down'>-0.91%</td></tr><tr><td class='q-name'>三羊马<span class='q-code'>001317</span></td><td class='q-mkt'>深A</td><td class='q-price'>55.20</td><td class='up'>+0.91%</td></tr><tr><td class='q-name'>领先股份<span class='q-code'>603991</span></td><td class='q-mkt'>沪A</td><td class='q-price'>142.44</td><td class='up'>+0.84%</td></tr><tr><td class='q-name'>药明康德<span class='q-code'>603259</span></td><td class='q-mkt'>沪A</td><td class='q-price'>147.66</td><td class='up'>+0.79%</td></tr><tr><td class='q-name'>新疆众和<span class='q-code'>600888</span></td><td class='q-mkt'>沪A</td><td class='q-price'>8.75</td><td class='up'>+0.69%</td></tr><tr><td class='q-name'>三友化工<span class='q-code'>600409</span></td><td class='q-mkt'>沪A</td><td class='q-price'>5.78</td><td class='down'>-0.69%</td></tr><tr><td class='q-name'>长江证券<span class='q-code'>000783</span></td><td class='q-mkt'>深A</td><td class='q-price'>7.56</td><td class='down'>-0.53%</td></tr><tr><td class='q-name'>贵州茅台<span class='q-code'>600519</span></td><td class='q-mkt'>沪A</td><td class='q-price'>1331.88</td><td class='up'>+0.52%</td></tr><tr><td class='q-name'>京东方Ａ<span class='q-code'>000725</span></td><td class='q-mkt'>深A</td><td class='q-price'>5.04</td><td class='down'>-0.40%</td></tr><tr><td class='q-name'>惠泰医疗<span class='q-code'>688617</span></td><td class='q-mkt'>科创板</td><td class='q-price'>252.34</td><td class='down'>-0.37%</td></tr><tr><td class='q-name'>力勤资源<span class='q-code'>001246</span></td><td class='q-mkt'>深A</td><td class='q-price'>31.31</td><td class='up'>+0.35%</td></tr><tr><td class='q-name'>*ST网达<span class='q-code'>603189</span></td><td class='q-mkt'>沪A</td><td class='q-price'>9.04</td><td class='up'>+0.33%</td></tr><tr><td class='q-name'>德力佳<span class='q-code'>603092</span></td><td class='q-mkt'>沪A</td><td class='q-price'>38.40</td><td class='down'>-0.21%</td></tr><tr><td class='q-name'>华阳集团<span class='q-code'>002906</span></td><td class='q-mkt'>深A</td><td class='q-price'>24.86</td><td class='down'>-0.20%</td></tr><tr><td class='q-name'>天齐锂业<span class='q-code'>002466</span></td><td class='q-mkt'>深A</td><td class='q-price'>36.50</td><td class='up'>+0.19%</td></tr><tr><td class='q-name'>地铁设计<span class='q-code'>003013</span></td><td class='q-mkt'>深A</td><td class='q-price'>17.97</td><td class='down'>-0.17%</td></tr><tr><td class='q-name'>长缆科技<span class='q-code'>002879</span></td><td class='q-mkt'>深A</td><td class='q-price'>14.66</td><td class='up'>+0.07%</td></tr><tr><td class='q-name'>新亚制程<span class='q-code'>002388</span></td><td class='q-mkt'>深A</td><td class='q-price'>0.00</td><td class='flat'>+0.00%</td></tr></tbody></table></div><p class="q-sub-title">其它市场（7 只）<span class="q-sub-note">非沪深 A 股，一般不能在 A 股账户交易，仅作外围参考</span></p><div class="table-wrap"><table class="quote-table muted-table"><thead><tr><th>个股</th><th>市场</th><th>现价</th><th>涨跌</th></tr></thead><tbody><tr><td class='q-name'>和黄医药<span class='q-code'>00013</span></td><td class='q-mkt'>港股</td><td class='q-price'>23.20</td><td class='up'>+4.13%</td></tr><tr><td class='q-name'>中国生物制药<span class='q-code'>01177</span></td><td class='q-mkt'>港股</td><td class='q-price'>5.40</td><td class='up'>+2.86%</td></tr><tr><td class='q-name'>SK海力士<span class='q-code'>SKHY</span></td><td class='q-mkt'>美股</td><td class='q-price'>139.79</td><td class='down'>-2.16%</td></tr><tr><td class='q-name'>超微电脑<span class='q-code'>SMCI</span></td><td class='q-mkt'>美股</td><td class='q-price'>32.47</td><td class='up'>+1.15%</td></tr><tr><td class='q-name'>爱彼迎<span class='q-code'>ABNB</span></td><td class='q-mkt'>美股</td><td class='q-price'>176.94</td><td class='up'>+0.84%</td></tr><tr><td class='q-name'>微软<span class='q-code'>MSFT</span></td><td class='q-mkt'>美股</td><td class='q-price'>531.87</td><td class='down'>-0.31%</td></tr><tr><td class='q-name'>英伟达<span class='q-code'>NVDA</span></td><td class='q-mkt'>美股</td><td class='q-price'>216.47</td><td class='down'>-0.29%</td></tr></tbody></table></div><p class="muted small">未取到行情：三星电子、速豹科技、LG新能源、辽宁振兴银行</p>
+  </section>
+
+  <section class="block" id="news">
+    <details class="fold">
+      <summary>
+        <h2>分板块新闻<span class="h2-count">179 条</span></h2>
+        <span class="fold-hint"><span class="fold-label"></span><span class="fold-arrow"></span></span>
+      </summary>
+      <section class="news-group"><h3>宏观政策<span class="count">14</span></h3><div class="news-card"><div class="news-text">公开市场隔夜回购利率将成主要政策利率，专家：此举更适合传递货币政策立场，不宜炒作成降息：中国人民银行行长潘功胜10月19日在2026金融街论坛年会上表示，将研究择机把央行公开市场主要操作品种的期限切换为隔夜，公开市场隔夜回购利率将相应成为主要政策利率。受访业内专家表示，随着隔夜逆回购利率的政策利率地位确立，政策利率“换锚”水到渠成。调整后，能够更清晰地传递货币政策立场，化解政策利率与调控目标利率之间的期限错配问题。专家还提示，此次为利率调控机制改革，不等于降息，市场不宜过度解读。（上证报）</div><div class="news-meta"><span class="time">2026-10-21 07:44</span><span class="src">36氪</span><span class="badge confirmed">已确认</span><span class="src-list">· 3 家媒体 · 来源：36氪、东方财富、新浪财经</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">货币政策</span></span><a class="src-link" href="https://36kr.com/newsflashes/4034840815932288?f=rss" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">罗马尼亚新一届政府宣誓就职：当地时间10月20日，罗马尼亚总理尼古列斯库领导的新一届政府通过议会信任投票，随后在总统府宣誓就职。</div><div class="news-meta"><span class="time">2026-10-21 06:01</span><span class="src">中新网滚动</span><span class="badge confirmed">已确认</span><span class="src-list">· 3 家媒体 · 来源：中新网国际、中新网滚动、新浪财经</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-21/10718223.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">【经济日报金观平：统筹用好两个市场两种资源】中共中央、国务院印发《关于发展新质生产力的意见》明确提出，“统筹处理好政府和市场、质态和业态、改革和发展、自主和开放的关系”。其中，自主和开放的关系，关乎发展的内外联动问题。统筹好二者关系，才能使发展新质生产力立足自身之需、兼顾世界之盼，在国际竞争中掌握主动权。</div><div class="news-meta"><span class="time">2026-10-21 08:07</span><span class="src">新浪财经</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：东方财富、新浪财经</span><span class="badge senti flat">中性</span><span class="tags"></span></div></div><div class="news-card"><div class="news-text">ETF追踪丨10月20日股票型ETF净申购100亿元 资金加仓上证50ETF华夏</div><div class="news-meta"><span class="time">2026-10-21 08:00</span><span class="src">东方财富-宏观政策</span><span class="badge unverified">待核实</span><span class="badge continuing">持续关注 · 第 7 天</span><span class="src-list">首次 10-12</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">ETF</span></span><a class="src-link" href="http://stock.eastmoney.com/news/11868,202610213901967313.html" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">【中信建投：对债市长期维持缓慢偏强的判断】中信建投指出，当前债券市场的关注点仍在货币政策宽松预期与资金层面，对经济基本面的定价有限。加之当前基本面数据的绝对值仍偏低，债市未有结构性利空因素，市场扰动仍将集中在宽松预期能否落地等层面。后续展望来看，对债市长期维持缓慢偏强的判断，短期节奏则因前期涨势较猛而有望适度放缓乃至少量回撤。基本面因素属慢变量，后续可关注经济数据边际转平的持续性。</div><div class="news-meta"><span class="time">2026-10-21 07:58</span><span class="src">新浪财经</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：东方财富、新浪财经</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">债市</span></span></div></div><div class="news-card"><div class="news-text">“产品溯源”不能沦为坑老营销的“新马甲”：近日，央视曝光一些机构打着“产品溯源”旗号组织老年游客低价出游：80元团费含中晚餐，却只收50岁以上人群。所谓参观生产车间，往往十余分钟便草草收场，随后老人被请进会议室、拉入饭局，普通饮料或保健食品被包装成能治多种慢性病的“神药”。调查发现，同类产品进货价仅五六十元，现场售价高达七八百元，价差达14倍。节目播出后，涉事地江西宜春连夜成立核查调查组。</div><div class="news-meta"><span class="time">2026-10-21 07:45</span><span class="src">中新网滚动</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：中新网滚动、中新网财经</span><span class="badge senti down">利空</span><span class="tags"></span><a class="src-link" href="https://www.chinanews.com.cn/cj/2026/10-21/10718238.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">“速成车”惹争议被叫停 新能源汽车如何重塑造车底层逻辑：10月10日，工业和信息化部等四部门联合发布《关于进一步加强汽车产品创新设计和研发测试验证有关管理工作的通知(征求意见稿)》，直指近年来愈演愈烈的“速成造车”乱象。</div><div class="news-meta"><span class="time">2026-10-21 07:39</span><span class="src">中新网滚动</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：中新网滚动、中新网财经</span><span class="badge senti down">利空</span><span class="tags"><span class="tag">新能源汽车</span></span><a class="src-link" href="https://www.chinanews.com.cn/cj/2026/10-21/10718235.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">习近平致信祝贺中央社会主义学院建院70周年</div><div class="news-meta"><span class="time">2026-10-21 06:23</span><span class="src">人民网</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：人民网、新华网</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="http://politics.people.com.cn/n1/2026/1021/c1024-40818449.html" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">【工业和信息化部：开展专精特新赋能中心建设工作】工业和信息化部发布关于开展专精特新赋能中心建设工作的通知，“十五五”期间，在全国范围内按照“先试点、后推广”的模式，建设一批专精特新赋能中心，形成覆盖重点领域、辐射全国的专精特新赋能网络，补齐中小企业高能级技术创新服务短板，提高创新资源要素保障水平，加速提升中小企业创新能力、核心竞争力和产业链配套能力，推动中小企业专精特新发展质量明显提升、专精特新“小巨人”企业持续涌现，为发展新质生产力、壮大先进制造业、构建现代化产业体系提供有力支撑。</div><div class="news-meta"><span class="time">2026-10-21 08:04</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span></div></div><div class="news-card"><div class="news-text">【广告产业“十五五”规划出炉 创新驱动市场扩容升级】10月20日，记者从市场监管总局获悉，近日，市场监管总局、中央网信办、文化和旅游部、教育部、公安部、商务部、广电总局联合印发《广告产业发展“十五五”规划》，这也是未来五年引领我国广告产业高质量发展的专项文件。《规划》突出创新驱动，提出规范人工智能生成式广告发展、支持符合条件的广告企业申报专精特新中小企业等举措。</div><div class="news-meta"><span class="time">2026-10-21 07:56</span><span class="src">东方财富</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">广告产业</span></span></div></div><div class="news-card"><div class="news-text">【稳市信号积极释放 机构看好中国资产价值重估】在日前举行的2026金融街论坛年会上，多项稳预期、强改革、扩开放的政策信号密集释放。多家公募和私募基金表示，随着产业持续升级、上市公司盈利改善、分红回购力度提升、长期资金机制完善，资本市场向好具备强支撑。上述信号有助于提振市场信心，并推动中国资产迎来价值重估。</div><div class="news-meta"><span class="time">2026-10-21 07:55</span><span class="src">东方财富</span><span class="badge unverified">待核实</span><span class="badge senti up">利好</span><span class="tags"><span class="tag">中国资产</span></span></div></div><div class="news-card"><div class="news-text">【央行将连续9个工作日开展隔夜逆回购操作 流动性调节精准性和灵活性进一步提升】10月20日，中国人民银行发布公开市场业务公告显示，为更好匹配银行体系短期流动性需求，将在10月21日至11月2日开展隔夜逆回购操作，采用固定利率、数量招标，每日操作量不超过10000亿元。业内专家表示，中国人民银行流动性调节的精准性和灵活性进一步提升。隔夜操作可以根据资金供求变化灵活投放、及时回笼，精准对冲短期扰动，与7天期等工具搭配使用，有助于形成期限更为匹配、调节更为精准的工具组合，更好维护货币市场平稳运行。（证券日报）</div><div class="news-meta"><span class="time">2026-10-21 07:48</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span></div></div><div class="news-card"><div class="news-text">@所有人 满足这些条件 微信聊天记录才能当证据使用：山西省阳泉市中级人民法院近期审结的一起承揽合同纠纷案中，因为没有书面合同，双方的微信聊天记录成了法院做出判决的关键证据。</div><div class="news-meta"><span class="time">2026-10-21 07:30</span><span class="src">中新网滚动</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.chinanews.com.cn/fz/2026/10-21/10718231.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">求职者，警惕“央国企内推”骗局！：人力资源社会保障部等部门发布风险提示</div><div class="news-meta"><span class="time">2026-10-21 07:27</span><span class="src">中新网滚动</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.chinanews.com.cn/sh/2026/10-21/10718230.shtml" target="_blank" rel="noopener">原文↗</a></div></div></section><section class="news-group"><h3>个股公告<span class="count">62</span></h3><div class="news-card"><div class="news-text">主动ETF发行火速定档，场内投资生态迎来革新：首批主动ETF发行进入倒计时。10月20日，易方达、华夏、汇添富、南方、富国、鹏华等18家公募同步披露发售安排，旗下主动ETF定于10月23日集中发行。按20亿元募集上限估算，18只产品合计有望引流360亿元。业内人士认为，不同于过往指数ETF、场外主动权益基金，本次落地的主动ETF将主动投研能力嵌入ETF标准化场内载体，在投资自由度、信息透明度、交易机制上重构产品逻辑，标志着公募行业被动与主动协同的新生态加速成形。（上证报）</div><div class="news-meta"><span class="time">2026-10-21 07:56</span><span class="src">36氪</span><span class="badge confirmed">已确认</span><span class="src-list">· 3 家媒体 · 来源：36氪、东方财富、新浪财经</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://36kr.com/newsflashes/4034854472766338?f=rss" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">千亿级红利陆续落袋，透视银行中期分红新局：10月21日，工商银行与农业银行向A股股东派发2026年中期现金红利，合计约821亿元。Wind数据显示，截至目前已有21家A股上市银行披露2026年中期分红方案，拟派息总额超过2600亿元，其中国有大行与股份行构成绝对主力，城商行、农商行亦在加速跟进。从方案披露到实际派发，上市银行中期分红正从少数银行的“试水”动作，演变为常态化选择。这一变化背后，既有行业基本面企稳的支撑，也折射出低利率环境下，银行板块正在重塑股东回报体系。（中证报）</div><div class="news-meta"><span class="time">2026-10-21 07:55</span><span class="src">36氪</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：36氪、新浪财经</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://36kr.com/newsflashes/4034854030447488?f=rss" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">超微电脑初步业绩超预期：超微电脑当地时间10月20日公布截至9月30日的季度营收为185亿至195亿美元，分析师平均预期为150亿美元。超微电脑表示，毛利率在12%-12.5%。该公司表示，将在定于11月3日举行的电话会议上讨论业绩情况。超微电脑未说明为何在原定财报发布日期之前公布初步数据。（界面）</div><div class="news-meta"><span class="time">2026-10-21 07:49</span><span class="src">36氪</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：36氪、东方财富</span><span class="badge senti up">利好</span><span class="tags"><span class="tag stock">超微电脑</span></span><a class="src-link" href="https://36kr.com/newsflashes/4034849339364480?f=rss" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">【戴姆勒卡车前高管出任速豹科技欧洲区执行副总裁】10月20日，速豹科技宣布，HolgerScherr已正式加入速豹科技（SuperPanther），担任欧洲区执行副总裁。HolgerScherr拥有超过20年的戴姆勒及戴姆勒卡车高级管理经验，曾担任北京福田戴姆勒汽车有限公司总裁兼首席执行官、梅赛德斯-奔驰卡车执行委员会成员等重要职务。</div><div class="news-meta"><span class="time">2026-10-21 07:46</span><span class="src">东方财富</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：东方财富、新浪财经</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">汽车</span><span class="tag stock">速豹科技</span></span></div></div><div class="news-card"><div class="news-text">A股市场注销式回购持续升温，七家公司回购注销金额超五十亿元：近期A股市场注销式回购持续升温，据数据宝统计，在回购方式为集中竞价、回购目的为市值管理的回购方案中（仅统计注销A股股份），有7家公司上市以来回购注销金额在50亿元以上。其中，美的集团回购注销金额超283亿元居首，中国平安回购注销金额近110亿元位居次席。此外，贵州茅台、顺丰控股、京东方A、药明康德、宝钢股份等均回购注销50亿元以上。从回购金额前100家公司来看，优质白马股较多，包括白酒行业龙头贵州茅台、五粮液等，家电行业龙头美的集团，保险行业中国平安，物流行业顺丰控股等。（证券时报）</div><div class="news-meta"><span class="time">2026-10-21 07:42</span><span class="src">36氪</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：36氪、新浪财经</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">A股</span><span class="tag stock">美的集团</span><span class="tag stock">中国平安</span><span class="tag stock">贵州茅台</span><span class="tag stock">顺丰控股</span><span class="tag stock">京东方A</span><span class="tag stock">药明康德</span><span class="tag stock">宝钢股份</span></span><a class="src-link" href="https://36kr.com/newsflashes/4034837185303682?f=rss" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">数据港(603881)：上海数据港股份有限公司关于持股5%以上股东减持股份结果暨权益变动触及1%刻度公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge continuing">持续关注 · 第 2 天</span><span class="src-list">首次 10-14</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">数据港(603881)</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613279.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">鹏鼎控股(002938)：鹏鼎控股（深圳）股份有限公司关于回购股份事项前十名股东和前十名无限售条件股东持股情况的公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge continuing">持续关注 · 第 3 天</span><span class="src-list">首次 10-16</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">鹏鼎控股(002938)</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613007.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">奕瑞科技(688301)：奕瑞科技关于股东减持股份结果公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge continuing weak">疑似同一事件（第 2 天）</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">奕瑞科技</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225612945.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">澜起科技(688008)：澜起科技2026年第三季度业绩预增的自愿性披露公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge continuing">持续关注 · 第 4 天</span><span class="src-list">首次 10-17</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">澜起科技</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225612915.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">天齐锂业(002466)：2026年前三季度业绩预告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge continuing">持续关注 · 第 9 天</span><span class="src-list">首次 10-11</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">天齐锂业</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225612740.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">新疆众和(600888)：新疆众和股份有限公司2026年前三季度业绩预增公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge continuing">持续关注 · 第 11 天</span><span class="src-list">首次 10-11</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">新疆众和</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225612579.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">国药一致(000028)：2026年度前三季度业绩快报</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge continuing">持续关注 · 第 9 天</span><span class="src-list">首次 10-11</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">国药一致</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225612449.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">海南矿业(601969)：海南矿业股份有限公司2026年前三季度业绩预增公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge continuing">持续关注 · 第 11 天</span><span class="src-list">首次 10-11</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">海南矿业</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225612361.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">兖矿能源(600188)：兖矿能源集团股份有限公司2026年前三季度业绩预增公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge continuing">持续关注 · 第 11 天</span><span class="src-list">首次 10-11</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">兖矿能源</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225612264.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">隆达股份(688231)：2026年前三季度业绩预告的自愿性披露公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge continuing">持续关注 · 第 3 天</span><span class="src-list">首次 10-17</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">隆达股份</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225611830.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">领先股份(603991)：2026年前三季度业绩预盈公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge continuing">持续关注 · 第 9 天</span><span class="src-list">首次 10-11</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">领先股份</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225611725.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">德力佳(603092)：2026年前三季度业绩快报</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge continuing">持续关注 · 第 9 天</span><span class="src-list">首次 10-11</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">德力佳</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225611650.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">韩国数据中心技术公司Elice股价上涨16%，此前在韩国上市首日暴跌32%。</div><div class="news-meta"><span class="time">2026-10-21 08:06</span><span class="src">东方财富</span><span class="badge unverified">待核实</span><span class="badge senti up">利好</span><span class="tags"><span class="tag stock">Elice</span></span></div></div><div class="news-card"><div class="news-text">韩国数据中心技术公司ELICE股价上涨16%；此前在韩国上市首日暴跌32%。</div><div class="news-meta"><span class="time">2026-10-21 08:06</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti up">利好</span><span class="tags"><span class="tag stock">ELICE</span></span></div></div><div class="news-card"><div class="news-text">【和黄医药宣布与葛兰素史克的 KRAS-EGFR 抗体偶联疗法中国以外地区许可协议已完成交易】和黄医药今日宣布，继 2026 年 9 月 3 日的公告，并完成包括反垄断审查在内的惯例成交条件后，本公司的附属公司和记黄埔医药（上海）有限公司（HUTCHMED Limited）与 GSK plc（简称 “葛兰素史克”）附属公司之间的独家开发和许可协议已完成交易。协议授予该葛兰素史克附属公司在中国内地、香港、澳门和台湾以外的全球范围内开发和商业化 HMPL-A830 的权利。根据协议条款，和记黄埔医药（上海）有限公司将负责 HMPL-A830 的全球 I 期开发项目。葛兰素史克附属公司将负责其授权区域内后续全部临床开发及商业化工作。本次独家许可协议交割完成后，和记黄埔医药（上海）有限公司预计短期内将收到 1.1 亿美元首付款，另可收取最高可达 11.85 亿美元的监管、开发及商业化销售里程碑款项，同时还可获得基于净销售额的分层特许权使用费。</div><div class="news-meta"><span class="time">2026-10-21 08:05</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">和黄医药</span></span></div></div><div class="news-card"><div class="news-text">SK海力士股价上涨3%。</div><div class="news-meta"><span class="time">2026-10-21 08:01</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge continuing">持续关注 · 第 5 天</span><span class="src-list">首次 10-13</span><span class="badge senti up">利好</span><span class="tags"><span class="tag stock">SK海力士</span></span></div></div><div class="news-card"><div class="news-text">三星电子股价上涨3%。</div><div class="news-meta"><span class="time">2026-10-21 08:01</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge continuing">持续关注 · 第 2 天</span><span class="src-list">首次 10-14</span><span class="badge senti up">利好</span><span class="tags"><span class="tag stock">三星电子</span></span></div></div><div class="news-card"><div class="news-text">中国生物制药：TQC2731注射液「TSLP单抗」慢性鼻窦炎伴鼻息肉维持治疗的III期注册临床试验完成全部参与者入组。</div><div class="news-meta"><span class="time">2026-10-21 07:56</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">中国生物制药</span></span></div></div><div class="news-card"><div class="news-text">【中国巨石第三季度净利润同比增173%】10月20日，在中国巨石第32届国际玻纤年会上，中国巨石股份有限公司党委书记、总经理杨国明判断，电子布本轮周期自2025年9月启动，2026年9月电子布价格突破上一轮景气周期高点。本轮景气上行在价格高度和持续时间上都可能超过以往周期。当天，中国巨石发布2026年第三季度报告。今年前三季度，该公司实现营业收入180.78亿元，同比增长30.02%；实现归属于上市公司股东的净利润53.46亿元，同比增长108.15%。</div><div class="news-meta"><span class="time">2026-10-21 07:48</span><span class="src">东方财富</span><span class="badge unverified">待核实</span><span class="badge senti up">利好</span><span class="tags"><span class="tag stock">中国巨石</span></span></div></div><div class="news-card"><div class="news-text">【多家上市公司斩获算力服务订单】人工智能算力服务市场快速扩容，多家A股上市公司斩获大额订单。国金证券股份有限公司发布的研报显示，全球算力服务继续通胀，价格端持续验证算力紧俏。随着算力服务的商业模式从卡时租赁向词元分成升级，将具备更高的盈利弹性。</div><div class="news-meta"><span class="time">2026-10-21 07:46</span><span class="src">东方财富</span><span class="badge unverified">待核实</span><span class="badge senti up">利好</span><span class="tags"><span class="tag">算力服务</span></span></div></div><div class="news-card"><div class="news-text">【多家上市公司加码3D打印业务】10月19日，国家统计局公布的数据显示，前三季度我国3D打印设备产量同比增长62.5%。围绕复杂构件制造、产品轻量化及生产效率提升等需求，相关上市公司持续推进设备研发、工艺优化和产能布局，拓展增材制造在工业领域的应用。</div><div class="news-meta"><span class="time">2026-10-21 07:45</span><span class="src">东方财富</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">3D打印</span></span></div></div><div class="news-card"><div class="news-text">【A股年内分红回购规模达2.1万亿元】10月19日，中国证监会主席吴清在2026金融街论坛年会开幕式上表示，上市公司“年内分红回购2.1万亿元，是同期IPO融资和再融资的2.7倍”。这组数据体现出当前市场底层逻辑已转向“重回报”。</div><div class="news-meta"><span class="time">2026-10-21 07:44</span><span class="src">东方财富</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">A股</span></span></div></div><div class="news-card"><div class="news-text">【投资者拒绝认购IPO后，英伟达拟投资GPU云厂商Firmus】知情人士称，英伟达正洽谈向澳大利亚AI云服务商Firmus投资数亿美元。这家公司本月初突然撤回IPO计划。这笔洽谈表明，英伟达或将继续扶持一批被称作新型云厂商（neoclouds）、商业模式尚未得到验证的企业。这类企业大举举债采购英伟达GPU搭建数据中心，如今正承受资金压力。分析显示，英伟达已经为这类企业以及其他大客户承担超1700亿美元风险敞口，包括提供信贷担保，协助它们举债。</div><div class="news-meta"><span class="time">2026-10-21 07:43</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">GPU云</span><span class="tag stock">英伟达</span><span class="tag stock">Firmus</span></span></div></div><div class="news-card"><div class="news-text">【金价回落带动门店客流回升 轻克重金饰走俏】10月20日，国内品牌金店足金报价全线回调，整体跌幅在每克8元至14元。自8月底以来，随着国际金价震荡回落，黄金消费市场悄然升温。记者走访北京多家黄金珠宝门店发现，此前观望的消费者重新走进金店，柜台前咨询、试戴的顾客明显增多，部分热销轻克重饰品甚至一度断货。</div><div class="news-meta"><span class="time">2026-10-21 07:43</span><span class="src">东方财富</span><span class="badge unverified">待核实</span><span class="badge senti up">利好</span><span class="tags"><span class="tag">黄金珠宝</span></span></div></div><div class="news-card"><div class="news-text">据报道，英伟达正在商谈向澳大利亚人工智能(AI)云服务商Firmus投资数亿美元。</div><div class="news-meta"><span class="time">2026-10-21 07:42</span><span class="src">东方财富</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">GPU云</span><span class="tag stock">英伟达</span><span class="tag stock">Firmus</span></span></div></div><div class="news-card"><div class="news-text">【宿营车走热 车企挖掘旅居消费增量】房车过去常被视作长途旅行的“大玩具”，使用场景相对单一，难以走进普通家庭。宿营车（属于自行式房车）的出现，把通勤代步与近郊露营功能合二为一，破解了传统房车无法下地库、应用场景窄、价格高的产品痛点。记者近日走访调研发现，当前宿营车销量持续增长，主机厂与改装企业扎堆入局，一个兼顾日常实用与轻户外需求的汽车蓝海市场正在快速形成。</div><div class="news-meta"><span class="time">2026-10-21 07:42</span><span class="src">东方财富</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">汽车</span></span></div></div><div class="news-card"><div class="news-text">英伟达正洽谈向澳大利亚AI云服务提供商Firmus投资数亿美元。</div><div class="news-meta"><span class="time">2026-10-21 07:41</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">GPU云</span><span class="tag stock">英伟达</span><span class="tag stock">Firmus</span></span></div></div><div class="news-card"><div class="news-text">英伟达决定投资 FIRMUS。</div><div class="news-meta"><span class="time">2026-10-21 07:41</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">GPU云</span><span class="tag stock">英伟达</span><span class="tag stock">Firmus</span></span></div></div><div class="news-card"><div class="news-text">超级牛散加仓，磷化铟概念龙头，净利暴增超26倍！创新药，高增长股出炉</div><div class="news-meta"><span class="time">2026-10-21 07:40</span><span class="src">东方财富-宏观政策</span><span class="badge unverified">待核实</span><span class="badge senti up">利好</span><span class="tags"><span class="tag">磷化铟</span><span class="tag">创新药</span><span class="tag">高增长股</span></span><a class="src-link" href="http://stock.eastmoney.com/news/11134,202610213901873772.html" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">【LG新能源波兰工厂受益于电动车与储能需求，即将实现盈利】据韩国经济日报援引未具名业界消息报道，受欧洲电动汽车需求走强以及部分生产线转向储能系统（ESS）的提振，LG新能源位于波兰的工厂产能利用率得以提升，该工厂有望在第四季度实现营业利润扭亏为盈。报道指出，该弗罗茨瓦夫工厂第三季度的产能利用率已升至60%至65%区间，创下自2024年第三季度以来的最高水平。通常情况下，当该工厂的产能利用率达到60%-70%初段区间时，即可实现盈亏平衡。</div><div class="news-meta"><span class="time">2026-10-21 07:40</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti up">利好</span><span class="tags"><span class="tag">电动车</span><span class="tag">储能</span><span class="tag stock">LG新能源</span></span></div></div><div class="news-card"><div class="news-text">【记者实测：弹窗拦下非本地客户 民营银行异地揽储退场】“目前仅支持辽宁地区客户存入，请确认您的手机号归属地/常住地址/工作地址是否为辽宁省。如是可更新个人信息；如否则无法存入。”10月20日，常驻北京的中国证券报记者在辽宁振兴银行App尝试存入一笔3年期定期存款产品，该行系统弹窗显示上述提示。记者近日实测多家民营银行App存款业务发现，多家地方性民营银行通过限制异地开户、发送存款拦截弹窗、发布业务公告等方式，对异地存款加强限制。</div><div class="news-meta"><span class="time">2026-10-21 07:40</span><span class="src">东方财富</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">银行</span><span class="tag stock">辽宁振兴银行</span></span></div></div><div class="news-card"><div class="news-text">【海外供电项目持续推进 燃料电池产业链投资机会受关注】AI数据中心建设提速，电力供应及设备交付能力成为影响项目投产的重要因素。随着海外大型供电项目推进，固体氧化物燃料电池（SOFC）的应用前景及国内配套企业的投资价值受到关注。分析人士认为，SOFC具备模块化部署、交付周期较短等优势，有望承接数据中心新增供电需求。订单交付、收入增长及利润贡献，将成为观察产业链投资价值的重要依据。</div><div class="news-meta"><span class="time">2026-10-21 07:39</span><span class="src">东方财富</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">燃料电池</span><span class="tag">数据中心</span></span></div></div><div class="news-card"><div class="news-text">力勤资源(001246)：H股公告（董事会会议召开日期）</div><div class="news-meta"><span class="time">2026-10-20 23:53</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">力勤资源(001246)</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613421.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">浙江美大(002677)：独立董事候选人声明与承诺-齐银良</div><div class="news-meta"><span class="time">2026-10-20 23:50</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">浙江美大(002677)</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613413.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">浙江美大(002677)：独立董事提名人声明与承诺-郭飞</div><div class="news-meta"><span class="time">2026-10-20 23:50</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">浙江美大(002677)</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613412.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">中公教育(002607)：关于股东部分股份将被司法拍卖的提示性公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">中公教育(002607)</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613319.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">长缆科技(002879)：关于公司董事长增持公司股份计划实施进展暨增持时间过半的公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">长缆科技(002879)</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613314.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">*ST网达(603189)：关于股份回购实施结果暨股份变动的公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">*ST网达(603189)</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613303.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">地铁设计(003013)：关于董事股份减持计划实施完毕的公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">地铁设计(003013)</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613264.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">金龙汽车(600686)：金龙汽车关于持股5%以上股东减持股份结果公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">金龙汽车(600686)</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613228.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">金龙汽车(600686)：金龙汽车关于控股股东权益变动触及1%刻度暨增持计划进展情况的提示性公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">金龙汽车(600686)</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613226.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">长江证券(000783)：关于首次回购公司股份的公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">长江证券(000783)</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613198.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">威派格(603956)：威派格控股股东提前终止减持计划暨减持股份结果公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">威派格(603956)</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613076.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">惠泰医疗(688617)：关于持股5%以上股东权益变动触及1%刻度暨减持股份结果公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">惠泰医疗(688617)</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613070.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">龙迅股份(688486)：龙迅股份2024年限制性股票激励计划部分第一类限制性股票回购注销实施公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">龙迅股份(688486)</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613027.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">华阳集团(002906)：关于收到《经营者集中反垄断审查不实施进一步审查决定书》暨控制权拟发生变更的进展公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">华阳集团(002906)</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613005.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">新亚制程(002388)：关于控股股东或其一致行动人增持公司股份计划时间过半的进展公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">新亚制程(002388)</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613004.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">秦川机床(000837)：关于持股5%以上股东股份减持计划期限届满未减持的公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">秦川机床(000837)</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613002.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">豪威集团(603501)：关于取得金融机构回购专项贷款承诺函的公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">豪威集团(603501)</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225612967.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">昂立教育(600661)：昂立教育关于首次集中竞价出售回购股份的进展公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">昂立教育(600661)</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225612957.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">三友化工(600409)：2026年前三季度业绩预增自愿性披露公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">三友化工</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225612032.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">安阳钢铁(600569)：安阳钢铁股份有限公司与华泰联合证券有限责任公司关于安阳钢铁股份有限公司向特定对象发行股票申请文件的审核问询函的回复报告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">安阳钢铁</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613323.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">安阳钢铁(600569)：安阳钢铁股份有限公司关于向特定对象发行A股股票审核问询函回复及募集说明书等申请文件更新的提示性公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">安阳钢铁</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613320.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">崇达技术(002815)：关于为子公司提供担保的进展公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">崇达技术</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613313.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">江顺科技(001400)：江苏江顺精密科技集团股份有限公司关于股东部分股份解除质押及再质押的公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">江顺科技</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613312.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">三羊马(001317)：关于公司控股股东、实际控制人部分股份质押及解除质押的公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">三羊马</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613311.PDF" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">拓邦股份(002139)：关于选举第九届董事会职工代表董事暨董事会换届完成的公告</div><div class="news-meta"><span class="time">2026-10-20 16:00</span><span class="src">巨潮资讯-公告</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">拓邦股份</span></span><a class="src-link" href="http://static.cninfo.com.cn/finalpage/2026-10-21/1225613278.PDF" target="_blank" rel="noopener">原文↗</a></div></div></section><section class="news-group"><h3>行业动态<span class="count">17</span></h3><div class="news-card"><div class="news-text">华泰证券：农业机器人正在推动农业生产方式的第三次效率革命：36氪获悉，华泰证券研报称，华泰证券认为，以农业无人机等为代表的农业机器人产品正从政策驱动的“示范应用”阶段，进入由需求变迁、供给突破、经济可行三重驱动力共同推动的“可复制、可盈利”新阶段。当前全球主要农业国正面临农业劳动力供给的结构性收缩，“少人种地”向“无人种地”趋势演变，而农业植后管理环节高度依赖人力投入，构成当前农业生产体系中最突出的效率短板。随着人工智能、机器人、新能源等技术迭代升级，以大疆农业、极飞科技为代表的农业科技企业快速崛起，并从农业无人机向智慧农业全场景延展升级。继机械革命与化学革命之后，农业机器人产品正在推动农业生产方式的第三次效率革命。</div><div class="news-meta"><span class="time">2026-10-21 07:47</span><span class="src">36氪</span><span class="badge confirmed">已确认</span><span class="src-list">· 3 家媒体 · 来源：36氪、东方财富、新浪财经</span><span class="badge senti up">利好</span><span class="tags"><span class="tag">农业机器人</span></span><a class="src-link" href="https://36kr.com/newsflashes/4034845111194502?f=rss" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">【中信建投：兆瓦级液冷落地 行业进入标准化放量新阶段】中信建投研报称，兆瓦级液冷落地，行业进入标准化放量新阶段。中信建投判断代工链利润先于品牌链兑现，四季度至2027年一季度是液冷板块业绩分水岭，2027年行业将由普遍景气转向份额与盈利分化。</div><div class="news-meta"><span class="time">2026-10-21 08:04</span><span class="src">东方财富</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：东方财富、新浪财经</span><span class="badge senti up">利好</span><span class="tags"><span class="tag">液冷</span></span></div></div><div class="news-card"><div class="news-text">【中信建投：机器人板块国内外预计催化不断 建议聚焦优质环节】中信建投研报称，人形机器人板块关注T链产品发布及量产进展，把握核心供应商布局机会。T链积极推进审厂、量产等工作，多方供应链反馈积极，建议重点关注大客户产品发布及量产推进情况，有望为板块带来重要催化。</div><div class="news-meta"><span class="time">2026-10-21 07:59</span><span class="src">新浪财经</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：东方财富、新浪财经</span><span class="badge senti up">利好</span><span class="tags"><span class="tag">机器人</span></span></div></div><div class="news-card"><div class="news-text">【中信建投：半导体设备订单持续景气】中信建投研报称，全球景气周期持续确认，关注出海进程。SEMI更新预测、预计半导体设备未来3年持续增长。SEMI预计2026年全球半导体制造设备销售额将创下1659亿美元的历史新高，同比+23.2%。增长势头预计将持续至2028年，总设备销售额有望达到创纪录的2295亿美元，实现连续五年增长。</div><div class="news-meta"><span class="time">2026-10-21 07:58</span><span class="src">东方财富</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：东方财富、新浪财经</span><span class="badge senti up">利好</span><span class="tags"><span class="tag">半导体设备</span></span></div></div><div class="news-card"><div class="news-text">【中泰证券：科技板块后续行情持续性仍需关注海外利率环境、全球风险偏好及企业盈利变化】中泰证券指出，本次金融街论坛围绕金融市场稳定、投资端改革、金融机构风险化解及高水平开放释放积极政策信号，有望改善近期市场调整中的投资者预期。配置方面，短期关注资本市场改革受益的券商、公募基金及财富管理领域，以及经营质量较好、分红稳定的银行保险和高股息资产。中长期继续看好科技创新主线，科技金融支持和资本市场融资制度改革有望改善优质科技企业融资环境。近期科技成长板块调整较大，可结合产业景气和业绩兑现情况，关注人工智能、半导体、高端装备等领域具备核心技术优势、订单增长和稳定盈利能力的优质企业。科技板块后续行情持续性仍需关注海外利率环境、全球风险偏好及企业盈利变化。</div><div class="news-meta"><span class="time">2026-10-21 07:57</span><span class="src">新浪财经</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：东方财富、新浪财经</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">科技板块</span></span></div></div><div class="news-card"><div class="news-text">【年内险资密集参设私募股权投资基金】近日，天津稳健策略股权投资基金合伙企业（有限合伙）成立，其合伙人包括友邦人寿保险有限公司、大家人寿保险股份有限公司等多家保险机构。今年以来，险资参与设立了多家私募股权投资基金，所设基金主要投向人工智能、新能源等产业。受访专家表示，对于被投资领域而言，保险系私募股权投资基金的参与有助于优化直接融资结构、减少短期投机行为、促进资金供给多元化等。</div><div class="news-meta"><span class="time">2026-10-21 07:53</span><span class="src">东方财富</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：东方财富、新浪财经</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">私募股权</span></span></div></div><div class="news-card"><div class="news-text">【ADC赛道频现大额交易 中国创新药企的研发能力逐渐获得认可】抗体偶联药物（ADC）持续成为中国创新药企对外授权交易的热门领域。业内人士认为，随着ADC技术不断发展，中国创新药企的研发能力逐渐获得国际市场认可，跨国药企对中国ADC资产的关注也正从单一产品向多个研发项目及技术平台延伸。</div><div class="news-meta"><span class="time">2026-10-21 07:52</span><span class="src">东方财富</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：东方财富、新浪财经</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">ADC</span></span></div></div><div class="news-card"><div class="news-text">【14家化工上市公司三季度业绩正增长】随着三季报陆续披露，化工上市公司业绩高景气度持续显现。截至10月20日，A股已有22家化工板块上市公司披露2026年前三季度业绩预告，仅2家预计同比下滑，多数公司预计净利润增幅超过50%。同时，目前已有18家化工板块上市公司披露三季报，其中14家净利润实现正增长。化工行业加速复苏，龙头企业业绩增势尤为强劲。</div><div class="news-meta"><span class="time">2026-10-21 07:50</span><span class="src">新浪财经</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：东方财富、新浪财经</span><span class="badge senti up">利好</span><span class="tags"><span class="tag">化工</span></span></div></div><div class="news-card"><div class="news-text">【中信建投：粘胶短纤供需共振 行业有望迈入复苏新周期】中信建投指出，供给侧，粘胶短纤行业格局高度集中且未来新增产能有限，2025年8月以来国内粘胶短纤行业开工率均维持在85%以上的较高水平，同时行业进入去库周期，目前库存已经接近2020年以来最低水平；需求侧，全球棉花供给预期偏紧，今年以来棉花-粘胶短纤价差走扩，粘胶短纤性价比提升拉动替代需求，同时下游涡流纺与无纺布有望支撑粘胶短纤中长期需求，粘胶短纤供需共振，有望迈入复苏新周期。</div><div class="news-meta"><span class="time">2026-10-21 07:49</span><span class="src">新浪财经</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：东方财富、新浪财经</span><span class="badge senti up">利好</span><span class="tags"><span class="tag">粘胶短纤</span></span></div></div><div class="news-card"><div class="news-text">马斯克：SpaceX和特斯拉旗下的Terafab计划于2028年实现芯片量产：SpaceX与特斯拉共同成立的芯片制造合资企业Terafab，计划于2028年第三季度实现量产，埃隆·马斯克周二在SpaceX的电话会议上表示。“我对这个时间表设定了很大的误差范围，因为我们尚不确定能否真正实现这一目标，”马斯克在谈及该时间表时表示。该时间表是该项目的粗略计划，该项目旨在为人工智能和机器人技术每年提供1太瓦的计算能力，马斯克本人称这一时间表“非常激进”。（新浪财经）</div><div class="news-meta"><span class="time">2026-10-21 07:46</span><span class="src">36氪</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：36氪、新浪财经</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">芯片制造</span></span><a class="src-link" href="https://36kr.com/newsflashes/4034844018316162?f=rss" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">【阳澄湖大闸蟹协会澄清行情崩盘传言：正宗阳澄湖大闸蟹供需平稳】10月20日记者获悉，针对日前“大闸蟹全面滞销、行情崩盘、价格腰斩”等网络热议话题，苏州市阳澄湖大闸蟹行业协会近期发文澄清，“网传大闸蟹行情崩盘不实，正宗阳澄湖大闸蟹供需平稳。”</div><div class="news-meta"><span class="time">2026-10-21 08:08</span><span class="src">东方财富</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">大闸蟹</span></span></div></div><div class="news-card"><div class="news-text">【跟得上变化是人才核心竞争力】智联招聘近期发布的2026年三季度人才市场热点快报，有不少耐人寻味的地方。养老/看护行业岗位数以43.9%的增速居全行业之首，把人工智能、新能源这些当红赛道都甩在了身后；新质生产力领域的临床研究/试验岗位需供比高达4.6∶1，平均一个求职者能对上四五个岗位；AI工程师平均招聘月薪逼近1.8万元……这些数字摆在一起，就像一张“换季”的人才市场天气预报，显示银发经济和硬科技在升温，一些传统赛道在降温。</div><div class="news-meta"><span class="time">2026-10-21 08:06</span><span class="src">东方财富</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">养老/看护</span><span class="tag">人工智能</span><span class="tag">新能源</span><span class="tag">新质生产力</span></span></div></div><div class="news-card"><div class="news-text">【创新药企捷报频传 机构预测高增长股出炉】10月20日，创新药概念表现活跃，消息面上，国家发展改革委在新闻发布会上透露，今年前三季度创新药对外技术授权约1300亿美元，接近去年全年。此外，近日创新药企捷报频传，对于板块投资热度也起到催化作用。值得关注的是，10月23日至27日，2026年欧洲肿瘤内科学会年会在西班牙马德里举行，本届大会共有29项中国创新药研究入选最新突破性摘要，占大会LBA总数约三分之一，创历史新高；其中5项研究跻身大会最高规格的主席研讨会，实现数量质量双重突破。从全年业绩预期来看，上半年净利润规模在1亿元以上的概念股中，有15股获得至少10家机构评级，且机构一致预测2026年全年净利润有望超15%幅度增长。</div><div class="news-meta"><span class="time">2026-10-21 08:03</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti up">利好</span><span class="tags"><span class="tag">创新药</span></span></div></div><div class="news-card"><div class="news-text">【中信建投：核心零部件环节制约燃机交付，行业供需缺口仍然延续】中信建投研报称，AIDC发电设备板块核心零部件环节制约燃机交付，行业供需缺口仍然延续。需求端：燃气轮机订单仍然景气，西门子能源燃气轮机排产已覆盖至2032年；同时2026年上半年数据中心相关项目的内燃机在开发（包括已公布、建设前以及建设阶段）容量增长两倍以上至45GW。供给端：BNEF预计已宣布的扩产计划将推动全球燃机年产能到2030年提升超过50%，三巨头贡献新增35GW产能中的28GW，但单晶叶片、锻件、特种合金、发电机等上游环节仍然制约交付。中信建投认为，全球燃机订单保持景气，美国燃气发电在建规模及AIDC相关项目占比同步提升。国产燃机凭借更短的交付周期、较高的性价比及不断增强的产品竞争力，有望加快获取海外市场份额。坚定看好国产燃机出海。</div><div class="news-meta"><span class="time">2026-10-21 07:59</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">燃机</span></span></div></div><div class="news-card"><div class="news-text">【报告显示人工智能赋能传统医学进入快速发展期】在日前举行的2026世界传统医药大会上，《人工智能赋能全球传统医学发展报告（2026）》发布。报告认为，人工智能赋能传统医学已进入快速发展期。</div><div class="news-meta"><span class="time">2026-10-21 07:54</span><span class="src">东方财富</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">人工智能</span></span></div></div><div class="news-card"><div class="news-text">【华泰证券：餐厨提油企业有望受益于航空减碳下UCO稀缺增值】华泰证券指出，UCO（废弃食用油脂）是生物柴油与可持续航空燃料（SAF）的关键原料。据测算2024年全球UCO产量约740万吨（中国占比约49%），其中68%流向生物燃料行业。中国口径下UCO包含煎炸老油、泔水油、地沟油等，其中从产生点直接分类收集的烹饪废油（即国际口径UCO）须由持证废弃油脂收运单位回收，头部餐厨企业凭特许经营权与收运资质构成合规供给的重要来源。华泰证券认为，随着欧盟UDB全流程追溯与ISCC等认证要求趋严，低合规度供给加速出清，合规资质本身即构成稀缺壁垒——具备正规收运资质、全流程可追溯体系与稳定提油能力的头部餐厨企业有望充分受益于UCO涨价周期，盈利弹性有望凸显。</div><div class="news-meta"><span class="time">2026-10-21 07:48</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti up">利好</span><span class="tags"><span class="tag">餐厨提油</span></span></div></div><div class="news-card"><div class="news-text">真实岗位任务进入实训、产业数据进入学习……揭秘职教未来实训中心：让学生置身“真场景”，解决“真问题”，形成“真能力”</div><div class="news-meta"><span class="time">2026-10-21 07:32</span><span class="src">中新网滚动</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">职业教育</span></span><a class="src-link" href="https://www.chinanews.com.cn/edu/2026/10-21/10718233.shtml" target="_blank" rel="noopener">原文↗</a></div></div></section><section class="news-group"><h3>国际市场<span class="count">68</span></h3><div class="news-card"><div class="news-text">【澳大利亚数据中心运营商Nextdc股价暴跌 墨尔本项目因社区反对而延期】数据中心运营商NextdcLtd.股价暴跌，此前该公司表示，由于社区反对导致其在墨尔本的一个主要项目延期，公司正在考虑不可抗力选项并下调盈利预期。</div><div class="news-meta"><span class="time">2026-10-21 08:01</span><span class="src">东方财富</span><span class="badge confirmed">已确认</span><span class="src-list">· 4 家媒体 · 来源：东方财富、新浪滚动-国内、新浪财经、新浪财经-滚动</span><span class="badge senti flat">中性</span><span class="tags"></span></div></div><div class="news-card"><div class="news-text">乌克兰问题会谈在挪威举行 美特使将赴俄转达相关内容：当地时间20日，美国总统特朗普的特使威特科夫和乌克兰总统泽连斯基在挪威奥斯陆举行会晤，参会者还包括来自挪威、芬兰等其他欧洲国家的领导人，特朗普女婿库什纳以视频方式参会。</div><div class="news-meta"><span class="time">2026-10-21 05:56</span><span class="src">中新网滚动</span><span class="badge confirmed">已确认</span><span class="src-list">· 4 家媒体 · 来源：东方财富、中新网国际、中新网滚动、新浪财经</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-21/10718221.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">以军称打死哈马斯安全机构高级成员：当地时间20日晚，以色列国防军与以色列国家安全局(辛贝特)发表联合声明，称当天早些时候对加沙城地区发动精准空袭，打死了哈马斯安全机构高级成员亚辛。</div><div class="news-meta"><span class="time">2026-10-21 05:54</span><span class="src">中新网滚动</span><span class="badge confirmed">已确认</span><span class="src-list">· 4 家媒体 · 来源：东方财富、中新网国际、中新网滚动、新浪财经</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">中东局势</span></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-21/10718220.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">美官员：美总统特使将于21日与普京会面：当地时间10月20日，据美国官员透露，美国总统特使威特科夫将于21日与俄罗斯总统普京会面，特朗普女婿库什纳将以视频方式参与。</div><div class="news-meta"><span class="time">2026-10-21 05:53</span><span class="src">中新网滚动</span><span class="badge confirmed">已确认</span><span class="src-list">· 4 家媒体 · 来源：东方财富、中新网国际、中新网滚动、新浪财经</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">国际关系</span></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-21/10718219.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">投资者拒绝认购IPO后，英伟达拟进一步投资GPU云厂商Firmus：知情人士称，英伟达正洽谈向澳大利亚AI云服务商Firmus投资数亿美元。这家公司本月初突然撤回IPO计划。这笔洽谈表明，英伟达或将继续扶持一批被称作新型云厂商（neoclouds）、商业模式尚未得到验证的企业。这类企业大举举债采购英伟达GPU搭建数据中心，如今正承受资金压力。分析显示，英伟达已经为这类企业以及其他大客户承担超1700亿美元风险敞口，包括提供信贷担保，协助它们举债。（新浪财经）</div><div class="news-meta"><span class="time">2026-10-21 08:01</span><span class="src">36氪</span><span class="badge confirmed">已确认</span><span class="src-list">· 3 家媒体 · 来源：36氪、新浪滚动-国内、新浪财经-滚动</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://36kr.com/newsflashes/4034856200835972?f=rss" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">胡塞武装称过去24小时也门遭沙特空袭93次：当地时间10月20日，也门胡塞武装发言人叶海亚称，过去24小时内，沙特战机对也门焦夫省、塔伊兹省、萨达省、马里卜省、哈杰省、拉赫季省、阿姆兰省和伊卜省的民用目标发动93次空袭及导弹袭击。</div><div class="news-meta"><span class="time">2026-10-21 05:58</span><span class="src">中新网滚动</span><span class="badge confirmed">已确认</span><span class="src-list">· 3 家媒体 · 来源：中新网国际、中新网滚动、新浪财经</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-21/10718222.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">韩国要求银行避免竞争性发债：韩国经济日报援引银行业匿名人士消息称，韩国企划财政部要求银行不要激进发债，担忧集中发债会推高国债收益率。韩国财政部在与各大银行高管的会议上提出银行发债竞争过于激烈的问题。三季度银行债净发行额同比翻倍至23.28万亿韩元；10月净发行规模跳升至2.45万亿韩元，去年同期为6560亿韩元。（新浪财经）</div><div class="news-meta"><span class="time">2026-10-21 08:05</span><span class="src">36氪</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：36氪、新浪财经</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://36kr.com/newsflashes/4034862929466245?f=rss" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">美国银行发布财报后两度发债，累计融资100亿美元：据报道， 美国银行自上周公布第三季度业绩以来已完成第二笔投资级债券发行，累计融资100亿美元。知情人士称，该行10月20日为一笔20亿美元永续债券定价，最早可在五年后将其赎回。据悉这笔债券收益率将为7.2%，较初步指引至少低30个基点。此前，美银于10月16日发行80亿美元高评级债券。该行今年迄今已发行270亿美元投资级债券，在华尔街六大行中排第四。（界面）</div><div class="news-meta"><span class="time">2026-10-21 08:03</span><span class="src">36氪</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：36氪、东方财富</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://36kr.com/newsflashes/4034857347421320?f=rss" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">【伊朗总统会见巴陆军参谋长 强调美必须解除制裁】伊朗总统佩泽希齐扬20日在会见到访的巴基斯坦陆军参谋长穆尼尔时说，美方必须解除针对伊朗的制裁，这是伊美进行任何谈判的前提。</div><div class="news-meta"><span class="time">2026-10-21 08:00</span><span class="src">东方财富</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：东方财富、新浪财经</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">伊朗</span></span></div></div><div class="news-card"><div class="news-text">韩国10月前20天出口同比增长105.4%。</div><div class="news-meta"><span class="time">2026-10-21 08:00</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge continuing">持续关注 · 第 2 天</span><span class="src-list">首次 10-12</span><span class="badge senti up">利好</span><span class="tags"><span class="tag">韩国出口</span></span></div></div><div class="news-card"><div class="news-text">日经225指数期货早盘上涨1.5%。</div><div class="news-meta"><span class="time">2026-10-21 07:49</span><span class="src">东方财富</span><span class="badge confirmed">已确认</span><span class="badge continuing">持续关注 · 第 7 天</span><span class="src-list">首次 10-13</span><span class="src-list">· 2 家媒体 · 来源：东方财富、新浪财经</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">日本</span></span></div></div><div class="news-card"><div class="news-text">【AI创企ASI融资3.25亿美元，估值30亿美元】当地时间10月20日，人工智能初创公司ASI宣布完成一轮3.25亿美元融资，公司估值达30亿美元。本轮融资由Spark Capital领投，参投方还包括Citadel Securities 旗下关联机构、Meritech Capital和Craft Ventures等。</div><div class="news-meta"><span class="time">2026-10-21 07:48</span><span class="src">新浪财经</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：东方财富、新浪财经</span><span class="badge senti up">利好</span><span class="tags"><span class="tag">人工智能</span><span class="tag stock">ASI</span></span></div></div><div class="news-card"><div class="news-text">美联储到10月维持利率不变的概率为83.9%：据CME“美联储观察”，美联储到10月维持利率不变的概率为83.9%，累计加息25个基点的概率为16.1%。美联储到12月维持利率不变的概率为9.8%，累计加息25个基点的概率76.1%，累计加息50个基点的概率为14.2%。（界面）</div><div class="news-meta"><span class="time">2026-10-21 07:39</span><span class="src">36氪</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：36氪、东方财富</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">美国</span></span><a class="src-link" href="https://36kr.com/newsflashes/4034836471141512?f=rss" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">泽连斯基：讨论了美俄乌三方领导人会晤可能性：中新网10月21日电 乌克兰总统泽连斯基20日在社交媒体发文称，当天他与美国总统特朗普的特使威特科夫和欧洲伙伴在挪威首都奥斯陆举行会谈，讨论了美俄乌三方领导人会晤可能性。特朗普的女婿库什纳也通过视频连线参加了会谈。</div><div class="news-meta"><span class="time">2026-10-21 07:29</span><span class="src">中新网滚动</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：中新网国际、中新网滚动</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-21/10718232.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">以军宣布：打死哈马斯安全机构高级成员：中新网10月21日电 据《以色列时报》20日报道，以色列国防军与以色列国家安全局(辛贝特)发表联合声明称，当天早些时候对加沙城地区发动空袭，打死了哈马斯安全机构高级成员亚辛。</div><div class="news-meta"><span class="time">2026-10-21 06:59</span><span class="src">中新网滚动</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：中新网国际、中新网滚动</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-21/10718228.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">美战略石油储备降至44年来最低 美以伊战火重燃概率上升：当地时间20日，两艘油轮在霍尔木兹海峡触雷，美国能源部的数据显示，美国战略石油储备计划中的原油储量已降至44年来的最低水平。</div><div class="news-meta"><span class="time">2026-10-21 06:32</span><span class="src">中新网滚动</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：中新网国际、中新网滚动</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-21/10718226.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">巴黎等多个法国城市继续实施局部宵禁：中新社巴黎10月20日电 (记者 李洋)巴黎、里昂等多个法国城市当地时间20日晚继续实施局部宵禁。</div><div class="news-meta"><span class="time">2026-10-21 06:29</span><span class="src">中新网滚动</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：中新网国际、中新网滚动</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-21/10718225.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">日本发射火星卫星探测器 计划2031年带回“火卫一”样本：中新网10月20日电 据路透社报道，当地时间10月20日凌晨，日本发射火星卫星探测器，该探测器将前往火星的卫星“火卫一”进行探测，并采样返回地球。</div><div class="news-meta"><span class="time">2026-10-20 15:19</span><span class="src">中新网国际</span><span class="badge unverified">待核实</span><span class="badge continuing">持续关注 · 第 2 天</span><span class="src-list">首次 10-20</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-20/10717827.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">【俄称打击乌港口 乌否认多布罗波利耶失守】俄罗斯国防部20日通报称，俄军当天继续使用无人机对乌克兰的物流中心和港口基础设施，以及被用于向乌克兰运送军用货物的海上船只实施打击。通报还称，过去一天，俄军控制了扎波罗热地区的一处居民点。乌克兰武装部队总参谋部20日通报称，过去一天，前线地区发生206次战斗，乌军在多个方向击退俄军进攻。据悉，乌克兰总统办公室主任布达诺夫20日否认俄军已控制顿涅茨克地区多布罗波利耶市的说法。</div><div class="news-meta"><span class="time">2026-10-21 08:09</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span></div></div><div class="news-card"><div class="news-text">【气温持续下降 甘肃两地提前10天供暖】受冷空气影响，甘肃定西市的气温持续走低，渭源县、岷县已于昨天（20日）启动集中供暖，比原计划提前10天，让居民家中早早暖起来。</div><div class="news-meta"><span class="time">2026-10-21 08:09</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span></div></div><div class="news-card"><div class="news-text">【秘鲁接任安共体轮值主席国】秘鲁20日接任安第斯共同体（安共体）轮值主席国。秘鲁总统藤森庆子表示，秘鲁担任轮值主席国期间，将重点应对厄尔尼诺现象，打击跨国有组织犯罪，并致力于深化区域一体化。交接仪式当天在秘鲁总统府举行。安共体上任轮值主席国厄瓜多尔总统丹尼尔·诺沃亚、安共体秘书长贡萨洛·古铁雷斯、秘鲁部长会议主席（总理）路易斯·加拉雷塔等出席仪式。藤森称，秘鲁将推动成员国共同应对地区安全与发展挑战，加强贸易、投资和互联互通等领域合作。（新华社）</div><div class="news-meta"><span class="time">2026-10-21 08:06</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">安第斯共同体</span></span></div></div><div class="news-card"><div class="news-text">【平等协商才是化解中欧分歧正途】据媒体报道，欧盟一些人称，欧方在混动汽车磋商中对华施压取得成效，拟在更多行业采取限制。近日召开的欧盟峰会更是提出对华“双轨”思路，妄称将在继续开展密集磋商的同时，加大对华限制力度，甚至包括动用“反胁迫”工具。所谓“欧方施压奏效”的说法，错误解读了中欧达成谅解的基础。对华“双轨”思路不利于双方积累互信、推进合作，绝不是推动中欧经贸合作的应有之道。</div><div class="news-meta"><span class="time">2026-10-21 08:06</span><span class="src">东方财富</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span></div></div><div class="news-card"><div class="news-text">【乌克兰问题会谈在挪威举行 美特使将赴俄见普京 】挪威首相斯特勒、芬兰总统斯图布和乌克兰总统泽连斯基20日在挪威首都奥斯陆与美方特使举行乌克兰问题会谈。与会的美总统特使威特科夫定于21日前往俄罗斯圣彼得堡，与俄总统普京会面并通报此次会谈要点。据挪威广播公司报道，此次会谈应乌方请求举行，旨在进一步梳理可向俄方提出的和平方案要点。英国、法国、德国、波兰以及欧盟、北约代表以视频方式参加了扩大会议。（新华社）</div><div class="news-meta"><span class="time">2026-10-21 08:06</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span></div></div><div class="news-card"><div class="news-text">秘鲁石油公司（PETROPERU）与厄瓜多尔石油公司（EP PETROECUADOR）签署为期四年的能源合作谅解备忘录。</div><div class="news-meta"><span class="time">2026-10-21 08:02</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span></div></div><div class="news-card"><div class="news-text">【日韩股市集体高开 韩国KOSPI指数开盘上涨2%】韩国KOSPI指数开盘上涨2.05%报5666.34点；日经225指数高开1.26%报64885.95点。</div><div class="news-meta"><span class="time">2026-10-21 08:01</span><span class="src">东方财富</span><span class="badge unverified">待核实</span><span class="badge continuing">持续关注 · 第 5 天</span><span class="src-list">首次 10-14</span><span class="badge senti up">利好</span><span class="tags"><span class="tag">韩国KOSPI指数</span><span class="tag">日经225指数</span></span></div></div><div class="news-card"><div class="news-text">马斯克表示，SpaceX部署电力、冷却及配套基础设施的速度，有望超过其他所有厂商的总和，有信心在2027年实现10吉瓦算力上线，有机会达到20吉瓦。</div><div class="news-meta"><span class="time">2026-10-21 08:01</span><span class="src">东方财富</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span></div></div><div class="news-card"><div class="news-text">韩国10月1日至20日的进口同比增长42.8%。</div><div class="news-meta"><span class="time">2026-10-21 08:00</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span></div></div><div class="news-card"><div class="news-text">韩国综合股价指数（KOSPI）开盘上涨2%，至5666.34点。</div><div class="news-meta"><span class="time">2026-10-21 08:00</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge continuing">持续关注 · 第 2 天</span><span class="src-list">首次 10-15</span><span class="badge senti up">利好</span><span class="tags"><span class="tag">韩国股市</span></span></div></div><div class="news-card"><div class="news-text">日经225指数上午开盘报64885.95点，涨幅1.26%。</div><div class="news-meta"><span class="time">2026-10-21 08:00</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge continuing">持续关注 · 第 3 天</span><span class="src-list">首次 10-19</span><span class="badge senti up">利好</span><span class="tags"><span class="tag">日本股市</span></span></div></div><div class="news-card"><div class="news-text">华泰证券：中资美元债估值压力短期或缓解：36氪获悉，华泰证券研报称，我国已形成熊猫债、点心债、自贸债、玉兰债等多功能跨境债券品种体系，自贸离岸债承担浦东离岸金融先行先试的制度探索功能，重启后制度框架基本成型、一级发行初步恢复，后续若制度供给与生态建设完善，自贸离岸债中长期有望实现常态化发行。9月美债长端利率攀升、近日阶段性筑顶，中美利差深度倒挂，人民币融资成本优势突出，9月点心债继续扩容、估值稳健，而中资美元债发行较冷、估值下跌。点心债超额收益空间较窄，可3-5年适度下沉、投资级视负债端拉久期。中资美元债估值压力短期或缓解，关注2年内地方国企、3-5年其他金融机构和5年以上投资级产业债调整配置机会。</div><div class="news-meta"><span class="time">2026-10-21 07:59</span><span class="src">36氪</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://36kr.com/newsflashes/4034854952244099?f=rss" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">【中美需要寻找更多利益交汇点】中美经贸关系拥有良好的互利合作基础，其发展水平和演变方向涉及广泛领域和广大利益相关者。中美要推动形成稳定关系，需要减少不当、单边和过度政策限制措施对市场预期的扭曲，也需要寻找更多的利益交汇点，协同应对双方都面临的共同挑战。</div><div class="news-meta"><span class="time">2026-10-21 07:58</span><span class="src">东方财富</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">中美经贸</span></span></div></div><div class="news-card"><div class="news-text">【张工会见空客公司首席执行官傅里】10月20日，天津市长张工在迎宾馆会见空中客车公司首席执行官傅里一行。 张工对客人来津表示欢迎。他说，空客天津项目是中法、中欧合作典范，随着第二条总装线投产，已全面进入双线运行、产能提升新阶段，对全球产业链、供应链的影响力日益凸显。当前，我们正深入贯彻习近平主席视察天津重要讲话精神，大力发展先进制造业，着力提升航空航天、装备制造等产业能级。希望双方进一步优化合作模式，提升本地配套，共同推动产业链上下游在津集聚，实现更高质量、更富成效的共赢发展。 傅里感谢天津对空客的大力支持。他表示，20年来，双方合作取得巨大成就，天津已成为空客在欧洲以外规模最大、技术最先进的生产基地，将以产能全面提升为契机，吸引更多供应商来津，发展本地化生态体系，拓展更大合作空间。 市领导连茂君、王旭和市政府党组成员陈宇参加。（天津发布）</div><div class="news-meta"><span class="time">2026-10-21 07:57</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">空客</span></span></div></div><div class="news-card"><div class="news-text">日本财务省：日本 9 月原油进口初值同比增长 3.1%；日本9月液化天然气进口量同比下降7.3%，至477.9万吨；日本9月动力煤进口量同比增长5.9%，至884.6万吨。</div><div class="news-meta"><span class="time">2026-10-21 07:51</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">日本能源</span></span></div></div><div class="news-card"><div class="news-text">日本9月份对中国出口同比增长8.6%，对美国出口增长22.9%，对欧盟出口增长10.5%。</div><div class="news-meta"><span class="time">2026-10-21 07:51</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">中国</span><span class="tag">美国</span><span class="tag">欧盟</span></span></div></div><div class="news-card"><div class="news-text">消息称多家私募机构曾考虑联手收购微软游戏业务Xbox，估值高达1500亿美元：据知情人士透露，近几个月来，几家私募股权投资机构曾考虑过收购微软旗下Xbox游戏业务的可能性。若交易达成，该业务的估值可能达到1000亿至1500亿美元。这些知情人士表示，私募机构的此类探讨仅处于初步探索阶段，并未演变为与微软之间的正式谈判。不过，这也表明，如果微软在扭转其陷入困境的游戏业务方面进展不顺，该公司仍有可能找到买家。目前尚无法确认这些私募股权机构的具体身份。（新浪财经）</div><div class="news-meta"><span class="time">2026-10-21 07:51</span><span class="src">36氪</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag stock">微软</span></span><a class="src-link" href="https://36kr.com/newsflashes/4034850568868995?f=rss" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">日本9月份进口同比增长18.9%，预估为20.4%。日本9月份出口同比增长16.7%，预估为21.3%。</div><div class="news-meta"><span class="time">2026-10-21 07:50</span><span class="src">东方财富</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">日本</span></span></div></div><div class="news-card"><div class="news-text">日本9月未季调商品贸易帐 -5365亿日元，预期 -2104亿日元，前值 -11056亿日元。日本9月季调后商品贸易帐 -7039.67亿日元，预期 -2501亿日元，前值 -8406亿日元。</div><div class="news-meta"><span class="time">2026-10-21 07:50</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">日本</span></span></div></div><div class="news-card"><div class="news-text">日本9月进口同比 18.9%，预期 20.4%，前值 28%。</div><div class="news-meta"><span class="time">2026-10-21 07:50</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">日本</span></span></div></div><div class="news-card"><div class="news-text">日本9月出口同比 16.7%，预期 21.3%，前值 19.3%。</div><div class="news-meta"><span class="time">2026-10-21 07:50</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">日本</span></span></div></div><div class="news-card"><div class="news-text">秘鲁石油公司在ONP输油管道中发现了第9处非法盗油点。</div><div class="news-meta"><span class="time">2026-10-21 07:48</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">秘鲁</span></span></div></div><div class="news-card"><div class="news-text">OpenAI称，两个AIAgent禁用了对齐失效监控器，将调查模型是否存在规避对齐失效监控的行为。</div><div class="news-meta"><span class="time">2026-10-21 07:48</span><span class="src">东方财富</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">OpenAI</span></span></div></div><div class="news-card"><div class="news-text">OpenAI报告称，两个AI Agent禁用了对齐失效监控器。OpenAI将调查模型是否存在规避对齐失效监控的行为。OpenAI称，较低严重等级的事件不会触发即时寻呼提醒。上述两起事件均未被列为P0级最高故障，两条运行轨迹均未被自动中断。OpenAI更新自动审查机制，以阻止禁用监控的尝试。OpenAI称，事件暴露了在强制执行监控要求方面的漏洞。</div><div class="news-meta"><span class="time">2026-10-21 07:47</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">OpenAI</span></span></div></div><div class="news-card"><div class="news-text">知情人士称，美国和墨西哥的贸易谈判因钢铝关税问题陷入僵局，令此前有关协议即将达成的乐观预期落空，重大进展可能要等到中期选举之后。</div><div class="news-meta"><span class="time">2026-10-21 07:46</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti down">利空</span><span class="tags"><span class="tag">美国</span></span></div></div><div class="news-card"><div class="news-text">基准10年期日本国债期货早盘下跌0.02点。</div><div class="news-meta"><span class="time">2026-10-21 07:46</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge continuing">持续关注 · 第 6 天</span><span class="src-list">首次 10-13</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">日本</span></span></div></div><div class="news-card"><div class="news-text">以军袭击导致加沙地带4人死亡：中新社北京10月20日电 综合消息：巴勒斯坦卫生部门称，当地时间20日，以军空袭和枪击在加沙地带造成至少4名巴勒斯坦人死亡。</div><div class="news-meta"><span class="time">2026-10-20 21:58</span><span class="src">中新网国际</span><span class="badge unverified">待核实</span><span class="badge continuing">持续关注 · 第 2 天</span><span class="src-list">首次 10-11</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">中东局势</span></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-20/10718157.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">英国将派遣战斗机 协助沙特抵御胡塞武装袭击：中新网10月20日电 据英国广播公司(BBC)20日报道，英国政府表示，将派遣皇家空军“台风”战斗机协助沙特阿拉伯抵御也门胡塞武装的袭击。</div><div class="news-meta"><span class="time">2026-10-20 21:41</span><span class="src">中新网国际</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">中东局势</span></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-20/10718145.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">伦敦往返重庆航线推介会在伦敦召开：中新网伦敦10月20日电 (记者 欧阳开宇)在重庆市文化和旅游发展委员会支持指导下，重庆机场集团联合天津航空举办的伦敦往返重庆航线推介会日前在伦敦召开。</div><div class="news-meta"><span class="time">2026-10-20 21:03</span><span class="src">中新网国际</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">航空业</span></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-20/10718092.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">哈萨克斯坦多领域人才紧缺 医疗人才缺口突出：中新网阿斯塔纳10月20日电 (记者 单璐)哈萨克斯坦劳动和社会保障部20日公布的2026年哈萨克斯坦紧缺职业统计数据显示，该国在医疗卫生、工业和建筑等领域面临人才短缺，其中医疗专业人才缺口突出。</div><div class="news-meta"><span class="time">2026-10-20 20:25</span><span class="src">中新网国际</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">医疗卫生</span></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-20/10718058.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">俄方表态：希望近期安排美总统特使与普京会面：中新网10月20日电 据塔斯社报道，当地时间20日，俄罗斯总统新闻秘书佩斯科夫表示，希望近期可以安排美国总统特朗普的特使威特科夫与俄总统普京会面。</div><div class="news-meta"><span class="time">2026-10-20 20:09</span><span class="src">中新网国际</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">国际关系</span></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-20/10718068.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">也门胡塞武装袭击政府军基地 已致逾250人伤亡：中新社北京10月20日电 萨那消息：也门胡塞武装当地时间19日对也门舍卜沃省一政府军军事基地发动袭击，造成超过250人伤亡。</div><div class="news-meta"><span class="time">2026-10-20 18:46</span><span class="src">中新网国际</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">中东局势</span></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-20/10717983.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">韩国决定撤回驻乌克兰使馆部分人员：中新社首尔10月20日电 (记者 金旭)针对韩国因不满乌克兰披露移交朝鲜战俘至韩方的消息而召回韩国驻乌克兰大使后，韩国外交部当地时间20日表示，将撤回韩国驻乌克兰使馆部分人员。</div><div class="news-meta"><span class="time">2026-10-20 18:40</span><span class="src">中新网国际</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">外交关系</span></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-20/10717949.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">泽连斯基称与鲁比奥通话：聚焦三大核心问题：中新网10月20日电 当地时间20日，乌克兰总统泽连斯基在社交媒体发文称，他当天与美国国务卿鲁比奥通电话，双方就重要问题进行了“实质性对话”和“建设性讨论”。</div><div class="news-meta"><span class="time">2026-10-20 17:56</span><span class="src">中新网国际</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">国际关系</span></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-20/10717962.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">阿卜耶伊地区一市场遇袭致73死 南苏丹强烈抗议：中新社北京10月20日电 综合消息：南苏丹与苏丹边境有争议的阿卜耶伊地区当地时间19日发生一起无人机袭击事件，造成73人死亡。南苏丹政府已就此事件向苏丹政府发出强烈抗议。</div><div class="news-meta"><span class="time">2026-10-20 17:20</span><span class="src">中新网国际</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">南苏丹局势</span></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-20/10717924.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">山洪影响持续 尼泊尔部分地区交通通信受阻：中新社加德满都10月20日电 据尼泊尔多家媒体报道，该国近期频发的山洪造成的基础设施损毁影响持续，木斯塘、廓尔喀部分地区交通、通信及物资供应仍面临困难。</div><div class="news-meta"><span class="time">2026-10-20 17:20</span><span class="src">中新网国际</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">尼泊尔基础设施</span></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-20/10717922.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">亚美尼亚学者：理解朱熹思想可更好促进文明交流互鉴：中新社福建南平10月20日电 题：亚美尼亚学者：理解朱熹思想可更好促进文明交流互鉴</div><div class="news-meta"><span class="time">2026-10-20 17:19</span><span class="src">中新网国际</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">文化交流</span></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-20/10717921.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">乌总统喊话美方：需要“星链”“星盾”更高速运行：中新网北京10月20日电基辅消息：当地时间19日，乌克兰总统泽连斯基与美国国会议员代表举行线上会晤时表示，乌方需要“星链”和“星盾”更高速运行。</div><div class="news-meta"><span class="time">2026-10-20 17:17</span><span class="src">中新网国际</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">国际关系</span></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-20/10717913.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">孟加拉国西北部发生交通事故致至少14人死亡：中新社北京10月20日电 达卡消息：当地时间10月20日，孟加拉国西北部诺多尔地区发生一起巴士与卡车碰撞事故，造成至少14人死亡，另有20余人受伤。</div><div class="news-meta"><span class="time">2026-10-20 17:17</span><span class="src">中新网国际</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">交通事故</span></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-20/10717901.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">西班牙暴雨引发洪水致4人死亡 刚经历“最热夏天”：中新网北京10月20日电 马德里消息：西班牙东部地中海沿岸地区连日暴雨引发洪水，截至当地时间19日，已导致4人死亡，数万民众被迫疏散转移。</div><div class="news-meta"><span class="time">2026-10-20 17:17</span><span class="src">中新网国际</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">自然灾害</span></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-20/10717892.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">哥伦比亚金矿塌方已导致至少14人死亡：中新社北京10月20日电 波哥大消息：据哥伦比亚媒体20日报道，该国西南部纳里尼奥省一非法金矿19日发生塌方，已造成至少14人死亡，7人受伤。</div><div class="news-meta"><span class="time">2026-10-20 17:16</span><span class="src">中新网国际</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">矿业事故</span></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-20/10717886.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">特朗普：新墨西哥州应立即更名为“新美国州”：中新网10月20日电 据美国《华盛顿邮报》报道，当地时间10月19日，美国总统特朗普再次提议将美国的新墨西哥州更名为“新美国州”，并称该名称将为该州带来更高的价值和声望。</div><div class="news-meta"><span class="time">2026-10-20 15:58</span><span class="src">中新网国际</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">政治议题</span></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-20/10717856.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">韩国华城电池厂火灾涉事企业代表终审获刑4年：中新社首尔10月20日电 (记者 金旭)当地时间20日，韩国最高法院就“华城电池厂火灾”一案作出终审判决，判处涉事企业代表朴淳瓘(音)有期徒刑4年，该判决立即生效。</div><div class="news-meta"><span class="time">2026-10-20 15:53</span><span class="src">中新网国际</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">法律判决</span></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-20/10717848.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">韩国外交部发言人：将撤回驻乌克兰使馆部分人员：中新网10月20日电 据韩媒报道，当地时间20日，韩国外交部发言人朴斗淳在例行记者会上表示，将撤回驻乌克兰使馆部分人员。</div><div class="news-meta"><span class="time">2026-10-20 15:46</span><span class="src">中新网国际</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">外交关系</span></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-20/10717849.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">新华鲜报｜熙攘国门“你来我往” 三季度1.92亿人次出入境</div><div class="news-meta"><span class="time">2026-10-20 00:00</span><span class="src">新华网</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.news.cn/world/20261020/48f84c1d1aa044589b285762f4afaa5e/c.html" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">观天下丨三重迹象凸显美乌关系恶化</div><div class="news-meta"><span class="time">2026-10-20 00:00</span><span class="src">新华网</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.news.cn/world/20261020/4cf656bd78eb423fa478a73187d87ef3/c.html" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">日本民众集会抗议日美大规模联合军演</div><div class="news-meta"><span class="time">2026-10-20 00:00</span><span class="src">新华网</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.news.cn/world/20261020/df425ea91aa24e1b98071e018ac105b7/c.html" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">美防长贬低盟友在阿富汗“作用” 英国反驳</div><div class="news-meta"><span class="time">2026-10-20 00:00</span><span class="src">新华网</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.news.cn/world/20261020/e7fdd40c72074ca480fa1cd6e7b0a85b/c.html" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">高油价催发抗议 马克龙赴中东“搞油”</div><div class="news-meta"><span class="time">2026-10-20 00:00</span><span class="src">新华网</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.news.cn/world/20261020/31c584ab6b8a4e5fad666b0d4022b8df/c.html" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">埃及首都开罗西南部车祸致12死30伤</div><div class="news-meta"><span class="time">2026-10-20 00:00</span><span class="src">新华网</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.news.cn/world/20261020/17f85993f4e8463a8adb8f0d01f60d90/c.html" target="_blank" rel="noopener">原文↗</a></div></div></section><section class="news-group"><h3>其他<span class="count">18</span></h3><div class="news-card"><div class="news-text">稳步推出新股市值配售，北交所或迎来增量资金：10月19日，证监会主席吴清在2026金融街论坛年会演讲中提到，下一步，将稳步推出北交所新股市值配售。受此影响，10月20日，北证50指数一度涨超5%，最终收涨3.88%。受访人士表示，市值配售有利于强化持仓吸引力，加强一二级市场的联动，消除单纯的打新套利现象，降低新股中签门槛，吸引部分中小投资者参与。（证券时报）</div><div class="news-meta"><span class="time">2026-10-21 08:10</span><span class="src">36氪</span><span class="badge confirmed">已确认</span><span class="src-list">· 3 家媒体 · 来源：36氪、东方财富、新浪财经</span><span class="badge senti up">利好</span><span class="tags"><span class="tag">北交所</span></span><a class="src-link" href="https://36kr.com/newsflashes/4034868509266819?f=rss" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">【瑞士腕表商爱彼押注香港奢侈品需求 将在中环的新世界大厦开店】瑞士奢侈腕表制造商爱彼(Audemars Piguet)将在香港中环的新世界大厦开设其亚洲最大旗舰店之一，押注当地日益壮大的富裕群体需求坚挺。据知情人士透露，爱彼将在新世界发展旗下这栋大楼占据约13,000平方英尺面积，月租超过200万港元（254,830美元）。因事未公开，知情人士要求匿名。爱彼接替的是英皇钟表珠宝，后者的租约将于明年2月到期。知情人士称，爱彼还将在附近的衡怡大厦租用一处约7,000平方英尺的店面，月租约100万港元。他们表示，这处空间将被打造为体验店，展示爱彼的品牌传承及珍稀系列。</div><div class="news-meta"><span class="time">2026-10-21 08:08</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">奢侈品</span><span class="tag stock">爱彼(Audemars Piguet)</span></span></div></div><div class="news-card"><div class="news-text">AI眼镜行业迈向成长期，18只概念股获机构密集调研：AI眼镜正处于由产品验证向快速放量过渡的关键阶段，科技巨头争相布局AI眼镜业务，机构预计该行业2025—2030年复合增速约60%。据统计，今年以来共有18只AI眼镜概念股获得5次以上机构调研，其中机构调研10次以上的个股有7只，分别是亿道信息、安凯微、江波龙、佰维存储、康冠科技、炬芯科技、领益智造。二级市场表现方面，数据宝统计，截至10月20日收盘，今年以来AI眼镜概念股平均下跌9.61%。以10月20日收盘价与年内高点相比，12只股票回撤幅度超50%，包括佰维存储、江波龙、信维通信、华灿光电、探路者等。（证券时报）</div><div class="news-meta"><span class="time">2026-10-21 07:53</span><span class="src">36氪</span><span class="badge confirmed">已确认</span><span class="src-list">· 3 家媒体 · 来源：36氪、东方财富、新浪财经</span><span class="badge senti flat">中性</span><span class="tags"><span class="tag">AI眼镜</span></span><a class="src-link" href="https://36kr.com/newsflashes/4034853719790465?f=rss" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">56.5%受访者希望住宿预订平台减少“杀熟”：56.5%受访者希望住宿预订平台减少“杀熟”</div><div class="news-meta"><span class="time">2026-10-21 08:03</span><span class="src">中新网滚动</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：中新网滚动、中新网财经</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.chinanews.com.cn/cj/2026/10-21/10718245.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">威胁刺杀特朗普 美国一男子遭逮捕：中新网10月21日电 综合报道，美国司法部堪萨斯州联邦检察官办公室说，一名威胁要在该州19日举行的共和党集会上刺杀美国总统特朗普的男子已经被捕。</div><div class="news-meta"><span class="time">2026-10-21 07:57</span><span class="src">中新网滚动</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：中新网国际、中新网滚动</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.chinanews.com.cn/gj/2026/10-21/10718244.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">【美团：“红灯停表”近期将在杭州落地】10月20日，美团宣布，“红灯停表”近期将在当地交管部门指导下在杭州落地，骑手遇到红灯停下来，配送计时也跟着暂停。美团还将在杭州试点向商家投放首批“出餐自拍”设备，让骑手接单时就能看到真实的出餐状态，更好安排取送时间。</div><div class="news-meta"><span class="time">2026-10-21 07:56</span><span class="src">新浪财经</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：东方财富、新浪财经</span><span class="badge senti flat">中性</span><span class="tags"></span></div></div><div class="news-card"><div class="news-text">贵≠好用 冲锋衣怎么选、怎么洗？实用参考请收好：户外运动走进大众生活，冲锋衣既是户外装备，也成为日常通勤潮流穿搭。一件合格的冲锋衣包含面料、压胶、防水透湿、耐磨环保等多项指标，市场上品牌繁多、价格差距大，不少消费者看不懂参数容易买错。近期上海市消保委开展30款硬壳冲锋衣比较试验，从怎么选、如何养护两个维度给大家实用参考。</div><div class="news-meta"><span class="time">2026-10-21 07:56</span><span class="src">中新网滚动</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：中新网滚动、中新网财经</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.chinanews.com.cn/cj/2026/10-21/10718243.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">【多家理财子公司推出T+0.25早间到账产品】近日，中邮理财上线商户专属理财产品，推出T+0.25早间到账赎回服务。在此之前，工银理财、广银理财、平安理财等多家理财子公司已陆续在旗下部分产品落地T+0.5早间快赎功能，理财赎回时效竞争迈入早间兑付的小时级比拼阶段。所谓T+0.25，指投资者于T日提交赎回申请，资金可在T+1日上午8点前到账。</div><div class="news-meta"><span class="time">2026-10-21 07:47</span><span class="src">东方财富</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：36氪、东方财富</span><span class="badge senti flat">中性</span><span class="tags"></span></div></div><div class="news-card"><div class="news-text">集市挤满年轻面孔 这届年轻人为什么爱上了“赶集”？：这届年轻人为什么爱上了“赶集”？</div><div class="news-meta"><span class="time">2026-10-21 07:41</span><span class="src">中新网滚动</span><span class="badge confirmed">已确认</span><span class="src-list">· 2 家媒体 · 来源：中新网滚动、中新网财经</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.chinanews.com.cn/cj/2026/10-21/10718236.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">【我国将建设一批专精特新赋能中心 助力中小企业创新发展】记者从工业和信息化部了解到，今天（10月21日），《关于开展专精特新赋能中心建设工作的通知》正式印发。“十五五”期间，我国将建设30家左右专精特新赋能中心，搭建全国性服务网络，为中小企业创新发展提供有力支撑。专精特新赋能中心，简单说就是专门服务中小企业技术创新的服务机构，要求聚焦细分行业，做高能级的技术服务，当好中小企业的“创新合伙人”。按照通知要求，建设实行部省共建、先试点后推广的推进模式，紧扣企业技术创新需求，整合实验室、科研平台、人才、金融等各类创新要素，既帮助企业攻关“卡脖子”技术、推动科技成果产业化落地，也支持企业参与标准研制、组建创新联合体；同时还支持数智化、绿色化改造，组织产业链供需对接，助力企业拓展国内外市场。（央视）</div><div class="news-meta"><span class="time">2026-10-21 08:09</span><span class="src">新浪财经</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span></div></div><div class="news-card"><div class="news-text">中信建投：半导体设备订单持续景气：36氪获悉，中信建投研报称，全球景气周期持续确认，关注出海进程。SEMI更新预测、预计半导体设备未来3年持续增长。SEMI预计2026年全球半导体制造设备销售额将创下1659亿美元的历史新高，同比+23.2%。增长势头预计将持续至2028年，总设备销售额有望达到创纪录的2295亿美元，实现连续五年增长。全球半导体设备零部件正经历一轮历史罕见的全链条涨价潮。半导体产业链的定价权正从芯片终端向设备与零部件环节结构性上移。零部件企业规模较小、固定成本占比高，涨价直接转化为利润；同时产线扩产周期长达12-18个月，供给弹性最差。重视阀门管路、陶瓷件、射频电源、GAS BOX等海外供应商交期延长带来的国产替代诉求与涨价逻辑。</div><div class="news-meta"><span class="time">2026-10-21 08:08</span><span class="src">36氪</span><span class="badge unverified">待核实</span><span class="badge senti up">利好</span><span class="tags"><span class="tag">半导体设备</span><span class="tag stock">盛美上海</span></span><a class="src-link" href="https://36kr.com/newsflashes/4034867562255492?f=rss" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">直播外链：长征路上学党史｜红旗漫卷 共赴会师之约</div><div class="news-meta"><span class="time">2026-10-21 07:56</span><span class="src">中新网滚动</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.chinanews.com.cn/iframe/2026/10-21/10718242.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">快狗打车：出售内地业务仅涉及拥有权变更，不涉及经营业务终止，各项服务协议继续有效</div><div class="news-meta"><span class="time">2026-10-21 07:49</span><span class="src">东方财富-宏观政策</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="http://hk.eastmoney.com/news/11223,202610213901930667.html" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">手搓“微缩博物馆” 解锁文创新体验：手搓“微缩博物馆” 解锁文创新体验(文物里的潮生活)</div><div class="news-meta"><span class="time">2026-10-21 07:48</span><span class="src">中新网滚动</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.chinanews.com.cn/cul/2026/10-21/10718240.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">“东西还能用，为什么没人要” 大件旧物回收现状调查：今年上半年，北京市民赵先生打算处理家里闲置的椭圆仪。他先联系厂家，对方表示不提供回收服务；把信息挂到二手交易平台，几个月时间无人问津；又辗转找到专做家具、健身器材回收的商家，得到的答复同样是“不收”。</div><div class="news-meta"><span class="time">2026-10-21 07:34</span><span class="src">中新网滚动</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.chinanews.com.cn/sh/2026/10-21/10718234.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">CBA常规赛：北京首钢队战胜广东东阳光队</div><div class="news-meta"><span class="time">2026-10-21 07:27</span><span class="src">中新网滚动</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="http://www.chinanews.com.cn/tp/hd2011/2026/10-21/1208390.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">10月21日新闻早报</div><div class="news-meta"><span class="time">2026-10-21 06:42</span><span class="src">中新网滚动</span><span class="badge unverified">待核实</span><span class="badge continuing">持续关注 · 第 10 天</span><span class="src-list">首次 10-11</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.chinanews.com.cn/iframe/2026/10-21/10718227.shtml" target="_blank" rel="noopener">原文↗</a></div></div><div class="news-card"><div class="news-text">头发是早上洗还是晚上洗好？这些伤发行为，真的别再做了→：头发多久洗一次比较好？</div><div class="news-meta"><span class="time">2026-10-21 06:23</span><span class="src">中新网滚动</span><span class="badge unverified">待核实</span><span class="badge senti flat">中性</span><span class="tags"></span><a class="src-link" href="https://www.chinanews.com.cn/jk/2026/10-21/10718224.shtml" target="_blank" rel="noopener">原文↗</a></div></div></section>
+    </details>
+  </section>
+</main>
+
+<footer class="risk">
+  <h3>风险声明</h3>
+  <p>本报告由 AI 自动生成，仅供参考，不构成任何投资建议。新闻解读可能存在偏差，
+  市场有风险，投资需谨慎，请独立判断。所有 AI 结论均基于文中列出的新闻原文，
+  未经过人工核实，单一来源信息标注"待核实"。决策权归您本人。</p>
+</footer>
+</body>
+</html>

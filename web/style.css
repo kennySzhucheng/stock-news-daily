@@ -459,3 +459,12 @@ a.cite:hover{background:none; border-bottom-style:solid; text-decoration:none;}
 .empty{color:var(--muted); padding:14px 0; font-size:14px;}
 .spin{display:inline-block; animation:spin 1s linear infinite;}
 @keyframes spin{to{transform:rotate(360deg);}}
+
+/* 趋势/波动徽章（2026-10-20，与 M5 日报同一套类名与配色语义） */
+.risk-badge { font-size:11px; border-radius:2px; padding:1px 6px; margin-left:6px;
+  border:1px solid var(--border); color:var(--muted); background:transparent; }
+.risk-badge.risk-warn { color:#B23A2E; border-color:#B23A2E; background:#FBEDEA; }
+.risk-badge.risk-ok { color:#12734F; border-color:#12734F; background:#EAF6F1; }
+.risk-badge.risk-flat { color:#9A6B12; border-color:#D9B96A; background:#FBF3E2; }
+.pick-riskline { margin:6px 0 2px; font-size:13px; color:var(--text); }
+.risk-warn-text { color:#B23A2E; }
