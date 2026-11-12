@@ -1,0 +1,19 @@
+{
+  "date": "2026-11-13",
+  "slot": "pm",
+  "push_ok": true,
+  "push_detail": "pushid=67958493",
+  "sentiment_ok": true,
+  "warn": "",
+  "analysis_ok": true,
+  "analysis_chars": 3370,
+  "analysis_conclusion_ok": true,
+  "analysis_violations": "",
+  "news_count": 180,
+  "quotes_count": 45,
+  "llm_batches": 9,
+  "llm_failed_batches": 0,
+  "run_number": "245",
+  "event": "schedule",
+  "generated_at": "2026-11-13 00:27:34"
+}
