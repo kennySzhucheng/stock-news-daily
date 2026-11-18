@@ -1,0 +1,19 @@
+{
+  "date": "2026-11-19",
+  "slot": "pm",
+  "push_ok": true,
+  "push_detail": "pushid=69292310",
+  "sentiment_ok": true,
+  "warn": "",
+  "analysis_ok": true,
+  "analysis_chars": 3536,
+  "analysis_conclusion_ok": true,
+  "analysis_violations": "",
+  "news_count": 180,
+  "quotes_count": 45,
+  "llm_batches": 9,
+  "llm_failed_batches": 0,
+  "run_number": "269",
+  "event": "schedule",
+  "generated_at": "2026-11-19 01:04:26"
+}
